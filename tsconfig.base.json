@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "importHelpers": true,
+    "isolatedModules": true,
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "noEmitOnError": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "es2024",
+    "customConditions": ["@antimatter/source"],
+    "paths": {
+      "@antimatter/project-model": ["./packages/project-model/src/index.ts"],
+      "@antimatter/filesystem": ["./packages/filesystem/src/index.ts"],
+      "@antimatter/tool-integration": ["./packages/tool-integration/src/index.ts"],
+      "@antimatter/build-system": ["./packages/build-system/src/index.ts"],
+      "@antimatter/ui": ["./packages/ui/src/index.ts"],
+      "@antimatter/ai-agent": ["./packages/ai-agent/src/index.ts"]
+    }
+  }
+}
