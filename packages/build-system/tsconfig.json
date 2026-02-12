@@ -6,6 +6,14 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../project-model" }
+    {
+      "path": "../tool-integration"
+    },
+    {
+      "path": "../filesystem"
+    },
+    {
+      "path": "../project-model"
+    }
   ]
 }

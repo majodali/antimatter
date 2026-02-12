@@ -59,9 +59,15 @@ importers:
 
   packages/build-system:
     dependencies:
+      '@antimatter/filesystem':
+        specifier: workspace:*
+        version: link:../filesystem
       '@antimatter/project-model':
         specifier: workspace:*
         version: link:../project-model
+      '@antimatter/tool-integration':
+        specifier: workspace:*
+        version: link:../tool-integration
 
   packages/filesystem:
     dependencies:

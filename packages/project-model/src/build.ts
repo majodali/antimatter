@@ -23,6 +23,8 @@ export interface BuildTarget {
   readonly moduleId: Identifier;
   /** Extra environment variables passed to the command. */
   readonly env?: Readonly<Record<string, string>>;
+  /** Optional dependencies on other targets (by id). */
+  readonly dependsOn?: readonly Identifier[];
 }
 
 /** The outcome of running a single build target. */

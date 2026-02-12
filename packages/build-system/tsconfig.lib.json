@@ -10,6 +10,12 @@
   "exclude": ["src/**/*.spec.ts"],
   "references": [
     {
+      "path": "../tool-integration/tsconfig.lib.json"
+    },
+    {
+      "path": "../filesystem/tsconfig.lib.json"
+    },
+    {
       "path": "../project-model/tsconfig.lib.json"
     }
   ]
