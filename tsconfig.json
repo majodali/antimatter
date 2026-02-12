@@ -3,11 +3,20 @@
   "compileOnSave": false,
   "files": [],
   "references": [
-    { "path": "./packages/project-model" },
-    { "path": "./packages/filesystem" },
-    { "path": "./packages/tool-integration" },
-    { "path": "./packages/build-system" },
-    { "path": "./packages/ui" },
-    { "path": "./packages/ai-agent" }
+    {
+      "path": "./packages/project-model"
+    },
+    {
+      "path": "./packages/filesystem"
+    },
+    {
+      "path": "./packages/tool-integration"
+    },
+    {
+      "path": "./packages/build-system"
+    },
+    {
+      "path": "./packages/agent-framework"
+    }
   ]
 }

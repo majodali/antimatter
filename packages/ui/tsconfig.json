@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": ["../../tsconfig.base.json"],
   "compilerOptions": {
     "target": "ES2020",
     "useDefineForClassFields": true,
@@ -31,9 +31,20 @@
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "references": [
-    { "path": "../project-model" },
-    { "path": "../filesystem" },
-    { "path": "../agent-framework" },
-    { "path": "../build-system" }
+    {
+      "path": "../tool-integration"
+    },
+    {
+      "path": "../build-system"
+    },
+    {
+      "path": "../agent-framework"
+    },
+    {
+      "path": "../filesystem"
+    },
+    {
+      "path": "../project-model"
+    }
   ]
 }

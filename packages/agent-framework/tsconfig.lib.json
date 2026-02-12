@@ -4,13 +4,16 @@
     "outDir": "./dist",
     "declaration": true,
     "declarationMap": true,
-    "emitDeclarationOnly": true
+    "emitDeclarationOnly": false
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.spec.ts"],
   "references": [
     {
       "path": "../project-model/tsconfig.lib.json"
+    },
+    {
+      "path": "../filesystem/tsconfig.lib.json"
     }
   ]
 }

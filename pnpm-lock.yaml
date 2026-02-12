@@ -51,7 +51,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/node@22.19.11)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.2)
 
-  packages/ai-agent:
+  packages/agent-framework:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.38.0
@@ -90,7 +90,7 @@ importers:
     dependencies:
       '@antimatter/agent-framework':
         specifier: workspace:*
-        version: link:../ai-agent
+        version: link:../agent-framework
       '@antimatter/build-system':
         specifier: workspace:*
         version: link:../build-system
