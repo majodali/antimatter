@@ -4,7 +4,6 @@ import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { FileTree } from './FileTree';
 import { useFileStore } from '@/stores/fileStore';
-import { MemoryFileSystem } from '@antimatter/filesystem';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
 interface FileNode {
@@ -33,69 +32,89 @@ export function FileExplorer() {
   async function loadFiles() {
     setIsLoading(true);
     try {
-      // Create a sample file structure for demonstration
-      const fs = new MemoryFileSystem();
+      // Mock file structure for demonstration
+      const mockFiles: FileNode[] = [
+        {
+          name: 'src',
+          path: 'src' as WorkspacePath,
+          isDirectory: true,
+          children: [
+            {
+              name: 'components',
+              path: 'src/components' as WorkspacePath,
+              isDirectory: true,
+              children: [
+                {
+                  name: 'Button.tsx',
+                  path: 'src/components/Button.tsx' as WorkspacePath,
+                  isDirectory: false,
+                },
+                {
+                  name: 'Input.tsx',
+                  path: 'src/components/Input.tsx' as WorkspacePath,
+                  isDirectory: false,
+                },
+              ],
+            },
+            {
+              name: 'lib',
+              path: 'src/lib' as WorkspacePath,
+              isDirectory: true,
+              children: [
+                {
+                  name: 'utils.ts',
+                  path: 'src/lib/utils.ts' as WorkspacePath,
+                  isDirectory: false,
+                },
+              ],
+            },
+            {
+              name: 'App.tsx',
+              path: 'src/App.tsx' as WorkspacePath,
+              isDirectory: false,
+            },
+            {
+              name: 'index.ts',
+              path: 'src/index.ts' as WorkspacePath,
+              isDirectory: false,
+            },
+          ],
+        },
+        {
+          name: 'tests',
+          path: 'tests' as WorkspacePath,
+          isDirectory: true,
+          children: [
+            {
+              name: 'example.test.ts',
+              path: 'tests/example.test.ts' as WorkspacePath,
+              isDirectory: false,
+            },
+          ],
+        },
+        {
+          name: 'package.json',
+          path: 'package.json' as WorkspacePath,
+          isDirectory: false,
+        },
+        {
+          name: 'README.md',
+          path: 'README.md' as WorkspacePath,
+          isDirectory: false,
+        },
+        {
+          name: 'tsconfig.json',
+          path: 'tsconfig.json' as WorkspacePath,
+          isDirectory: false,
+        },
+      ];
 
-      // Create sample files and directories
-      await fs.mkdir('src' as WorkspacePath);
-      await fs.mkdir('src/components' as WorkspacePath);
-      await fs.mkdir('src/lib' as WorkspacePath);
-      await fs.mkdir('tests' as WorkspacePath);
-
-      await fs.writeFile('README.md' as WorkspacePath, '# Project');
-      await fs.writeFile('package.json' as WorkspacePath, '{}');
-      await fs.writeFile('tsconfig.json' as WorkspacePath, '{}');
-      await fs.writeFile('src/index.ts' as WorkspacePath, 'export {}');
-      await fs.writeFile('src/App.tsx' as WorkspacePath, 'export default App');
-      await fs.writeFile(
-        'src/components/Button.tsx' as WorkspacePath,
-        'export Button'
-      );
-      await fs.writeFile(
-        'src/lib/utils.ts' as WorkspacePath,
-        'export const utils'
-      );
-      await fs.writeFile('tests/example.test.ts' as WorkspacePath, 'test()');
-
-      // Build file tree
-      const tree = await buildFileTree(fs, '' as WorkspacePath);
-      setFiles(tree);
+      setFiles(mockFiles);
     } catch (error) {
       console.error('Failed to load files:', error);
     } finally {
       setIsLoading(false);
     }
-  }
-
-  async function buildFileTree(
-    fs: MemoryFileSystem,
-    dir: WorkspacePath
-  ): Promise<FileNode[]> {
-    const entries = await fs.readDirectory(dir);
-    const nodes: FileNode[] = [];
-
-    for (const entry of entries) {
-      const path = dir ? `${dir}/${entry.name}` : entry.name;
-      const node: FileNode = {
-        name: entry.name,
-        path: path as WorkspacePath,
-        isDirectory: entry.isDirectory,
-      };
-
-      if (entry.isDirectory) {
-        node.children = await buildFileTree(fs, path as WorkspacePath);
-      }
-
-      nodes.push(node);
-    }
-
-    // Sort: directories first, then files, both alphabetically
-    return nodes.sort((a, b) => {
-      if (a.isDirectory === b.isDirectory) {
-        return a.name.localeCompare(b.name);
-      }
-      return a.isDirectory ? -1 : 1;
-    });
   }
 
   return (

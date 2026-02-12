@@ -1,47 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Bot, Trash2, Settings } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { useChatStore } from '@/stores/chatStore';
-import { createMockAgent } from '@antimatter/agent-framework';
-import type { Agent } from '@antimatter/agent-framework';
+
+// Mock agent responses
+const MOCK_RESPONSES: Record<string, string> = {
+  hello: 'Hello! I\'m your AI assistant. I can help you with:\n\n- **Code review** - I can analyze your code for issues\n- **Documentation** - I can help write clear documentation\n- **Testing** - I can suggest test cases\n- **Refactoring** - I can recommend improvements\n\nWhat would you like help with?',
+  help: 'I can assist with various development tasks:\n\n```typescript\n// Example: I can help explain code\nfunction fibonacci(n: number): number {\n  if (n <= 1) return n;\n  return fibonacci(n - 1) + fibonacci(n - 2);\n}\n```\n\nJust ask me anything about your code!',
+};
+
+const DEFAULT_RESPONSE = 'I understand you\'re asking about that. While I\'m currently in demo mode with limited responses, in the full version I can:\n\n- Analyze code and suggest improvements\n- Help write tests and documentation\n- Explain complex concepts\n- Assist with debugging\n\nTry saying "hello" or "help" to see example responses!';
+
+function getMockResponse(message: string): string {
+  const key = message.toLowerCase().trim();
+  return MOCK_RESPONSES[key] || DEFAULT_RESPONSE;
+}
 
 export function ChatPanel() {
   const { messages, isTyping, setTyping, addMessage, clearMessages } =
     useChatStore();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [agent] = useState<Agent>(() => {
-    // Create a mock agent for demo
-    const mockAgent = createMockAgent(
-      'assistant' as any,
-      'AI Assistant',
-      'custom'
-    );
-
-    // Register some sample responses
-    const provider = (mockAgent as any).provider;
-    provider.registerResponse('hello', {
-      content: 'Hello! I\'m your AI assistant. I can help you with:\n\n- **Code review** - I can analyze your code for issues\n- **Documentation** - I can help write clear documentation\n- **Testing** - I can suggest test cases\n- **Refactoring** - I can recommend improvements\n\nWhat would you like help with?',
-      role: 'assistant',
-      finishReason: 'stop',
-    });
-
-    provider.registerResponse('help', {
-      content: 'I can assist with various development tasks:\n\n```typescript\n// Example: I can help explain code\nfunction fibonacci(n: number): number {\n  if (n <= 1) return n;\n  return fibonacci(n - 1) + fibonacci(n - 2);\n}\n```\n\nJust ask me anything about your code!',
-      role: 'assistant',
-      finishReason: 'stop',
-    });
-
-    provider.setDefaultResponse({
-      content: 'I understand you\'re asking about that. While I\'m currently in demo mode with limited responses, in the full version I can:\n\n- Analyze code and suggest improvements\n- Help write tests and documentation\n- Explain complex concepts\n- Assist with debugging\n\nTry saying "hello" or "help" to see example responses!',
-      role: 'assistant',
-      finishReason: 'stop',
-    });
-
-    return mockAgent;
-  });
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -75,18 +56,21 @@ export function ChatPanel() {
     setTyping(true);
 
     try {
-      // Send to agent
-      const result = await agent.chat(message);
+      // Simulate network delay
+      await new Promise((resolve) => setTimeout(resolve, 800));
+
+      // Get mock response
+      const response = getMockResponse(message);
 
       // Add assistant response
       addMessage({
         role: 'assistant',
-        content: result.response.content,
+        content: response,
       });
     } catch (error) {
       addMessage({
         role: 'system',
-        content: 'Error: Failed to get response from agent',
+        content: 'Error: Failed to get response',
       });
     } finally {
       setTyping(false);

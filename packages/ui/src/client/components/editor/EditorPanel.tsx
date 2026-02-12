@@ -5,7 +5,6 @@ import { Button } from '../ui/button';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { detectLanguage } from '@/lib/languageDetection';
-import { MemoryFileSystem } from '@antimatter/filesystem';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
 export function EditorPanel() {
@@ -13,7 +12,6 @@ export function EditorPanel() {
   const { openFiles, activeFile, openFile, closeFile, getActiveFileContent } =
     useEditorStore();
 
-  const [fs] = useState(() => createDemoFileSystem());
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
@@ -27,10 +25,9 @@ export function EditorPanel() {
   async function loadFile(path: WorkspacePath) {
     setIsLoading(true);
     try {
-      const content = await fs.readFile(path);
-      const text = new TextDecoder().decode(content);
+      const content = DEMO_FILES[path] || '// File content not available';
       const language = detectLanguage(path);
-      openFile(path, text, language);
+      openFile(path, content, language);
     } catch (error) {
       console.error('Failed to load file:', error);
     } finally {
@@ -124,14 +121,9 @@ export function EditorPanel() {
   );
 }
 
-// Create demo filesystem with sample content
-function createDemoFileSystem(): MemoryFileSystem {
-  const fs = new MemoryFileSystem();
-
-  // Create sample files with actual content
-  fs.writeFile(
-    'README.md' as WorkspacePath,
-    `# Antimatter IDE
+// Demo file contents
+const DEMO_FILES: Record<string, string> = {
+  'README.md': `# Antimatter IDE
 
 A modern development environment with AI-powered assistance.
 
@@ -145,59 +137,47 @@ A modern development environment with AI-powered assistance.
 
 ## Getting Started
 
-Select a file from the explorer to view its contents.`
-  );
+Select a file from the explorer to view its contents.`,
 
-  fs.writeFile(
-    'package.json' as WorkspacePath,
-    JSON.stringify(
-      {
-        name: 'antimatter-demo',
-        version: '1.0.0',
-        description: 'Demo project for Antimatter IDE',
-        scripts: {
-          dev: 'vite',
-          build: 'tsc && vite build',
-          test: 'vitest',
-        },
-        dependencies: {
-          react: '^18.3.1',
-          'react-dom': '^18.3.1',
-        },
+  'package.json': JSON.stringify(
+    {
+      name: 'antimatter-demo',
+      version: '1.0.0',
+      description: 'Demo project for Antimatter IDE',
+      scripts: {
+        dev: 'vite',
+        build: 'tsc && vite build',
+        test: 'vitest',
       },
-      null,
-      2
-    )
-  );
-
-  fs.writeFile(
-    'tsconfig.json' as WorkspacePath,
-    JSON.stringify(
-      {
-        compilerOptions: {
-          target: 'ES2020',
-          module: 'ESNext',
-          lib: ['ES2020', 'DOM'],
-          jsx: 'react-jsx',
-          strict: true,
-        },
+      dependencies: {
+        react: '^18.3.1',
+        'react-dom': '^18.3.1',
       },
-      null,
-      2
-    )
-  );
+    },
+    null,
+    2
+  ),
 
-  fs.writeFile(
-    'src/index.ts' as WorkspacePath,
-    `export { App } from './App';
+  'tsconfig.json': JSON.stringify(
+    {
+      compilerOptions: {
+        target: 'ES2020',
+        module: 'ESNext',
+        lib: ['ES2020', 'DOM'],
+        jsx: 'react-jsx',
+        strict: true,
+      },
+    },
+    null,
+    2
+  ),
+
+  'src/index.ts': `export { App } from './App';
 export { Header } from './components/Header';
 export { Sidebar } from './components/Sidebar';
-`
-  );
+`,
 
-  fs.writeFile(
-    'src/App.tsx' as WorkspacePath,
-    `import { BrowserRouter as Router } from 'react-router-dom';
+  'src/App.tsx': `import { BrowserRouter as Router } from 'react-router-dom';
 import { ThemeProvider } from './components/theme-provider';
 import { MainLayout } from './components/layout/MainLayout';
 
@@ -210,12 +190,9 @@ export default function App() {
     </Router>
   );
 }
-`
-  );
+`,
 
-  fs.writeFile(
-    'src/components/Button.tsx' as WorkspacePath,
-    `import * as React from 'react';
+  'src/components/Button.tsx': `import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 export interface ButtonProps
@@ -239,12 +216,9 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 );
 
 Button.displayName = 'Button';
-`
-  );
+`,
 
-  fs.writeFile(
-    'src/lib/utils.ts' as WorkspacePath,
-    `import { type ClassValue, clsx } from 'clsx';
+  'src/lib/utils.ts': `import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 export function cn(...inputs: ClassValue[]) {
@@ -258,12 +232,9 @@ export function formatDate(date: Date): string {
     day: 'numeric',
   }).format(date);
 }
-`
-  );
+`,
 
-  fs.writeFile(
-    'tests/example.test.ts' as WorkspacePath,
-    `import { describe, it, expect } from 'vitest';
+  'tests/example.test.ts': `import { describe, it, expect } from 'vitest';
 
 describe('Example Test Suite', () => {
   it('should pass this test', () => {
@@ -275,8 +246,5 @@ describe('Example Test Suite', () => {
     expect(result).toBe(42);
   });
 });
-`
-  );
-
-  return fs;
-}
+`,
+};
