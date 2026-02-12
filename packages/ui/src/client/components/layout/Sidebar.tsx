@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { FileText, MessageSquare, Folder, Wrench } from 'lucide-react';
+import { FileText, MessageSquare, Folder, Hammer } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Separator } from '../ui/separator';
 import { FileExplorer } from '../file-explorer/FileExplorer';
 import { ChatPanel } from '../chat/ChatPanel';
+import { BuildPanel } from '../build/BuildPanel';
 
 type SidebarView = 'files' | 'chat' | 'docs' | 'build';
 
@@ -53,7 +54,7 @@ export function Sidebar() {
           )}
           onClick={() => setActiveView('build')}
         >
-          <Wrench className="h-5 w-5" />
+          <Hammer className="h-5 w-5" />
         </Button>
       </div>
 
@@ -71,14 +72,7 @@ export function Sidebar() {
             </p>
           </div>
         )}
-        {activeView === 'build' && (
-          <div className="p-4">
-            <h3 className="text-sm font-medium">Build Status</h3>
-            <p className="text-xs text-muted-foreground mt-2">
-              No builds yet...
-            </p>
-          </div>
-        )}
+        {activeView === 'build' && <BuildPanel />}
       </div>
     </div>
   );
