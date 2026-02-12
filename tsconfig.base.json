@@ -23,7 +23,7 @@
       "@antimatter/tool-integration": ["./packages/tool-integration/src/index.ts"],
       "@antimatter/build-system": ["./packages/build-system/src/index.ts"],
       "@antimatter/ui": ["./packages/ui/src/index.ts"],
-      "@antimatter/ai-agent": ["./packages/ai-agent/src/index.ts"]
+      "@antimatter/agent-framework": ["./packages/ai-agent/src/index.ts"]
     }
   }
 }

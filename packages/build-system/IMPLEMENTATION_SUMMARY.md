@@ -113,7 +113,7 @@ The `@antimatter/build-system` package provides rule-based build orchestration f
 
 ### ✅ Ready for Integration
 
-The package is **production-ready** for integration with the `ai-agent` module:
+The package is **production-ready** for integration with the `agent-framework` module:
 
 - **Core functionality**: 100% implemented and working
 - **Build pipeline**: Compiles cleanly with TypeScript
@@ -184,7 +184,7 @@ for (const [targetId, result] of results) {
 ## 🔧 Next Steps
 
 ### Option A: Proceed to Next Module (Recommended)
-The build system is functionally complete. Move forward with `@antimatter/ai-agent` integration.
+The build system is functionally complete. Move forward with `@antimatter/agent-framework` integration.
 
 ### Option B: Refine Cache Logic
 If 100% test pass rate is required:

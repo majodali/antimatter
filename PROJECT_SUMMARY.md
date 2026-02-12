@@ -71,7 +71,7 @@ The project is organized as six interconnected packages following a monorepo str
   - Release and deployment management
 - Provides same information access for both human users and AI agents
 
-**`@antimatter/ai-agent`**
+**`@antimatter/agent-framework`**
 - **Pluggable AI assistant/agent integration**
 - Uses Anthropic APIs for AI capabilities
 - Support for:
@@ -105,7 +105,7 @@ The project is organized as six interconnected packages following a monorepo str
 3. **tool-integration** - External tool execution
 4. **build-system** - CI/CD automation
 5. **ui** - User interface and IDE features
-6. **ai-agent** - AI-powered assistance
+6. **agent-framework** - AI-powered assistance
 
 ## Implementation Approach
 1. **Minimal adapters** - Use standard tools and libraries where possible

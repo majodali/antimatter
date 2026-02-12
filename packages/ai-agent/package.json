@@ -1,5 +1,5 @@
 {
-  "name": "@antimatter/ai-agent",
+  "name": "@antimatter/agent-framework",
   "version": "0.0.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -12,7 +12,8 @@
     }
   },
   "dependencies": {
-    "@antimatter/project-model": "workspace:*"
+    "@antimatter/project-model": "workspace:*",
+    "@anthropic-ai/sdk": "^0.38.0"
   },
   "scripts": {
     "test": "vitest run",
