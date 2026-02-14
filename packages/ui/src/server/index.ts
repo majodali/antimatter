@@ -1,9 +1,10 @@
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { fileRouter } from './routes/filesystem.js';
-import { buildRouter } from './routes/build.js';
-import { agentRouter } from './routes/agent.js';
+import { WorkspaceService } from './services/workspace-service.js';
+import { createFileRouter } from './routes/filesystem.js';
+import { createBuildRouter } from './routes/build.js';
+import { createAgentRouter } from './routes/agent.js';
 import { setupWebSocket } from './websocket.js';
 
 const app = express();
@@ -25,10 +26,15 @@ app.use((req, res, next) => {
   }
 });
 
+// Create shared workspace service
+const workspace = new WorkspaceService({
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+});
+
 // API Routes
-app.use('/api/files', fileRouter);
-app.use('/api/build', buildRouter);
-app.use('/api/agent', agentRouter);
+app.use('/api/files', createFileRouter(workspace));
+app.use('/api/build', createBuildRouter(workspace));
+app.use('/api/agent', createAgentRouter(workspace));
 
 // Health check
 app.get('/api/health', (req, res) => {

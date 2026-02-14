@@ -3,8 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "declaration": true,
-    "declarationMap": true,
-    "emitDeclarationOnly": false
+    "declarationMap": true
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.spec.ts"],
@@ -20,6 +19,9 @@
     },
     {
       "path": "../build-system/tsconfig.lib.json"
+    },
+    {
+      "path": "../agent-framework/tsconfig.lib.json"
     }
   ]
 }

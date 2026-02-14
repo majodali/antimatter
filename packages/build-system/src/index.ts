@@ -6,8 +6,9 @@ export type {
   BuildStatus,
 } from '@antimatter/project-model';
 
-// Export error classes
+// Export error classes and types
 export { BuildExecutionError, CacheError } from './types.js';
+export type { BuildContext } from './types.js';
 
 // Export main classes
 export { BuildExecutor } from './build-executor.js';

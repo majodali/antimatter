@@ -56,9 +56,18 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.38.0
         version: 0.38.0
+      '@antimatter/build-system':
+        specifier: workspace:*
+        version: link:../build-system
+      '@antimatter/filesystem':
+        specifier: workspace:*
+        version: link:../filesystem
       '@antimatter/project-model':
         specifier: workspace:*
         version: link:../project-model
+      '@antimatter/tool-integration':
+        specifier: workspace:*
+        version: link:../tool-integration
 
   packages/build-system:
     dependencies:
@@ -80,6 +89,24 @@ importers:
 
   packages/project-model: {}
 
+  packages/test-harness:
+    dependencies:
+      '@antimatter/agent-framework':
+        specifier: workspace:*
+        version: link:../agent-framework
+      '@antimatter/build-system':
+        specifier: workspace:*
+        version: link:../build-system
+      '@antimatter/filesystem':
+        specifier: workspace:*
+        version: link:../filesystem
+      '@antimatter/project-model':
+        specifier: workspace:*
+        version: link:../project-model
+      '@antimatter/tool-integration':
+        specifier: workspace:*
+        version: link:../tool-integration
+
   packages/tool-integration:
     dependencies:
       '@antimatter/project-model':
@@ -100,6 +127,9 @@ importers:
       '@antimatter/project-model':
         specifier: workspace:*
         version: link:../project-model
+      '@codegenie/serverless-express':
+        specifier: ^4.17.1
+        version: 4.17.1
       '@monaco-editor/react':
         specifier: ^4.6.0
         version: 4.7.0(monaco-editor@0.47.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -964,6 +994,10 @@ packages:
 
   '@bcoe/v8-coverage@1.0.2':
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
+    engines: {node: '>=18'}
+
+  '@codegenie/serverless-express@4.17.1':
+    resolution: {integrity: sha512-B/4RRtVK2iAp5ho+qoUFxUeMaWCgSP+hNrdLJV3DWKZ1E9n9oLKdsJ6W9LQekZsD8rGD15hDadIKWKKw5i3f3A==}
     engines: {node: '>=18'}
 
   '@emnapi/core@1.8.1':
@@ -5950,6 +5984,8 @@ snapshots:
       '@babel/helper-validator-identifier': 7.28.5
 
   '@bcoe/v8-coverage@1.0.2': {}
+
+  '@codegenie/serverless-express@4.17.1': {}
 
   '@emnapi/core@1.8.1':
     dependencies:

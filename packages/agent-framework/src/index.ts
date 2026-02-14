@@ -37,6 +37,18 @@ export {
   RolePrompts,
 } from './config-builder.js';
 
+// Agent tools
+export {
+  createReadFileTool,
+  createWriteFileTool,
+  createListFilesTool,
+  createFileTools,
+  createRunBuildTool,
+  createRunTestsTool,
+  createRunLintTool,
+} from './tools/index.js';
+export type { RunBuildToolDeps } from './tools/index.js';
+
 // Convenience function for creating agents
 import { AgentConfigBuilder } from './config-builder.js';
 import type { Identifier } from '@antimatter/project-model';

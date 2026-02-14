@@ -1,5 +1,5 @@
 {
-  "name": "@antimatter/agent-framework",
+  "name": "@antimatter/test-harness",
   "version": "0.0.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -16,7 +16,7 @@
     "@antimatter/filesystem": "workspace:*",
     "@antimatter/tool-integration": "workspace:*",
     "@antimatter/build-system": "workspace:*",
-    "@anthropic-ai/sdk": "^0.38.0"
+    "@antimatter/agent-framework": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",
