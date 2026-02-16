@@ -86,7 +86,7 @@ describe('BuildExecutor', () => {
 
       const results = await executor.executeBatch([target]);
 
-      expect(results.get('build-app')?.status).toBe('failed');
+      expect(results.get('build-app')?.status).toBe('failure');
       expect(results.get('build-app')?.diagnostics.length).toBeGreaterThan(0);
     });
 
@@ -204,13 +204,13 @@ describe('BuildExecutor', () => {
 
       // First build - should fail
       let results = await executor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('failed');
+      expect(results.get('build-app')?.status).toBe('failure');
 
       runner.clearHistory();
 
       // Second build - should re-execute (not cached)
       results = await executor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('failed');
+      expect(results.get('build-app')?.status).toBe('failure');
       expect(runner.getExecutedCommands()).toHaveLength(1);
     });
   });
@@ -285,7 +285,7 @@ describe('BuildExecutor', () => {
 
       const results = await executor.executeBatch(targets);
 
-      expect(results.get('build-lib')?.status).toBe('failed');
+      expect(results.get('build-lib')?.status).toBe('failure');
       expect(results.get('build-app')?.status).toBe('skipped');
 
       // Only lib should have been executed
@@ -343,7 +343,7 @@ describe('BuildExecutor', () => {
 
       const results = await executor.executeBatch(targets);
 
-      expect(results.get('A')?.status).toBe('failed');
+      expect(results.get('A')?.status).toBe('failure');
       expect(results.get('B')?.status).toBe('skipped');
       expect(results.get('C')?.status).toBe('skipped');
     });
@@ -371,7 +371,7 @@ describe('BuildExecutor', () => {
       const results = await executor.executeBatch([target]);
       const result = results.get('build-app')!;
 
-      expect(result.status).toBe('failed');
+      expect(result.status).toBe('failure');
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0].file).toBe('src/index.ts');
       expect(result.diagnostics[0].line).toBe(10);
@@ -422,7 +422,7 @@ describe('BuildExecutor', () => {
       const results = await executor.executeBatch([target]);
       const result = results.get('build-app')!;
 
-      expect(result.status).toBe('failed');
+      expect(result.status).toBe('failure');
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0].severity).toBe('error');
     });

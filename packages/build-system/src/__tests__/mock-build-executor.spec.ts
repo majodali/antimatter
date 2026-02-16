@@ -87,7 +87,7 @@ describe('MockBuildExecutor', () => {
 
       const mockResult: BuildResult = {
         targetId: 'build-app',
-        status: 'failed',
+        status: 'failure',
         diagnostics: [
           {
             file: 'src/index.ts',
@@ -107,7 +107,7 @@ describe('MockBuildExecutor', () => {
       const results = await mockExecutor.executeBatch(targets);
 
       expect(results.get('build-lib')?.status).toBe('success');
-      expect(results.get('build-app')?.status).toBe('failed');
+      expect(results.get('build-app')?.status).toBe('failure');
       expect(results.get('build-app')?.diagnostics).toHaveLength(1);
     });
   });
@@ -249,7 +249,7 @@ describe('MockBuildExecutor', () => {
 
       const mockResult: BuildResult = {
         targetId: 'build-app',
-        status: 'failed',
+        status: 'failure',
         diagnostics: [],
         startedAt: '2024-01-01T00:00:00Z',
         finishedAt: '2024-01-01T00:00:01Z',
@@ -259,7 +259,7 @@ describe('MockBuildExecutor', () => {
       mockExecutor.registerMock('build-app', mockResult);
 
       let results = await mockExecutor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('failed');
+      expect(results.get('build-app')?.status).toBe('failure');
 
       mockExecutor.clearMocks();
 
@@ -276,7 +276,7 @@ describe('MockBuildExecutor', () => {
 
       const mockResult: BuildResult = {
         targetId: 'build-app',
-        status: 'failed',
+        status: 'failure',
         diagnostics: [],
         startedAt: '2024-01-01T00:00:00Z',
         finishedAt: '2024-01-01T00:00:01Z',

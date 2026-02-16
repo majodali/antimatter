@@ -371,7 +371,7 @@ describe('Integration Tests', () => {
       const results = await executor.executeBatch(targets);
 
       expect(results.get('build-lib')?.status).toBe('success');
-      expect(results.get('build-app')?.status).toBe('failed');
+      expect(results.get('build-app')?.status).toBe('failure');
     });
 
     it('should collect diagnostics from failed builds', async () => {
@@ -418,7 +418,7 @@ src/index.ts(1,9): error TS1005: ',' expected.`,
       const results = await executor.executeBatch([target]);
       const result = results.get('build')!;
 
-      expect(result.status).toBe('failed');
+      expect(result.status).toBe('failure');
       expect(result.diagnostics).toHaveLength(2);
       expect(result.diagnostics[0].file).toBe('src/index.ts');
       expect(result.diagnostics[0].line).toBe(1);
@@ -553,7 +553,7 @@ src/index.ts(1,9): error TS1005: ',' expected.`,
 
       const results = await executor.executeBatch(targets);
 
-      expect(results.get('build-utils')?.status).toBe('failed');
+      expect(results.get('build-utils')?.status).toBe('failure');
       expect(results.get('build-lib')?.status).toBe('skipped');
       expect(results.get('build-app')?.status).toBe('skipped');
 
