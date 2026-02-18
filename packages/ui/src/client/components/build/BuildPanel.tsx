@@ -1,110 +1,33 @@
-import { useEffect } from 'react';
-import { Hammer, Play, Trash2, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Hammer, Play, Trash2 } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { BuildStatusItem } from './BuildStatusItem';
 import { useBuildStore } from '@/stores/buildStore';
-import type { BuildResult, BuildTarget, BuildRule } from '@antimatter/project-model';
+import { fetchBuildResults, executeBuild } from '@/lib/api';
+import { onBuildUpdate } from '@/lib/ws';
 
 export function BuildPanel() {
-  const { targets, rules, results, setTargets, setRules, setResults, clearResults } = useBuildStore();
+  const { targets, rules, results, setTargets, setRules, setResults, setResult, clearResults } = useBuildStore();
+  const [isRunning, setIsRunning] = useState(false);
 
-  // Initialize with demo data
+  // Load initial results and subscribe to WS updates
   useEffect(() => {
-    // Demo build rules
-    const demoRules: BuildRule[] = [
-      {
-        id: 'compile-ts',
-        name: 'Compile TypeScript',
-        inputs: ['src/**/*.ts', 'src/**/*.tsx'],
-        outputs: ['dist/**/*.js'],
-        command: 'tsc',
-      },
-      {
-        id: 'bundle',
-        name: 'Bundle Application',
-        inputs: ['dist/**/*.js'],
-        outputs: ['dist/bundle.js'],
-        command: 'vite build',
-        dependsOn: ['compile-ts'],
-      },
-      {
-        id: 'test',
-        name: 'Run Tests',
-        inputs: ['src/**/*.test.ts'],
-        outputs: [],
-        command: 'vitest run',
-      },
-    ];
+    fetchBuildResults()
+      .then((res) => setResults(res))
+      .catch((err) => console.error('Failed to load build results:', err));
 
-    // Demo build targets
-    const demoTargets: BuildTarget[] = [
-      {
-        id: 'build-core',
-        ruleId: 'compile-ts',
-        moduleId: '@antimatter/ui',
-      },
-      {
-        id: 'build-bundle',
-        ruleId: 'bundle',
-        moduleId: '@antimatter/ui',
-        dependsOn: ['build-core'],
-      },
-      {
-        id: 'test-ui',
-        ruleId: 'test',
-        moduleId: '@antimatter/ui',
-      },
-    ];
-
-    setRules(demoRules);
-    setTargets(demoTargets);
-
-    // Demo results showing different statuses
-    const demoResults: BuildResult[] = [
-      {
-        targetId: 'build-core',
-        status: 'success',
-        startedAt: new Date(Date.now() - 5000).toISOString(),
-        finishedAt: new Date(Date.now() - 2000).toISOString(),
-        durationMs: 3000,
+    const unsub = onBuildUpdate((payload) => {
+      setResult({
+        targetId: payload.targetId,
+        status: payload.status as any,
+        startedAt: new Date().toISOString(),
+        finishedAt: payload.status !== 'running' ? new Date().toISOString() : undefined as any,
+        durationMs: 0,
         diagnostics: [],
-      },
-      {
-        targetId: 'build-bundle',
-        status: 'cached',
-        startedAt: new Date(Date.now() - 2000).toISOString(),
-        finishedAt: new Date(Date.now() - 1800).toISOString(),
-        durationMs: 200,
-        diagnostics: [],
-      },
-      {
-        targetId: 'test-ui',
-        status: 'failure',
-        startedAt: new Date(Date.now() - 8000).toISOString(),
-        finishedAt: new Date(Date.now() - 5000).toISOString(),
-        durationMs: 3000,
-        diagnostics: [
-          {
-            file: 'src/components/FileExplorer.test.tsx',
-            line: 42,
-            column: 15,
-            severity: 'error',
-            message: 'Expected element to be visible but was not found',
-            code: 'E001',
-          },
-          {
-            file: 'src/components/Editor.test.tsx',
-            line: 28,
-            column: 10,
-            severity: 'warning',
-            message: 'Test timeout exceeded 5000ms',
-          },
-        ],
-      },
-    ];
-
-    setResults(demoResults);
+      });
+    });
+    return unsub;
   }, []);
 
   const runningCount = Array.from(results.values()).filter(
@@ -119,9 +42,20 @@ export function BuildPanel() {
     (r) => r.status === 'failure'
   ).length;
 
-  const handleRunAll = () => {
-    // In a real implementation, this would trigger the build system
-    console.log('Running all build targets...');
+  const handleRunAll = async () => {
+    if (isRunning) return;
+    setIsRunning(true);
+    try {
+      const targetList = Array.from(targets.values());
+      const ruleList = Array.from(rules.values());
+      if (targetList.length === 0) return;
+      const buildResults = await executeBuild(targetList, ruleList);
+      setResults(buildResults);
+    } catch (err) {
+      console.error('Build failed:', err);
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   const handleClear = () => {
@@ -147,6 +81,7 @@ export function BuildPanel() {
             size="icon"
             className="h-7 w-7"
             onClick={handleRunAll}
+            disabled={isRunning}
             title="Run all targets"
           >
             <Play className="h-3.5 w-3.5" />

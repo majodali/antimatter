@@ -137,8 +137,8 @@ export async function expandGlobs(
     const entries = await fs.readDirectory(dir as WorkspacePath);
 
     for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      const relativePath = path.relative(baseDir, fullPath);
+      const fullPath = path.join(dir, entry.name).replace(/\\/g, '/');
+      const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
 
       if (!entry.isDirectory) {
         // It's a file - check if it matches patterns

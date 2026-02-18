@@ -32,7 +32,7 @@ export class WorkspaceService {
 
   constructor(options: WorkspaceServiceOptions = {}) {
     this.workspaceRoot = options.workspaceRoot ?? process.cwd();
-    this.fs = options.fs ?? new LocalFileSystem();
+    this.fs = options.fs ?? new LocalFileSystem(this.workspaceRoot);
     this.runner = options.runner ?? new SubprocessRunner();
 
     // Build agent tools
@@ -68,6 +68,24 @@ export class WorkspaceService {
 
   async getDirectoryTree(path: string): Promise<readonly FileEntry[]> {
     return this.fs.readDirectory(path as WorkspacePath);
+  }
+
+  async getDirectoryTreeRecursive(dirPath: string): Promise<{ name: string; path: string; isDirectory: boolean; children?: any[] }[]> {
+    const entries = await this.fs.readDirectory(dirPath as WorkspacePath);
+    const nodes = [];
+    for (const entry of entries) {
+      const fullPath = dirPath === '/' || dirPath === '' ? entry.name : `${dirPath}/${entry.name}`;
+      const node: { name: string; path: string; isDirectory: boolean; children?: any[] } = {
+        name: entry.name,
+        path: fullPath,
+        isDirectory: entry.isDirectory,
+      };
+      if (entry.isDirectory) {
+        node.children = await this.getDirectoryTreeRecursive(fullPath);
+      }
+      nodes.push(node);
+    }
+    return nodes;
   }
 
   async readFile(path: string): Promise<string> {

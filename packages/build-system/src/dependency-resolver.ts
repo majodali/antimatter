@@ -25,7 +25,6 @@ export class DependencyResolver {
     this.reverseGraph = new Map();
 
     this.buildGraph();
-    this.detectCycles(); // Detect cycles immediately in constructor
   }
 
   /**
@@ -165,7 +164,7 @@ export class DependencyResolver {
    * @returns Execution plan with topologically sorted targets
    */
   resolve(): ExecutionPlan {
-    // Compute topological order (cycles already detected in constructor)
+    this.detectCycles();
     const targets = this.topologicalSort();
 
     return { targets };

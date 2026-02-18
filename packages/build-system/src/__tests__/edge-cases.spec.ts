@@ -156,12 +156,10 @@ describe('Edge Cases', () => {
         },
       ];
 
-      expect(() => new DependencyResolver(targets, rules)).toThrow(
-        BuildExecutionError,
-      );
-      expect(() => new DependencyResolver(targets, rules)).toThrow(
-        /circular dependency/i,
-      );
+      const resolver = new DependencyResolver(targets, rules);
+      expect(() => resolver.resolve()).toThrow(BuildExecutionError);
+      const resolver2 = new DependencyResolver(targets, rules);
+      expect(() => resolver2.resolve()).toThrow(/circular dependency/i);
     });
 
     it('should include proper error reason for circular dependency', () => {
@@ -187,8 +185,9 @@ describe('Edge Cases', () => {
         },
       ];
 
+      const resolver = new DependencyResolver(targets, rules);
       try {
-        new DependencyResolver(targets, rules);
+        resolver.resolve();
         expect.fail('Should have thrown error');
       } catch (error) {
         expect(error).toBeInstanceOf(BuildExecutionError);

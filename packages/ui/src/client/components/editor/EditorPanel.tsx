@@ -5,6 +5,7 @@ import { Button } from '../ui/button';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { detectLanguage } from '@/lib/languageDetection';
+import { fetchFileContent } from '@/lib/api';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
 export function EditorPanel() {
@@ -13,6 +14,7 @@ export function EditorPanel() {
     useEditorStore();
 
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedFile && !openFiles.has(selectedFile)) {
@@ -24,12 +26,15 @@ export function EditorPanel() {
 
   async function loadFile(path: WorkspacePath) {
     setIsLoading(true);
+    setError(null);
     try {
-      const content = DEMO_FILES[path] || '// File content not available';
+      const content = await fetchFileContent(path);
       const language = detectLanguage(path);
       openFile(path, content, language);
-    } catch (error) {
-      console.error('Failed to load file:', error);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load file';
+      setError(msg);
+      console.error('Failed to load file:', err);
     } finally {
       setIsLoading(false);
     }
@@ -96,6 +101,10 @@ export function EditorPanel() {
           <div className="h-full flex items-center justify-center">
             <p className="text-muted-foreground">Loading...</p>
           </div>
+        ) : error ? (
+          <div className="h-full flex items-center justify-center">
+            <p className="text-red-500">{error}</p>
+          </div>
         ) : (
           <MonacoEditor
             value={activeFileContent.content}
@@ -120,131 +129,3 @@ export function EditorPanel() {
     </div>
   );
 }
-
-// Demo file contents
-const DEMO_FILES: Record<string, string> = {
-  'README.md': `# Antimatter IDE
-
-A modern development environment with AI-powered assistance.
-
-## Features
-
-- File explorer with tree view
-- Monaco code editor
-- AI chat integration
-- Terminal output
-- Build system integration
-
-## Getting Started
-
-Select a file from the explorer to view its contents.`,
-
-  'package.json': JSON.stringify(
-    {
-      name: 'antimatter-demo',
-      version: '1.0.0',
-      description: 'Demo project for Antimatter IDE',
-      scripts: {
-        dev: 'vite',
-        build: 'tsc && vite build',
-        test: 'vitest',
-      },
-      dependencies: {
-        react: '^18.3.1',
-        'react-dom': '^18.3.1',
-      },
-    },
-    null,
-    2
-  ),
-
-  'tsconfig.json': JSON.stringify(
-    {
-      compilerOptions: {
-        target: 'ES2020',
-        module: 'ESNext',
-        lib: ['ES2020', 'DOM'],
-        jsx: 'react-jsx',
-        strict: true,
-      },
-    },
-    null,
-    2
-  ),
-
-  'src/index.ts': `export { App } from './App';
-export { Header } from './components/Header';
-export { Sidebar } from './components/Sidebar';
-`,
-
-  'src/App.tsx': `import { BrowserRouter as Router } from 'react-router-dom';
-import { ThemeProvider } from './components/theme-provider';
-import { MainLayout } from './components/layout/MainLayout';
-
-export default function App() {
-  return (
-    <Router>
-      <ThemeProvider defaultTheme="dark">
-        <MainLayout />
-      </ThemeProvider>
-    </Router>
-  );
-}
-`,
-
-  'src/components/Button.tsx': `import * as React from 'react';
-import { cn } from '@/lib/utils';
-
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'default' | 'outline' | 'ghost';
-}
-
-export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = 'default', ...props }, ref) => {
-    return (
-      <button
-        className={cn(
-          'inline-flex items-center justify-center rounded-md',
-          className
-        )}
-        ref={ref}
-        {...props}
-      />
-    );
-  }
-);
-
-Button.displayName = 'Button';
-`,
-
-  'src/lib/utils.ts': `import { type ClassValue, clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
-
-export function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(date);
-}
-`,
-
-  'tests/example.test.ts': `import { describe, it, expect } from 'vitest';
-
-describe('Example Test Suite', () => {
-  it('should pass this test', () => {
-    expect(true).toBe(true);
-  });
-
-  it('should handle async operations', async () => {
-    const result = await Promise.resolve(42);
-    expect(result).toBe(42);
-  });
-});
-`,
-};

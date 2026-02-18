@@ -247,12 +247,22 @@ describe('Integration Tests', () => {
 
       const rules = new Map<string, BuildRule>([
         [
-          'compile',
+          'compile-lib',
           {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src/**/*.ts'],
-            outputs: ['dist/**/*.js'],
+            id: 'compile-lib',
+            name: 'Compile Lib',
+            inputs: ['packages/lib/src/**/*.ts'],
+            outputs: ['packages/lib/dist/**/*.js'],
+            command: 'tsc',
+          },
+        ],
+        [
+          'compile-app',
+          {
+            id: 'compile-app',
+            name: 'Compile App',
+            inputs: ['packages/app/src/**/*.ts'],
+            outputs: ['packages/app/dist/**/*.js'],
             command: 'tsc',
           },
         ],
@@ -270,13 +280,13 @@ describe('Integration Tests', () => {
       const targets: BuildTarget[] = [
         {
           id: 'build-app',
-          ruleId: 'compile',
+          ruleId: 'compile-app',
           moduleId: 'app',
           dependsOn: ['build-lib'],
         },
         {
           id: 'build-lib',
-          ruleId: 'compile',
+          ruleId: 'compile-lib',
           moduleId: 'lib',
         },
       ];
@@ -303,7 +313,7 @@ describe('Integration Tests', () => {
       // Change lib file
       await fs.writeFile('packages/lib/src/index.ts' as WorkspacePath, 'export const util = () => { return 42; };');
 
-      // Third build - lib should rebuild, app depends on lib so also rebuilds
+      // Third build - lib should rebuild, app's inputs didn't change so it stays cached
       results = await executor.executeBatch(targets);
       expect(results.get('build-lib')?.status).toBe('success');
       // App's inputs didn't change, so it gets cached

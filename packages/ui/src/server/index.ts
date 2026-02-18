@@ -45,7 +45,7 @@ app.get('/api/health', (req, res) => {
 setupWebSocket(wss);
 
 // Start server
-const PORT = process.env.PORT || 3100;
+const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`\n🚀 Antimatter Dev Server`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);

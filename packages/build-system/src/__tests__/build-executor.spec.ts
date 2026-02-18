@@ -416,10 +416,14 @@ describe('BuildExecutor', () => {
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
 
-      // Don't register a mock - will cause an error
-      runner.clearMocks();
+      // Use a runner that throws to simulate tool execution failure
+      const failingRunner = {
+        run: async () => { throw new Error('Tool execution failed'); },
+      };
+      const failContext: BuildContext = { ...context, runner: failingRunner as any };
+      const failExecutor = new BuildExecutor(failContext);
 
-      const results = await executor.executeBatch([target]);
+      const results = await failExecutor.executeBatch([target]);
       const result = results.get('build-app')!;
 
       expect(result.status).toBe('failure');

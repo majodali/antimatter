@@ -5,19 +5,7 @@ import { Button } from '../ui/button';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { useChatStore } from '@/stores/chatStore';
-
-// Mock agent responses
-const MOCK_RESPONSES: Record<string, string> = {
-  hello: 'Hello! I\'m your AI assistant. I can help you with:\n\n- **Code review** - I can analyze your code for issues\n- **Documentation** - I can help write clear documentation\n- **Testing** - I can suggest test cases\n- **Refactoring** - I can recommend improvements\n\nWhat would you like help with?',
-  help: 'I can assist with various development tasks:\n\n```typescript\n// Example: I can help explain code\nfunction fibonacci(n: number): number {\n  if (n <= 1) return n;\n  return fibonacci(n - 1) + fibonacci(n - 2);\n}\n```\n\nJust ask me anything about your code!',
-};
-
-const DEFAULT_RESPONSE = 'I understand you\'re asking about that. While I\'m currently in demo mode with limited responses, in the full version I can:\n\n- Analyze code and suggest improvements\n- Help write tests and documentation\n- Explain complex concepts\n- Assist with debugging\n\nTry saying "hello" or "help" to see example responses!';
-
-function getMockResponse(message: string): string {
-  const key = message.toLowerCase().trim();
-  return MOCK_RESPONSES[key] || DEFAULT_RESPONSE;
-}
+import { sendChatMessage, clearChatHistory } from '@/lib/api';
 
 export function ChatPanel() {
   const { messages, isTyping, setTyping, addMessage, clearMessages } =
@@ -40,7 +28,7 @@ export function ChatPanel() {
       });
       addMessage({
         role: 'assistant',
-        content: 'Hi! I\'m your AI assistant. Try saying "hello" or "help" to get started!',
+        content: 'Hi! I\'m your AI assistant. How can I help you today?',
       });
     }
   }, []);
@@ -56,11 +44,7 @@ export function ChatPanel() {
     setTyping(true);
 
     try {
-      // Simulate network delay
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      // Get mock response
-      const response = getMockResponse(message);
+      const { response } = await sendChatMessage(message);
 
       // Add assistant response
       addMessage({
@@ -70,10 +54,19 @@ export function ChatPanel() {
     } catch (error) {
       addMessage({
         role: 'system',
-        content: 'Error: Failed to get response',
+        content: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
       });
     } finally {
       setTyping(false);
+    }
+  };
+
+  const handleClear = async () => {
+    clearMessages();
+    try {
+      await clearChatHistory();
+    } catch {
+      // local state already cleared, server failure is non-critical
     }
   };
 
@@ -90,7 +83,7 @@ export function ChatPanel() {
             variant="ghost"
             size="icon"
             className="h-7 w-7"
-            onClick={clearMessages}
+            onClick={handleClear}
             title="Clear chat"
           >
             <Trash2 className="h-3.5 w-3.5" />

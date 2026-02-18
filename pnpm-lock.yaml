@@ -127,6 +127,9 @@ importers:
       '@antimatter/project-model':
         specifier: workspace:*
         version: link:../project-model
+      '@antimatter/tool-integration':
+        specifier: workspace:*
+        version: link:../tool-integration
       '@codegenie/serverless-express':
         specifier: ^4.17.1
         version: 4.17.1

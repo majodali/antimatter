@@ -71,9 +71,9 @@ describe('CacheManager', () => {
 
       const loaded = await cacheManager.loadCache(target.id);
       expect(loaded?.inputHashes.size).toBe(3);
-      expect(loaded?.inputHashes.has('/src/index.ts')).toBe(true);
-      expect(loaded?.inputHashes.has('/src/utils.ts')).toBe(true);
-      expect(loaded?.inputHashes.has('/src/lib/helpers.ts')).toBe(true);
+      expect(loaded?.inputHashes.has('src/index.ts')).toBe(true);
+      expect(loaded?.inputHashes.has('src/utils.ts')).toBe(true);
+      expect(loaded?.inputHashes.has('src/lib/helpers.ts')).toBe(true);
     });
   });
 
@@ -333,7 +333,7 @@ describe('CacheManager', () => {
       await cacheManager.saveCache(target, rule, '/project');
 
       const loaded = await cacheManager.loadCache(target.id);
-      expect(loaded?.inputHashes.has('/project/src/index.ts')).toBe(true);
+      expect(loaded?.inputHashes.has('project/src/index.ts')).toBe(true);
     });
   });
 });

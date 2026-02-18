@@ -4,14 +4,8 @@ import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { FileTree } from './FileTree';
 import { useFileStore } from '@/stores/fileStore';
-import type { WorkspacePath } from '@antimatter/filesystem';
-
-interface FileNode {
-  name: string;
-  path: WorkspacePath;
-  isDirectory: boolean;
-  children?: FileNode[];
-}
+import { fetchFileTree } from '@/lib/api';
+import { onFileChange } from '@/lib/ws';
 
 export function FileExplorer() {
   const {
@@ -24,94 +18,26 @@ export function FileExplorer() {
   } = useFileStore();
 
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     loadFiles();
+    const unsub = onFileChange(() => {
+      loadFiles();
+    });
+    return unsub;
   }, []);
 
   async function loadFiles() {
     setIsLoading(true);
+    setError(null);
     try {
-      // Mock file structure for demonstration
-      const mockFiles: FileNode[] = [
-        {
-          name: 'src',
-          path: 'src' as WorkspacePath,
-          isDirectory: true,
-          children: [
-            {
-              name: 'components',
-              path: 'src/components' as WorkspacePath,
-              isDirectory: true,
-              children: [
-                {
-                  name: 'Button.tsx',
-                  path: 'src/components/Button.tsx' as WorkspacePath,
-                  isDirectory: false,
-                },
-                {
-                  name: 'Input.tsx',
-                  path: 'src/components/Input.tsx' as WorkspacePath,
-                  isDirectory: false,
-                },
-              ],
-            },
-            {
-              name: 'lib',
-              path: 'src/lib' as WorkspacePath,
-              isDirectory: true,
-              children: [
-                {
-                  name: 'utils.ts',
-                  path: 'src/lib/utils.ts' as WorkspacePath,
-                  isDirectory: false,
-                },
-              ],
-            },
-            {
-              name: 'App.tsx',
-              path: 'src/App.tsx' as WorkspacePath,
-              isDirectory: false,
-            },
-            {
-              name: 'index.ts',
-              path: 'src/index.ts' as WorkspacePath,
-              isDirectory: false,
-            },
-          ],
-        },
-        {
-          name: 'tests',
-          path: 'tests' as WorkspacePath,
-          isDirectory: true,
-          children: [
-            {
-              name: 'example.test.ts',
-              path: 'tests/example.test.ts' as WorkspacePath,
-              isDirectory: false,
-            },
-          ],
-        },
-        {
-          name: 'package.json',
-          path: 'package.json' as WorkspacePath,
-          isDirectory: false,
-        },
-        {
-          name: 'README.md',
-          path: 'README.md' as WorkspacePath,
-          isDirectory: false,
-        },
-        {
-          name: 'tsconfig.json',
-          path: 'tsconfig.json' as WorkspacePath,
-          isDirectory: false,
-        },
-      ];
-
-      setFiles(mockFiles);
-    } catch (error) {
-      console.error('Failed to load files:', error);
+      const tree = await fetchFileTree();
+      setFiles(tree);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load files';
+      setError(msg);
+      console.error('Failed to load files:', err);
     } finally {
       setIsLoading(false);
     }
@@ -152,6 +78,10 @@ export function FileExplorer() {
           {isLoading ? (
             <div className="px-4 py-2 text-xs text-muted-foreground">
               Loading files...
+            </div>
+          ) : error ? (
+            <div className="px-4 py-2 text-xs text-red-500">
+              {error}
             </div>
           ) : files.length === 0 ? (
             <div className="px-4 py-2 text-xs text-muted-foreground">

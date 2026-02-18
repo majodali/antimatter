@@ -124,6 +124,11 @@ export class CacheManager {
       return false;
     }
 
+    // No input patterns means no tracked inputs — cache is valid if it was saved
+    if (rule.inputs.length === 0) {
+      return cachedEntry.inputHashes.size === 0;
+    }
+
     // Expand input globs to get current file list
     const inputFiles = await expandGlobs(
       this.fs,
@@ -163,21 +168,17 @@ export class CacheManager {
     workspaceRoot: string,
   ): Promise<void> {
     // Expand input globs to get file list
-    const inputFiles = await expandGlobs(
-      this.fs,
-      workspaceRoot,
-      rule.inputs,
-    );
+    const inputFiles = rule.inputs.length > 0
+      ? await expandGlobs(this.fs, workspaceRoot, rule.inputs)
+      : [];
 
     // Create snapshot of inputs
     const inputSnapshot = await createSnapshot(this.fs, inputFiles);
 
     // Expand output globs to get file list
-    const outputFiles = await expandGlobs(
-      this.fs,
-      workspaceRoot,
-      rule.outputs,
-    );
+    const outputFiles = rule.outputs.length > 0
+      ? await expandGlobs(this.fs, workspaceRoot, rule.outputs)
+      : [];
 
     // Create snapshot of outputs
     const outputSnapshot = await createSnapshot(this.fs, outputFiles);

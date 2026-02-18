@@ -4,6 +4,20 @@ import type { WorkspaceService } from '../services/workspace-service.js';
 export function createFileRouter(workspace: WorkspaceService): Router {
   const router = Router();
 
+  // Get recursive directory tree
+  router.get('/tree', async (req, res) => {
+    try {
+      const path = (req.query.path as string) || '/';
+      const tree = await workspace.getDirectoryTreeRecursive(path);
+      res.json({ tree });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to get directory tree',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   // List directory contents
   router.get('/list', async (req, res) => {
     try {
