@@ -17,6 +17,9 @@
     },
     {
       "path": "./packages/agent-framework"
+    },
+    {
+      "path": "./packages/test-harness"
     }
   ]
 }

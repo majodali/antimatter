@@ -10,6 +10,7 @@
     "server": "tsx src/server/index.ts",
     "dev:full": "concurrently \"npm run dev\" \"npm run server\"",
     "test": "vitest run",
+    "build:lambda": "node scripts/build-lambda.mjs",
     "lint": "eslint . --ext ts,tsx"
   },
   "dependencies": {
@@ -34,6 +35,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "express": "^4.18.3",
+    "isomorphic-git": "^1.27.1",
     "lucide-react": "^0.344.0",
     "monaco-editor": "^0.47.0",
     "react": "^18.3.1",
@@ -57,6 +59,7 @@
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
     "tsx": "^4.7.1",
+    "esbuild": "^0.21.5",
     "typescript": "^5.4.2",
     "vite": "^5.1.6"
   }

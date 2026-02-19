@@ -27,6 +27,8 @@ export { hashContent } from './hashing.js';
 
 export { MemoryFileSystem } from './memory-fs.js';
 export { LocalFileSystem } from './local-fs.js';
+export { S3FileSystem } from './s3-fs.js';
+export type { S3FileSystemOptions } from './s3-fs.js';
 export { watchDebounced } from './watcher.js';
 
 export {

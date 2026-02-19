@@ -13,6 +13,7 @@ interface EditorStore {
 
   openFile: (path: WorkspacePath, content: string, language: string) => void;
   closeFile: (path: WorkspacePath) => void;
+  closeAllFiles: () => void;
   setActiveFile: (path: WorkspacePath | null) => void;
   getActiveFileContent: () => EditorFile | null;
 }
@@ -42,6 +43,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         activeFile: newActiveFile,
       };
     }),
+
+  closeAllFiles: () => set({ openFiles: new Map(), activeFile: null }),
 
   setActiveFile: (path) => set({ activeFile: path }),
 

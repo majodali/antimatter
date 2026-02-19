@@ -4,12 +4,14 @@ import { MonacoEditor } from './MonacoEditor';
 import { Button } from '../ui/button';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
+import { useProjectStore } from '@/stores/projectStore';
 import { detectLanguage } from '@/lib/languageDetection';
 import { fetchFileContent } from '@/lib/api';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
 export function EditorPanel() {
   const selectedFile = useFileStore((state) => state.selectedFile);
+  const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const { openFiles, activeFile, openFile, closeFile, getActiveFileContent } =
     useEditorStore();
 
@@ -28,7 +30,7 @@ export function EditorPanel() {
     setIsLoading(true);
     setError(null);
     try {
-      const content = await fetchFileContent(path);
+      const content = await fetchFileContent(path, currentProjectId ?? undefined);
       const language = detectLanguage(path);
       openFile(path, content, language);
     } catch (err) {

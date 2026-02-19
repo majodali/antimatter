@@ -23,5 +23,19 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "exclude": ["node_modules", "cdk.out"]
+  "exclude": ["node_modules", "cdk.out"],
+  "references": [
+    {
+      "path": "../packages/project-model"
+    },
+    {
+      "path": "../packages/agent-framework"
+    },
+    {
+      "path": "../packages/tool-integration"
+    },
+    {
+      "path": "../packages/filesystem"
+    }
+  ]
 }

@@ -5,11 +5,13 @@ import { Button } from '../ui/button';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { useChatStore } from '@/stores/chatStore';
+import { useProjectStore } from '@/stores/projectStore';
 import { sendChatMessage, clearChatHistory } from '@/lib/api';
 
 export function ChatPanel() {
   const { messages, isTyping, setTyping, addMessage, clearMessages } =
     useChatStore();
+  const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -44,7 +46,7 @@ export function ChatPanel() {
     setTyping(true);
 
     try {
-      const { response } = await sendChatMessage(message);
+      const { response } = await sendChatMessage(message, currentProjectId ?? undefined);
 
       // Add assistant response
       addMessage({
@@ -64,7 +66,7 @@ export function ChatPanel() {
   const handleClear = async () => {
     clearMessages();
     try {
-      await clearChatHistory();
+      await clearChatHistory(currentProjectId ?? undefined);
     } catch {
       // local state already cleared, server failure is non-critical
     }

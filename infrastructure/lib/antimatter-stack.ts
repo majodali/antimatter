@@ -20,8 +20,9 @@ export class AntimatterStack extends cdk.Stack {
     // S3 bucket for frontend static files
     const websiteBucket = new s3.Bucket(this, 'WebsiteBucket', {
       bucketName: `antimatter-ide-${this.account}`,
-      websiteIndexDocument: 'index.html',
-      websiteErrorDocument: 'index.html', // SPA routing
+      // No websiteIndexDocument — CloudFront handles SPA routing via error pages.
+      // Setting websiteIndexDocument causes S3Origin to use the website endpoint
+      // (CustomOriginConfig) instead of OAI, breaking private bucket access.
       publicReadAccess: false,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.DESTROY, // WARNING: For dev only
@@ -65,10 +66,23 @@ export class AntimatterStack extends cdk.Stack {
 
     // Deploy frontend to S3
     new s3deploy.BucketDeployment(this, 'DeployWebsite', {
-      sources: [s3deploy.Source.asset(path.join(__dirname, '../../packages/ui/dist'))],
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../../packages/ui/dist/client'))],
       destinationBucket: websiteBucket,
       distribution,
       distributionPaths: ['/*'],
+    });
+
+    // ==========================================
+    // Data - S3 bucket for project storage
+    // ==========================================
+
+    const dataBucket = new s3.Bucket(this, 'DataBucket', {
+      bucketName: `antimatter-data-${this.account}`,
+      publicReadAccess: false,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // WARNING: For dev only
+      autoDeleteObjects: true, // WARNING: For dev only
+      encryption: s3.BucketEncryption.S3_MANAGED,
     });
 
     // ==========================================
@@ -80,13 +94,17 @@ export class AntimatterStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../packages/ui/dist-lambda')),
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 512,
+      timeout: cdk.Duration.seconds(120),
+      memorySize: 1024,
       environment: {
         NODE_ENV: 'production',
+        PROJECTS_BUCKET: dataBucket.bucketName,
         // ANTHROPIC_API_KEY will be added via Secrets Manager or environment variable
       },
     });
+
+    // Grant Lambda read/write access to the data bucket
+    dataBucket.grantReadWrite(apiFunction);
 
     // API Gateway REST API
     const api = new apigateway.RestApi(this, 'ApiGateway', {
@@ -109,11 +127,32 @@ export class AntimatterStack extends cdk.Stack {
       proxy: true,
     });
 
-    // API routes
-    const apiResource = api.root.addResource('api');
-    apiResource.addProxy({
+    // Proxy all requests to Lambda (let Express handle routing)
+    api.root.addProxy({
       defaultIntegration: lambdaIntegration,
       anyMethod: true,
+    });
+
+    // ==========================================
+    // CloudFront → API Gateway proxy for /api/*
+    // ==========================================
+
+    // Route /api/* requests through CloudFront to API Gateway so the
+    // frontend can use relative URLs (e.g. /api/projects) instead of
+    // hard-coding the API Gateway domain.
+    const apiOrigin = new origins.HttpOrigin(
+      `${api.restApiId}.execute-api.${this.region}.amazonaws.com`,
+      {
+        originPath: `/${api.deploymentStage.stageName}`,
+        protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+      },
+    );
+
+    distribution.addBehavior('/api/*', apiOrigin, {
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
     });
 
     // ==========================================
@@ -138,6 +177,11 @@ export class AntimatterStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DistributionId', {
       value: distribution.distributionId,
       description: 'CloudFront distribution ID',
+    });
+
+    new cdk.CfnOutput(this, 'DataBucketName', {
+      value: dataBucket.bucketName,
+      description: 'S3 bucket name for project data storage',
     });
   }
 }

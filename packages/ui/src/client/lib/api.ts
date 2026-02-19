@@ -51,6 +51,27 @@ export async function deleteProject(id: string): Promise<void> {
   });
 }
 
+export interface ImportGitResult extends ProjectMeta {
+  importStats: { totalFiles: number };
+}
+
+export async function importGitProject(url: string, name?: string): Promise<ImportGitResult> {
+  return apiFetch<ImportGitResult>('/api/projects/import/git', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, name: name || undefined }),
+  });
+}
+
+export function readBrowserFile(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => resolve(null);
+    reader.readAsText(file, 'utf-8');
+  });
+}
+
 // ---------------------------------------------------------------------------
 // File API — project-scoped when projectId is provided
 // ---------------------------------------------------------------------------
