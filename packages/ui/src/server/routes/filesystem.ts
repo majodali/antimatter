@@ -66,6 +66,23 @@ export function createFileRouter(workspace: WorkspaceService): Router {
     }
   });
 
+  // Create directory
+  router.post('/mkdir', async (req, res) => {
+    try {
+      const { path } = req.body;
+      if (!path) {
+        return res.status(400).json({ error: 'Path is required' });
+      }
+      await workspace.mkdir(path);
+      res.json({ success: true, path });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to create directory',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   // Delete file
   router.delete('/delete', async (req, res) => {
     try {

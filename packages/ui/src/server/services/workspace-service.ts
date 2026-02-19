@@ -104,6 +104,10 @@ export class WorkspaceService {
     return this.fs.exists(path as WorkspacePath);
   }
 
+  async mkdir(path: string): Promise<void> {
+    await this.fs.mkdir(path as WorkspacePath);
+  }
+
   // --- Build operations ---
 
   async executeBuild(
