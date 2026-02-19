@@ -7,6 +7,7 @@ import { createFileRouter } from './routes/filesystem.js';
 import { createBuildRouter } from './routes/build.js';
 import { createAgentRouter } from './routes/agent.js';
 import { createProjectRouter } from './routes/projects.js';
+import { createTestRouter } from './routes/tests.js';
 
 const app = express();
 
@@ -62,6 +63,9 @@ apiRouter.get('/health', (_req, res) => {
 
 // Project CRUD routes
 apiRouter.use('/projects', createProjectRouter(s3Client, projectsBucket));
+
+// Test runner
+apiRouter.use('/tests', createTestRouter());
 
 // Project-scoped routes — create a per-request WorkspaceService backed by S3
 apiRouter.use('/projects/:projectId/files', (req, res, next) => {

@@ -14,264 +14,6 @@ interface TestResult {
 const DEFAULT_API_BASE = 'https://cxpofzihnl.execute-api.us-west-2.amazonaws.com/prod';
 const DEFAULT_FRONTEND_BASE = 'https://d33wyunpiwy2df.cloudfront.net';
 
-type TestDef = {
-  name: string;
-  run: (apiBase: string, frontendBase: string, ctx: Record<string, string>) => Promise<{ pass: boolean; detail: string }>;
-};
-
-const testSuite: TestDef[] = [
-  {
-    name: 'Health Check',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/health`, { mode: 'cors' });
-      const body = await res.json();
-      if (res.status === 200 && body.status === 'ok')
-        return { pass: true, detail: JSON.stringify(body) };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'File Tree',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/files/tree`, { mode: 'cors' });
-      const body = await res.json();
-      if (res.status === 200 && Array.isArray(body.tree))
-        return { pass: true, detail: `${body.tree.length} nodes` };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Write File',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/files/write`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: '_test.txt', content: 'hello' }),
-        mode: 'cors',
-      });
-      const body = await res.json();
-      if (res.status === 200 && body.success === true)
-        return { pass: true, detail: JSON.stringify(body) };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Read File',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/files/read?path=_test.txt`, { mode: 'cors' });
-      const body = await res.json();
-      if (res.status === 200 && body.content === 'hello')
-        return { pass: true, detail: `content="${body.content}"` };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'File Exists',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/files/exists?path=_test.txt`, { mode: 'cors' });
-      const body = await res.json();
-      if (res.status === 200 && body.exists === true)
-        return { pass: true, detail: JSON.stringify(body) };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'List Directory',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/files/list`, { mode: 'cors' });
-      const body = await res.json();
-      const hasTestFile = Array.isArray(body.entries) && body.entries.some((e: any) => (typeof e === 'string' ? e : e.name) === '_test.txt');
-      if (res.status === 200 && hasTestFile)
-        return { pass: true, detail: `${body.entries.length} entries` };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Delete File',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/files/delete?path=_test.txt`, {
-        method: 'DELETE',
-        mode: 'cors',
-      });
-      const body = await res.json();
-      if (res.status === 200 && body.success === true)
-        return { pass: true, detail: JSON.stringify(body) };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'File Deleted',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/files/exists?path=_test.txt`, { mode: 'cors' });
-      const body = await res.json();
-      if (res.status === 200 && body.exists === false)
-        return { pass: true, detail: JSON.stringify(body) };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Build Results',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/build/results`, { mode: 'cors' });
-      const body = await res.json();
-      if (res.status === 200 && Array.isArray(body.results))
-        return { pass: true, detail: `${body.results.length} results` };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Agent Chat',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/agent/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'ping' }),
-        mode: 'cors',
-      });
-      const body = await res.json();
-      if (res.status === 200 && typeof body.response === 'string')
-        return { pass: true, detail: `response="${body.response}"` };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Agent History',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/agent/history`, { mode: 'cors' });
-      const body = await res.json();
-      if (res.status === 200 && Array.isArray(body.history))
-        return { pass: true, detail: `${body.history.length} messages` };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Clear History',
-    run: async (api) => {
-      const res = await fetch(`${api}/api/agent/history`, {
-        method: 'DELETE',
-        mode: 'cors',
-      });
-      const body = await res.json();
-      if (res.status === 200 && body.success === true)
-        return { pass: true, detail: JSON.stringify(body) };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  // ---- Project API tests ----
-  {
-    name: 'Create Project',
-    run: async (api, _frontend, ctx) => {
-      const res = await fetch(`${api}/api/projects`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: '_smoke_test_project' }),
-        mode: 'cors',
-      });
-      const body = await res.json();
-      if (res.status === 200 && body.id && body.name === '_smoke_test_project') {
-        ctx.projectId = body.id;
-        return { pass: true, detail: `id=${body.id}` };
-      }
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'List Projects',
-    run: async (api, _frontend, ctx) => {
-      const res = await fetch(`${api}/api/projects`, { mode: 'cors' });
-      const body = await res.json();
-      const found = Array.isArray(body.projects) && body.projects.some((p: any) => p.id === ctx.projectId);
-      if (res.status === 200 && found)
-        return { pass: true, detail: `${body.projects.length} projects, test project found` };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Project Write File',
-    run: async (api, _frontend, ctx) => {
-      const pid = ctx.projectId;
-      if (!pid) return { pass: false, detail: 'No project ID from Create Project test' };
-      const res = await fetch(`${api}/api/projects/${pid}/files/write`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: 'hello.txt', content: 'world' }),
-        mode: 'cors',
-      });
-      const body = await res.json();
-      if (res.status === 200 && body.success === true)
-        return { pass: true, detail: JSON.stringify(body) };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Project Read File',
-    run: async (api, _frontend, ctx) => {
-      const pid = ctx.projectId;
-      if (!pid) return { pass: false, detail: 'No project ID' };
-      const res = await fetch(`${api}/api/projects/${pid}/files/read?path=hello.txt`, { mode: 'cors' });
-      const body = await res.json();
-      if (res.status === 200 && body.content === 'world')
-        return { pass: true, detail: `content="${body.content}"` };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Project File Tree',
-    run: async (api, _frontend, ctx) => {
-      const pid = ctx.projectId;
-      if (!pid) return { pass: false, detail: 'No project ID' };
-      const res = await fetch(`${api}/api/projects/${pid}/files/tree`, { mode: 'cors' });
-      const body = await res.json();
-      const hasFile = Array.isArray(body.tree) && body.tree.some((n: any) => n.name === 'hello.txt');
-      if (res.status === 200 && hasFile)
-        return { pass: true, detail: `${body.tree.length} nodes, hello.txt found` };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  {
-    name: 'Delete Project',
-    run: async (api, _frontend, ctx) => {
-      const pid = ctx.projectId;
-      if (!pid) return { pass: false, detail: 'No project ID' };
-      const res = await fetch(`${api}/api/projects/${pid}`, {
-        method: 'DELETE',
-        mode: 'cors',
-      });
-      const body = await res.json();
-      if (res.status === 200 && body.success === true)
-        return { pass: true, detail: JSON.stringify(body) };
-      return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-    },
-  },
-  // ---- Frontend tests ----
-  {
-    name: 'Frontend HTML',
-    run: async (_api, frontend, ctx) => {
-      const res = await fetch(frontend, { mode: 'cors' });
-      const text = await res.text();
-      ctx.html = text;
-      if (res.status === 200 && text.includes('Antimatter IDE'))
-        return { pass: true, detail: `${text.length} bytes, title found` };
-      return { pass: false, detail: `${res.status}: title not found (${text.length} bytes)` };
-    },
-  },
-  {
-    name: 'Frontend Assets',
-    run: async (_api, frontend, ctx) => {
-      const html = ctx.html;
-      if (!html) return { pass: false, detail: 'No HTML from previous test' };
-      const match = html.match(/src="(\/assets\/index-[^"]+\.js)"/);
-      if (!match) return { pass: false, detail: 'No asset reference found in HTML' };
-      const assetUrl = `${frontend}${match[1]}`;
-      const res = await fetch(assetUrl, { mode: 'cors' });
-      const text = await res.text();
-      if (res.status === 200 && text.length > 0)
-        return { pass: true, detail: `${match[1]} — ${text.length} bytes` };
-      return { pass: false, detail: `${res.status}: ${assetUrl} (${text.length} bytes)` };
-    },
-  },
-];
-
 function statusIcon(status: TestStatus) {
   switch (status) {
     case 'pending': return <span className="text-muted-foreground">&#9679;</span>;
@@ -284,40 +26,38 @@ function statusIcon(status: TestStatus) {
 export function TestRunnerPage() {
   const [apiBase, setApiBase] = useState(DEFAULT_API_BASE);
   const [frontendBase, setFrontendBase] = useState(DEFAULT_FRONTEND_BASE);
-  const [tests, setTests] = useState<TestResult[]>(
-    testSuite.map((t) => ({ name: t.name, status: 'pending' as TestStatus }))
-  );
+  const [tests, setTests] = useState<TestResult[]>([]);
   const [running, setRunning] = useState(false);
 
   const runAll = useCallback(async () => {
     setRunning(true);
-    const fresh: TestResult[] = testSuite.map((t) => ({ name: t.name, status: 'pending' as TestStatus }));
-    setTests(fresh);
+    setTests([{ name: 'Running tests...', status: 'running' }]);
 
-    const ctx: Record<string, string> = {};
-    const api = apiBase.replace(/\/+$/, '');
-    const frontend = frontendBase.replace(/\/+$/, '');
+    try {
+      const res = await fetch('/api/tests/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiBase, frontendBase }),
+      });
+      const data = await res.json();
 
-    for (let i = 0; i < testSuite.length; i++) {
-      setTests((prev) =>
-        prev.map((t, idx) => (idx === i ? { ...t, status: 'running' } : t))
-      );
-
-      const start = performance.now();
-      let result: TestResult;
-      try {
-        const { pass, detail } = await testSuite[i].run(api, frontend, ctx);
-        const durationMs = Math.round(performance.now() - start);
-        result = { name: testSuite[i].name, status: pass ? 'pass' : 'fail', durationMs, detail };
-      } catch (err: unknown) {
-        const durationMs = Math.round(performance.now() - start);
-        const message = err instanceof Error ? err.message : String(err);
-        result = { name: testSuite[i].name, status: 'fail', durationMs, detail: `Error: ${message}` };
+      if (!res.ok) {
+        setTests([{ name: 'Server error', status: 'fail', detail: data.message || data.error }]);
+        setRunning(false);
+        return;
       }
 
-      setTests((prev) =>
-        prev.map((t, idx) => (idx === i ? result : t))
+      setTests(
+        data.results.map((r: any) => ({
+          name: r.name,
+          status: r.pass ? 'pass' : 'fail',
+          durationMs: r.durationMs,
+          detail: r.detail,
+        })),
       );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setTests([{ name: 'Request failed', status: 'fail', detail: message }]);
     }
 
     setRunning(false);
