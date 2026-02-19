@@ -36,6 +36,12 @@ testem.log
 .DS_Store
 Thumbs.db
 
+# Build artifacts
+*.tsbuildinfo
+infrastructure/cdk.out/
+infrastructure/deploy.log
+packages/ui/dist-lambda/
+
 # Nx
 .nx/cache
 .nx/workspace-data
