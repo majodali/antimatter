@@ -61,8 +61,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set((state) => {
       const newOpenFiles = new Map(state.openFiles);
       newOpenFiles.delete(path);
-      const newActiveFile =
-        state.activeFile === path ? null : state.activeFile;
+      let newActiveFile = state.activeFile;
+      if (state.activeFile === path) {
+        const remaining = Array.from(newOpenFiles.keys());
+        newActiveFile = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+      }
       return {
         openFiles: newOpenFiles,
         activeFile: newActiveFile,
