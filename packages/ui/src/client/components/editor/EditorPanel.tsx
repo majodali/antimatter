@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import { X, FileText } from 'lucide-react';
+import { useEffect, useCallback, useState } from 'react';
+import { X, FileText, Circle } from 'lucide-react';
 import { MonacoEditor } from './MonacoEditor';
 import { Button } from '../ui/button';
 import { useFileStore } from '@/stores/fileStore';
-import { useEditorStore } from '@/stores/editorStore';
+import { useEditorStore, scheduleAutoSave } from '@/stores/editorStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { detectLanguage } from '@/lib/languageDetection';
 import { fetchFileContent } from '@/lib/api';
@@ -12,8 +12,9 @@ import type { WorkspacePath } from '@antimatter/filesystem';
 export function EditorPanel() {
   const selectedFile = useFileStore((state) => state.selectedFile);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const { openFiles, activeFile, openFile, closeFile, getActiveFileContent } =
+  const { openFiles, activeFile, openFile, closeFile, getActiveFileContent, saveActiveFile, updateFileContent } =
     useEditorStore();
+  const saveState = useEditorStore((s) => s.saveState);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +43,27 @@ export function EditorPanel() {
     }
   }
 
+  const handleEditorChange = useCallback(
+    (value: string | undefined) => {
+      if (value === undefined || !activeFile) return;
+      updateFileContent(activeFile, value);
+      scheduleAutoSave(activeFile, currentProjectId ?? undefined);
+    },
+    [activeFile, currentProjectId, updateFileContent],
+  );
+
+  // Ctrl+S / Cmd+S to save
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveActiveFile(currentProjectId ?? undefined);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [currentProjectId, saveActiveFile]);
+
   const activeFileContent = getActiveFileContent();
   const openFilesList = Array.from(openFiles.values());
 
@@ -56,6 +78,27 @@ export function EditorPanel() {
         </div>
       </div>
     );
+  }
+
+  // Status bar text
+  let statusText: string;
+  let statusColor: string;
+  switch (saveState.status) {
+    case 'saving':
+      statusText = 'Saving...';
+      statusColor = 'text-yellow-500';
+      break;
+    case 'saved':
+      statusText = 'Saved';
+      statusColor = 'text-green-500';
+      break;
+    case 'error':
+      statusText = `Save failed: ${saveState.error ?? 'Unknown error'}`;
+      statusColor = 'text-red-500';
+      break;
+    default:
+      statusText = activeFileContent.isDirty ? 'Unsaved changes' : 'Saved';
+      statusColor = 'text-muted-foreground';
   }
 
   return (
@@ -81,6 +124,9 @@ export function EditorPanel() {
             >
               <FileText className="h-3.5 w-3.5" />
               <span className="whitespace-nowrap">{fileName}</span>
+              {file.isDirty && (
+                <Circle className="h-2 w-2 fill-current text-amber-400" />
+              )}
               <Button
                 variant="ghost"
                 size="icon"
@@ -111,7 +157,7 @@ export function EditorPanel() {
           <MonacoEditor
             value={activeFileContent.content}
             language={activeFileContent.language}
-            readOnly={true}
+            onChange={handleEditorChange}
           />
         )}
       </div>
@@ -126,7 +172,7 @@ export function EditorPanel() {
             {activeFileContent.content.split('\n').length} lines
           </span>
         </div>
-        <div className="text-muted-foreground">Read-only</div>
+        <div className={statusColor}>{statusText}</div>
       </div>
     </div>
   );

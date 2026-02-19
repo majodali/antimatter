@@ -13,7 +13,7 @@ interface MonacoEditorProps {
 export function MonacoEditor({
   value,
   language,
-  readOnly = true,
+  readOnly = false,
   onChange,
 }: MonacoEditorProps) {
   const { theme } = useTheme();
@@ -43,6 +43,9 @@ export function MonacoEditor({
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {
       editor.getAction('actions.find')?.run();
     });
+
+    // Suppress browser "Save Page As" dialog when editor is focused
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {});
   };
 
   useEffect(() => {
