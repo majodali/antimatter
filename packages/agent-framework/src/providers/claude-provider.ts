@@ -4,6 +4,7 @@ import type {
   AgentResponse,
   ProviderConfig,
   AgentTool,
+  StreamCallbacks,
 } from '../types.js';
 import { ProviderError } from '../types.js';
 import type { Provider, ChatRequestOptions } from './base.js';
@@ -51,134 +52,174 @@ export class ClaudeProvider implements Provider {
   }
 
   /**
-   * Send a chat request to Claude.
-   *
-   * Converts messages to Anthropic format and handles tool use.
+   * Build common request parameters from messages and options.
+   */
+  private buildRequestParams(messages: readonly Message[], options?: ChatRequestOptions) {
+    const systemMessages = messages.filter((m) => m.role === 'system');
+    const conversationMessages = messages.filter((m) => m.role !== 'system');
+
+    const systemPrompt = [
+      ...systemMessages.map((m) => m.content),
+      options?.systemPrompt,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    const anthropicMessages: Anthropic.MessageParam[] =
+      conversationMessages.map((msg) => ({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+      }));
+
+    const tools = options?.tools
+      ? this.convertToolsToAnthropic(options.tools)
+      : undefined;
+
+    return {
+      model: this.model,
+      max_tokens: options?.maxTokens || this.maxTokens,
+      temperature: options?.temperature ?? this.temperature,
+      system: systemPrompt || undefined,
+      messages: anthropicMessages,
+      tools,
+    };
+  }
+
+  /**
+   * Convert an Anthropic Message to an AgentResponse.
+   */
+  private convertToAgentResponse(response: Anthropic.Message): AgentResponse {
+    const contentBlock = response.content[0];
+    let content = '';
+    if (contentBlock?.type === 'text') {
+      content = contentBlock.text;
+    }
+
+    const toolCalls = response.content
+      .filter((block) => block.type === 'tool_use')
+      .map((block) => {
+        if (block.type === 'tool_use') {
+          return {
+            id: block.id,
+            name: block.name,
+            parameters: block.input as Record<string, unknown>,
+          };
+        }
+        return undefined;
+      })
+      .filter(Boolean) as Array<{
+      id: string;
+      name: string;
+      parameters: Record<string, unknown>;
+    }>;
+
+    let finishReason: AgentResponse['finishReason'] = 'stop';
+    if (response.stop_reason === 'max_tokens') {
+      finishReason = 'max_tokens';
+    } else if (response.stop_reason === 'tool_use') {
+      finishReason = 'tool_use';
+    }
+
+    return {
+      content,
+      role: 'assistant',
+      finishReason,
+      usage: {
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+      },
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    };
+  }
+
+  /**
+   * Handle Anthropic API errors and throw appropriate ProviderError.
+   */
+  private handleApiError(error: unknown): never {
+    if (error instanceof Anthropic.APIError) {
+      if (error.status === 401) {
+        throw new ProviderError(
+          'Authentication failed: Invalid API key',
+          'claude',
+          'auth-failed',
+          error,
+        );
+      } else if (error.status === 429) {
+        throw new ProviderError(
+          'Rate limit exceeded',
+          'claude',
+          'rate-limit',
+          error,
+        );
+      } else if (error.status >= 400 && error.status < 500) {
+        throw new ProviderError(
+          `Invalid request: ${error.message}`,
+          'claude',
+          'invalid-request',
+          error,
+        );
+      } else {
+        throw new ProviderError(
+          `API error: ${error.message}`,
+          'claude',
+          'api-error',
+          error,
+        );
+      }
+    }
+
+    throw new ProviderError(
+      `Unexpected error: ${error instanceof Error ? error.message : String(error)}`,
+      'claude',
+      'network-error',
+      error instanceof Error ? error : undefined,
+    );
+  }
+
+  /**
+   * Send a chat request to Claude (non-streaming).
    */
   async chat(
     messages: readonly Message[],
     options?: ChatRequestOptions,
   ): Promise<AgentResponse> {
     try {
-      // Separate system messages from conversation
-      const systemMessages = messages.filter((m) => m.role === 'system');
-      const conversationMessages = messages.filter(
-        (m) => m.role !== 'system',
-      );
-
-      // Build system prompt
-      const systemPrompt = [
-        ...systemMessages.map((m) => m.content),
-        options?.systemPrompt,
-      ]
-        .filter(Boolean)
-        .join('\n\n');
-
-      // Convert messages to Anthropic format
-      const anthropicMessages: Anthropic.MessageParam[] =
-        conversationMessages.map((msg) => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        }));
-
-      // Build tools if provided
-      const tools = options?.tools
-        ? this.convertToolsToAnthropic(options.tools)
-        : undefined;
-
-      // Make API call
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: options?.maxTokens || this.maxTokens,
-        temperature: options?.temperature ?? this.temperature,
-        system: systemPrompt || undefined,
-        messages: anthropicMessages,
-        tools,
-      });
-
-      // Extract content
-      const contentBlock = response.content[0];
-      let content = '';
-      if (contentBlock.type === 'text') {
-        content = contentBlock.text;
-      }
-
-      // Extract tool calls
-      const toolCalls = response.content
-        .filter((block) => block.type === 'tool_use')
-        .map((block) => {
-          if (block.type === 'tool_use') {
-            return {
-              id: block.id,
-              name: block.name,
-              parameters: block.input as Record<string, unknown>,
-            };
-          }
-          return undefined;
-        })
-        .filter(Boolean) as Array<{
-        id: string;
-        name: string;
-        parameters: Record<string, unknown>;
-      }>;
-
-      // Map finish reason
-      let finishReason: AgentResponse['finishReason'] = 'stop';
-      if (response.stop_reason === 'max_tokens') {
-        finishReason = 'max_tokens';
-      } else if (response.stop_reason === 'tool_use') {
-        finishReason = 'tool_use';
-      }
-
-      return {
-        content,
-        role: 'assistant',
-        finishReason,
-        usage: {
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-        },
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      };
+      const params = this.buildRequestParams(messages, options);
+      const response = await this.client.messages.create(params);
+      return this.convertToAgentResponse(response);
     } catch (error) {
-      if (error instanceof Anthropic.APIError) {
-        if (error.status === 401) {
-          throw new ProviderError(
-            'Authentication failed: Invalid API key',
-            'claude',
-            'auth-failed',
-            error,
-          );
-        } else if (error.status === 429) {
-          throw new ProviderError(
-            'Rate limit exceeded',
-            'claude',
-            'rate-limit',
-            error,
-          );
-        } else if (error.status >= 400 && error.status < 500) {
-          throw new ProviderError(
-            `Invalid request: ${error.message}`,
-            'claude',
-            'invalid-request',
-            error,
-          );
-        } else {
-          throw new ProviderError(
-            `API error: ${error.message}`,
-            'claude',
-            'api-error',
-            error,
-          );
-        }
+      this.handleApiError(error);
+    }
+  }
+
+  /**
+   * Stream a chat response from Claude.
+   *
+   * Uses Anthropic SDK's streaming API for progressive text delivery.
+   */
+  async chatStream(
+    messages: readonly Message[],
+    options?: ChatRequestOptions,
+    callbacks?: StreamCallbacks,
+    abortSignal?: AbortSignal,
+  ): Promise<AgentResponse> {
+    try {
+      const params = this.buildRequestParams(messages, options);
+      const stream = this.client.messages.stream(params);
+
+      if (abortSignal) {
+        abortSignal.addEventListener('abort', () => stream.abort(), { once: true });
       }
 
-      throw new ProviderError(
-        `Unexpected error: ${error instanceof Error ? error.message : String(error)}`,
-        'claude',
-        'network-error',
-        error instanceof Error ? error : undefined,
-      );
+      stream.on('text', (delta) => callbacks?.onText?.(delta));
+
+      const finalMessage = await stream.finalMessage();
+      return this.convertToAgentResponse(finalMessage);
+    } catch (error) {
+      if (abortSignal?.aborted) {
+        throw new ProviderError('Request aborted', 'claude', 'network-error');
+      }
+      this.handleApiError(error);
     }
   }
 

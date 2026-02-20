@@ -12,6 +12,7 @@ export type {
   ContextState,
   ChatOptions,
   AgentResult,
+  StreamCallbacks,
 } from './types.js';
 
 // Error classes
@@ -26,9 +27,14 @@ export { MockProvider } from './providers/mock-provider.js';
 
 // Context management
 export { ContextManager } from './context/context-manager.js';
+export { MemoryStore } from './context/memory-store.js';
+export type { PersistentMemory } from './context/memory-store.js';
 
 // Main agent class
 export { Agent } from './agent.js';
+
+// Multi-agent orchestration
+export { Orchestrator } from './orchestrator.js';
 
 // Configuration builder
 export {
@@ -46,8 +52,9 @@ export {
   createRunBuildTool,
   createRunTestsTool,
   createRunLintTool,
+  createCustomTool,
 } from './tools/index.js';
-export type { RunBuildToolDeps } from './tools/index.js';
+export type { RunBuildToolDeps, CustomToolDefinition } from './tools/index.js';
 
 // Convenience function for creating agents
 import { AgentConfigBuilder } from './config-builder.js';

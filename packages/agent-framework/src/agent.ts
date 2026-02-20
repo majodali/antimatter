@@ -6,6 +6,7 @@ import type {
   AgentResponse,
   AgentTool,
   ToolResult,
+  StreamCallbacks,
 } from './types.js';
 import { AgentError } from './types.js';
 import type { Provider } from './providers/base.js';
@@ -89,6 +90,8 @@ export class Agent {
     const result = await this.executeWithTools(
       toolsToUse,
       options.maxIterations || 5,
+      options.stream,
+      options.abortSignal,
     );
 
     return result;
@@ -109,6 +112,8 @@ export class Agent {
   private async executeWithTools(
     tools: ReadonlyMap<string, AgentTool>,
     maxIterations: number,
+    stream?: StreamCallbacks,
+    abortSignal?: AbortSignal,
   ): Promise<AgentResult> {
     let iterations = 0;
     const allToolResults: ToolResult[] = [];
@@ -116,16 +121,23 @@ export class Agent {
     while (iterations < maxIterations) {
       iterations++;
 
+      // Check for abort before each iteration
+      if (abortSignal?.aborted) {
+        throw new AgentError('Request aborted', this.config.id, 'execution-failed');
+      }
+
       // Get conversation history
       const history = this.contextManager.getConversationHistory();
 
-      // Call provider
+      // Call provider (prefer streaming when available)
       let response: AgentResponse;
       try {
-        response = await this.provider.chat(history, {
-          systemPrompt: this.config.systemPrompt,
-          tools,
-        });
+        const chatOptions = { systemPrompt: this.config.systemPrompt, tools };
+        if (stream && this.provider.chatStream) {
+          response = await this.provider.chatStream(history, chatOptions, stream, abortSignal);
+        } else {
+          response = await this.provider.chat(history, chatOptions);
+        }
       } catch (error) {
         throw new AgentError(
           `Provider error: ${error instanceof Error ? error.message : String(error)}`,
@@ -154,12 +166,26 @@ export class Agent {
         response.toolCalls &&
         response.toolCalls.length > 0
       ) {
+        // Emit tool call events
+        if (stream?.onToolCall) {
+          for (const tc of response.toolCalls) {
+            stream.onToolCall(tc);
+          }
+        }
+
         // Execute tools
         const toolResults = await this.executeTools(
           response.toolCalls,
           tools,
         );
         allToolResults.push(...toolResults);
+
+        // Emit tool result events
+        if (stream?.onToolResult) {
+          for (const tr of toolResults) {
+            stream.onToolResult(tr);
+          }
+        }
 
         // Add tool results to context
         for (const result of toolResults) {

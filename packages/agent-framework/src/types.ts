@@ -116,6 +116,15 @@ export interface ContextState {
 }
 
 /**
+ * Callbacks for streaming chat responses.
+ */
+export interface StreamCallbacks {
+  readonly onText?: (delta: string) => void;
+  readonly onToolCall?: (toolCall: ToolCall) => void;
+  readonly onToolResult?: (toolResult: ToolResult) => void;
+}
+
+/**
  * Options for chat requests.
  */
 export interface ChatOptions {
@@ -124,6 +133,8 @@ export interface ChatOptions {
   readonly tools?: ReadonlyMap<string, AgentTool>;
   readonly maxIterations?: number;
   readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly stream?: StreamCallbacks;
+  readonly abortSignal?: AbortSignal;
 }
 
 /**

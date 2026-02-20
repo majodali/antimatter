@@ -1,7 +1,8 @@
 import { useState, KeyboardEvent } from 'react';
-import { Send, Loader2 } from 'lucide-react';
+import { Send, Square } from 'lucide-react';
 import { Button } from '../ui/button';
 import { cn } from '@/lib/utils';
+import { useChatStore } from '@/stores/chatStore';
 
 interface ChatInputProps {
   onSend: (message: string) => void;
@@ -15,6 +16,7 @@ export function ChatInput({
   placeholder = 'Type a message...',
 }: ChatInputProps) {
   const [input, setInput] = useState('');
+  const cancelChat = useChatStore((s) => s.cancelChat);
 
   const handleSend = () => {
     if (input.trim() && !disabled) {
@@ -47,18 +49,26 @@ export function ChatInput({
           )}
           rows={2}
         />
-        <Button
-          onClick={handleSend}
-          disabled={disabled || !input.trim()}
-          size="icon"
-          className="h-[60px] w-[60px]"
-        >
-          {disabled ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : (
+        {disabled ? (
+          <Button
+            onClick={cancelChat}
+            variant="destructive"
+            size="icon"
+            className="h-[60px] w-[60px]"
+            title="Stop generating"
+          >
+            <Square className="h-5 w-5" />
+          </Button>
+        ) : (
+          <Button
+            onClick={handleSend}
+            disabled={!input.trim()}
+            size="icon"
+            className="h-[60px] w-[60px]"
+          >
             <Send className="h-5 w-5" />
-          )}
-        </Button>
+          </Button>
+        )}
       </div>
       <div className="mt-2 text-xs text-muted-foreground">
         Press Enter to send, Shift+Enter for new line

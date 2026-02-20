@@ -6,9 +6,16 @@ interface ChatMessageProps {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: string;
+  agentRole?: string;
 }
 
-export function ChatMessage({ role, content, timestamp }: ChatMessageProps) {
+const roleColors: Record<string, string> = {
+  implementer: 'bg-blue-500/20 text-blue-400',
+  reviewer: 'bg-amber-500/20 text-amber-400',
+  tester: 'bg-green-500/20 text-green-400',
+};
+
+export function ChatMessage({ role, content, timestamp, agentRole }: ChatMessageProps) {
   const isUser = role === 'user';
   const isSystem = role === 'system';
 
@@ -49,6 +56,14 @@ export function ChatMessage({ role, content, timestamp }: ChatMessageProps) {
           <span className="text-sm font-medium">
             {isUser ? 'You' : 'AI Assistant'}
           </span>
+          {agentRole && (
+            <span className={cn(
+              'text-xs px-1.5 py-0.5 rounded font-medium',
+              roleColors[agentRole] ?? 'bg-muted text-muted-foreground',
+            )}>
+              {agentRole}
+            </span>
+          )}
           <span className="text-xs text-muted-foreground">
             {formatTime(timestamp)}
           </span>

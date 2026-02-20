@@ -132,6 +132,65 @@ export async function clearChatHistory(projectId?: string): Promise<void> {
   });
 }
 
+export interface ChatStreamEvent {
+  type: 'text' | 'tool-call' | 'tool-result' | 'done' | 'error' | 'handoff';
+  delta?: string;
+  toolCall?: { id: string; name: string; parameters: Record<string, unknown> };
+  toolResult?: { toolCallId: string; content: string; isError?: boolean };
+  response?: string;
+  usage?: { inputTokens: number; outputTokens: number };
+  agentRole?: string;
+  fromRole?: string;
+  toRole?: string;
+  error?: string;
+}
+
+export async function sendChatMessageStreaming(
+  message: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  projectId?: string,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${agentBase(projectId)}/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({ message }),
+    signal: abortSignal,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.message ?? body.error);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const event = JSON.parse(line.slice(6)) as ChatStreamEvent;
+          onEvent(event);
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Build API — project-scoped when projectId is provided
 // ---------------------------------------------------------------------------

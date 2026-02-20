@@ -3,6 +3,7 @@ import type {
   AgentResponse,
   ProviderConfig,
   AgentTool,
+  StreamCallbacks,
 } from '../types.js';
 
 /**
@@ -33,6 +34,25 @@ export interface Provider {
    * @returns Estimated token count
    */
   countTokens(messages: readonly Message[]): Promise<number>;
+
+  /**
+   * Stream a chat response from the AI provider.
+   *
+   * Optional — providers that support streaming implement this method.
+   * Falls back to `chat()` if not available.
+   *
+   * @param messages - Conversation history
+   * @param options - Provider-specific options
+   * @param callbacks - Streaming callbacks for progressive output
+   * @param abortSignal - Signal to cancel the request
+   * @returns Agent response with content and metadata
+   */
+  chatStream?(
+    messages: readonly Message[],
+    options?: ChatRequestOptions,
+    callbacks?: StreamCallbacks,
+    abortSignal?: AbortSignal,
+  ): Promise<AgentResponse>;
 
   /**
    * Get the provider's configuration.

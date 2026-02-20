@@ -1,6 +1,8 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
 import { X, FileText, Circle } from 'lucide-react';
 import { MonacoEditor } from './MonacoEditor';
+import type { CodeAction } from './MonacoEditor';
+import { useChatStore } from '@/stores/chatStore';
 import { Button } from '../ui/button';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore, scheduleAutoSave } from '@/stores/editorStore';
@@ -112,6 +114,19 @@ export function EditorPanel() {
     [],
   );
 
+  const handleCodeAction = useCallback(
+    (action: CodeAction) => {
+      const prompts: Record<CodeAction['action'], string> = {
+        fix: 'Fix the following code',
+        explain: 'Explain the following code',
+        refactor: 'Refactor the following code',
+      };
+      const message = `${prompts[action.action]}:\n\nFile: ${action.filePath} (lines ${action.startLine}-${action.endLine})\n\`\`\`${action.language}\n${action.code}\n\`\`\``;
+      useChatStore.getState().setPendingMessage(message);
+    },
+    [],
+  );
+
   const activeFileContent = getActiveFileContent();
   const openFilesList = Array.from(openFiles.values());
 
@@ -205,8 +220,10 @@ export function EditorPanel() {
           <MonacoEditor
             value={activeFileContent.content}
             language={activeFileContent.language}
+            filePath={activeFile}
             onChange={handleEditorChange}
             onEditorReady={handleEditorReady}
+            onCodeAction={handleCodeAction}
           />
         )}
       </div>

@@ -2,6 +2,7 @@ import type {
   Message,
   AgentResponse,
   ProviderConfig,
+  StreamCallbacks,
 } from '../types.js';
 import type { Provider, ChatRequestOptions } from './base.js';
 
@@ -95,6 +96,30 @@ export class MockProvider implements Provider {
       content: response.content,
       timestamp: new Date().toISOString(),
     });
+
+    return response;
+  }
+
+  /**
+   * Stream a chat response (mock — simulates word-by-word streaming).
+   */
+  async chatStream(
+    messages: readonly Message[],
+    options?: ChatRequestOptions,
+    callbacks?: StreamCallbacks,
+    abortSignal?: AbortSignal,
+  ): Promise<AgentResponse> {
+    const response = await this.chat(messages, options);
+
+    // Simulate word-by-word streaming
+    if (callbacks?.onText && response.content) {
+      const words = response.content.split(' ');
+      for (let i = 0; i < words.length; i++) {
+        if (abortSignal?.aborted) break;
+        const delta = i === 0 ? words[i] : ' ' + words[i];
+        callbacks.onText(delta);
+      }
+    }
 
     return response;
   }

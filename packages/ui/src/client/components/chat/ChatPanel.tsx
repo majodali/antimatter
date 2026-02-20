@@ -6,11 +6,24 @@ import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { useChatStore } from '@/stores/chatStore';
 import { useProjectStore } from '@/stores/projectStore';
-import { sendChatMessage, clearChatHistory } from '@/lib/api';
+import { sendChatMessageStreaming, clearChatHistory } from '@/lib/api';
 
 export function ChatPanel() {
-  const { messages, isTyping, setTyping, addMessage, clearMessages } =
-    useChatStore();
+  const {
+    messages,
+    isTyping,
+    streamingMessageId,
+    setTyping,
+    addMessage,
+    addStreamingMessage,
+    appendToMessage,
+    finalizeStreaming,
+    clearMessages,
+    setAbortController,
+    cancelChat,
+    pendingMessage,
+    setPendingMessage,
+  } = useChatStore();
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -35,6 +48,15 @@ export function ChatPanel() {
     }
   }, []);
 
+  // Process pending messages from code actions
+  useEffect(() => {
+    if (pendingMessage && !isTyping) {
+      const msg = pendingMessage;
+      setPendingMessage(null);
+      handleSend(msg);
+    }
+  }, [pendingMessage, isTyping]);
+
   const handleSend = async (message: string) => {
     // Add user message
     addMessage({
@@ -45,25 +67,71 @@ export function ChatPanel() {
     // Show typing indicator
     setTyping(true);
 
-    try {
-      const { response } = await sendChatMessage(message, currentProjectId ?? undefined);
+    const controller = new AbortController();
+    setAbortController(controller);
 
-      // Add assistant response
-      addMessage({
-        role: 'assistant',
-        content: response,
-      });
+    // Create streaming message placeholder
+    const msgId = addStreamingMessage();
+
+    try {
+      await sendChatMessageStreaming(
+        message,
+        (event) => {
+          switch (event.type) {
+            case 'text':
+              if (event.delta) {
+                appendToMessage(msgId, event.delta);
+              }
+              break;
+            case 'tool-call':
+              if (event.toolCall) {
+                appendToMessage(
+                  msgId,
+                  `\n\n> Using tool: **${event.toolCall.name}**\n`,
+                );
+              }
+              break;
+            case 'tool-result':
+              // Tool results are handled server-side, just note completion
+              break;
+            case 'handoff':
+              addMessage({
+                role: 'system',
+                content: `Agent handoff: ${event.fromRole} → ${event.toRole}`,
+              });
+              break;
+            case 'error':
+              appendToMessage(msgId, `\n\n**Error:** ${event.error}`);
+              break;
+            case 'done':
+              // Set agent role on the streaming message if provided
+              if (event.agentRole) {
+                useChatStore.getState().setMessageAgentRole(msgId, event.agentRole);
+              }
+              break;
+          }
+        },
+        currentProjectId ?? undefined,
+        controller.signal,
+      );
     } catch (error) {
-      addMessage({
-        role: 'system',
-        content: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
-      });
+      if (controller.signal.aborted) {
+        appendToMessage(msgId, '\n\n*[Cancelled]*');
+      } else {
+        addMessage({
+          role: 'system',
+          content: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
+        });
+      }
     } finally {
+      finalizeStreaming();
       setTyping(false);
+      setAbortController(null);
     }
   };
 
   const handleClear = async () => {
+    cancelChat();
     clearMessages();
     try {
       await clearChatHistory(currentProjectId ?? undefined);
@@ -110,11 +178,12 @@ export function ChatPanel() {
               role={message.role}
               content={message.content}
               timestamp={message.timestamp}
+              agentRole={message.agentRole}
             />
           ))}
 
-          {/* Typing indicator */}
-          {isTyping && (
+          {/* Typing indicator (only when waiting for first token) */}
+          {isTyping && !streamingMessageId && (
             <div className="flex gap-3 px-4 py-3">
               <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center">
                 <Bot className="h-5 w-5 text-secondary-foreground" />

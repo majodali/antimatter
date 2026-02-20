@@ -26,13 +26,13 @@ The agent framework supports multi-turn chat with tool use. These items deepen t
 
 | # | Feature | Status | Description |
 |---|---------|--------|-------------|
-| 2.1 | **Streaming responses** | Planned | Stream assistant tokens to the chat panel as they arrive instead of waiting for the full response |
-| 2.2 | **Inline code actions** | Planned | "Fix this", "Explain", "Refactor" actions in the editor context menu that invoke the agent on a selection |
-| 2.3 | **Agent-driven builds** | Planned | Agent can trigger builds, read diagnostics, and iterate on fixes autonomously |
-| 2.4 | **Custom tool definitions** | Planned | Let users define project-specific tools (shell commands, API calls) the agent can invoke |
-| 2.5 | **Persistent memory** | Planned | Agent retains key context across conversations (project conventions, past decisions) |
-| 2.6 | **Multi-agent orchestration** | Planned | Specialized agents (implementer, reviewer, tester) that hand off to each other |
-| 2.7 | **Cancel / interrupt** | Planned | Abort a running agent turn mid-stream |
+| 2.1 | **Streaming responses** | Done | Stream assistant tokens to the chat panel as they arrive instead of waiting for the full response |
+| 2.2 | **Inline code actions** | Done | "Fix this", "Explain", "Refactor" actions in the editor context menu that invoke the agent on a selection |
+| 2.3 | **Agent-driven builds** | Done | Agent can trigger builds, read diagnostics, and iterate on fixes autonomously |
+| 2.4 | **Custom tool definitions** | Done | Let users define project-specific tools (shell commands, API calls) the agent can invoke |
+| 2.5 | **Persistent memory** | Done | Agent retains key context across conversations (project conventions, past decisions) |
+| 2.6 | **Multi-agent orchestration** | Done | Specialized agents (implementer, reviewer, tester) that hand off to each other |
+| 2.7 | **Cancel / interrupt** | Done | Abort a running agent turn mid-stream |
 
 ---
 
