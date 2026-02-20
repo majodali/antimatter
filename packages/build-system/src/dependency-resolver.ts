@@ -119,44 +119,53 @@ export class DependencyResolver {
   }
 
   /**
-   * Perform topological sort using Kahn's algorithm.
-   * @returns Targets in execution order (dependencies first)
+   * Perform topological sort using Kahn's algorithm, grouping into levels.
+   * All targets in the same level have no dependencies on each other
+   * and can be executed in parallel.
+   * @returns Object with flat sorted list and level-grouped arrays
    */
-  private topologicalSort(): readonly BuildTarget[] {
+  private topologicalSort(): { sorted: readonly BuildTarget[]; levels: readonly (readonly BuildTarget[])[] } {
     // Calculate in-degrees
     const inDegree = new Map<Identifier, number>();
     for (const target of this.targets) {
       inDegree.set(target.id, this.graph.get(target.id)?.size || 0);
     }
 
-    // Queue of nodes with in-degree 0
-    const queue: BuildTarget[] = [];
+    // Queue of nodes with in-degree 0 (first wave)
+    let currentWave: BuildTarget[] = [];
     for (const target of this.targets) {
       if (inDegree.get(target.id) === 0) {
-        queue.push(target);
+        currentWave.push(target);
       }
     }
 
     const sorted: BuildTarget[] = [];
+    const levels: BuildTarget[][] = [];
 
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      sorted.push(current);
+    while (currentWave.length > 0) {
+      levels.push([...currentWave]);
+      const nextWave: BuildTarget[] = [];
 
-      // Reduce in-degree for dependents
-      const dependents = this.reverseGraph.get(current.id) || new Set();
-      for (const depId of dependents) {
-        const newInDegree = inDegree.get(depId)! - 1;
-        inDegree.set(depId, newInDegree);
+      for (const current of currentWave) {
+        sorted.push(current);
 
-        if (newInDegree === 0) {
-          const target = this.targets.find((t) => t.id === depId)!;
-          queue.push(target);
+        // Reduce in-degree for dependents
+        const dependents = this.reverseGraph.get(current.id) || new Set();
+        for (const depId of dependents) {
+          const newInDegree = inDegree.get(depId)! - 1;
+          inDegree.set(depId, newInDegree);
+
+          if (newInDegree === 0) {
+            const target = this.targets.find((t) => t.id === depId)!;
+            nextWave.push(target);
+          }
         }
       }
+
+      currentWave = nextWave;
     }
 
-    return sorted;
+    return { sorted, levels };
   }
 
   /**
@@ -165,8 +174,8 @@ export class DependencyResolver {
    */
   resolve(): ExecutionPlan {
     this.detectCycles();
-    const targets = this.topologicalSort();
+    const { sorted, levels } = this.topologicalSort();
 
-    return { targets };
+    return { targets: sorted, levels };
   }
 }

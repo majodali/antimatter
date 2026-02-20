@@ -1,6 +1,8 @@
 import { ChevronRight, ChevronDown, CheckCircle2, XCircle, Clock, AlertCircle, Loader2, MinusCircle, Database } from 'lucide-react';
 import type { BuildResult, BuildStatus } from '@antimatter/project-model';
 import { useBuildStore } from '@/stores/buildStore';
+import { useFileStore } from '@/stores/fileStore';
+import type { WorkspacePath } from '@antimatter/filesystem';
 
 interface BuildStatusItemProps {
   result: BuildResult;
@@ -76,7 +78,13 @@ export function BuildStatusItem({ result, targetName }: BuildStatusItemProps) {
                 <span className="flex-1">{diagnostic.message}</span>
               </div>
               {diagnostic.file && (
-                <div className="text-muted-foreground mt-1">
+                <div
+                  className="text-muted-foreground mt-1 cursor-pointer hover:underline hover:text-primary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    useFileStore.getState().setSelectedFile(diagnostic.file as WorkspacePath);
+                  }}
+                >
                   {diagnostic.file}
                   {diagnostic.line && `:${diagnostic.line}`}
                   {diagnostic.column && `:${diagnostic.column}`}

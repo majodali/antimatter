@@ -1,13 +1,15 @@
-import { useEffect, useCallback, useState } from 'react';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import { X, FileText, Circle } from 'lucide-react';
 import { MonacoEditor } from './MonacoEditor';
 import { Button } from '../ui/button';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore, scheduleAutoSave } from '@/stores/editorStore';
 import { useProjectStore } from '@/stores/projectStore';
+import { useBuildStore } from '@/stores/buildStore';
 import { detectLanguage } from '@/lib/languageDetection';
 import { fetchFileContent } from '@/lib/api';
 import type { WorkspacePath } from '@antimatter/filesystem';
+import type { editor as monacoEditor } from 'monaco-editor';
 
 export function EditorPanel() {
   const selectedFile = useFileStore((state) => state.selectedFile);
@@ -18,6 +20,10 @@ export function EditorPanel() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const editorInstanceRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
+  const results = useBuildStore((s) => s.results);
+  const getDiagnosticsForFile = useBuildStore((s) => s.getDiagnosticsForFile);
 
   useEffect(() => {
     if (selectedFile && !openFiles.has(selectedFile)) {
@@ -63,6 +69,48 @@ export function EditorPanel() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [currentProjectId, saveActiveFile]);
+
+  // Set Monaco markers from build diagnostics
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const editor = editorInstanceRef.current;
+    if (!monaco || !editor || !activeFile) return;
+
+    const model = editor.getModel();
+    if (!model) return;
+
+    const diagnostics = getDiagnosticsForFile(activeFile);
+    const markers: monacoEditor.IMarkerData[] = diagnostics.map((d) => ({
+      severity:
+        d.severity === 'error'
+          ? monaco.MarkerSeverity.Error
+          : d.severity === 'warning'
+            ? monaco.MarkerSeverity.Warning
+            : monaco.MarkerSeverity.Info,
+      message: d.message,
+      startLineNumber: d.line ?? 1,
+      startColumn: d.column ?? 1,
+      endLineNumber: d.line ?? 1,
+      endColumn: (d.column ?? 1) + 1,
+      source: 'Build',
+    }));
+
+    monaco.editor.setModelMarkers(model, 'build-diagnostics', markers);
+
+    return () => {
+      if (model && !model.isDisposed()) {
+        monaco.editor.setModelMarkers(model, 'build-diagnostics', []);
+      }
+    };
+  }, [activeFile, results, getDiagnosticsForFile]);
+
+  const handleEditorReady = useCallback(
+    (editor: monacoEditor.IStandaloneCodeEditor, monaco: typeof import('monaco-editor')) => {
+      editorInstanceRef.current = editor;
+      monacoRef.current = monaco;
+    },
+    [],
+  );
 
   const activeFileContent = getActiveFileContent();
   const openFilesList = Array.from(openFiles.values());
@@ -158,6 +206,7 @@ export function EditorPanel() {
             value={activeFileContent.content}
             language={activeFileContent.language}
             onChange={handleEditorChange}
+            onEditorReady={handleEditorReady}
           />
         )}
       </div>

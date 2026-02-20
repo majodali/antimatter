@@ -206,6 +206,24 @@ export class CacheManager {
   }
 
   /**
+   * Return target IDs whose cache is stale (inputs changed since last build).
+   */
+  async getStaleTargets(
+    targets: readonly BuildTarget[],
+    rules: ReadonlyMap<Identifier, BuildRule>,
+    workspaceRoot: string,
+  ): Promise<Identifier[]> {
+    const stale: Identifier[] = [];
+    for (const target of targets) {
+      const rule = rules.get(target.ruleId);
+      if (!rule) continue;
+      const valid = await this.isCacheValid(target, rule, workspaceRoot);
+      if (!valid) stale.push(target.id);
+    }
+    return stale;
+  }
+
+  /**
    * Clear cache for a specific target.
    */
   async clearCache(targetId: Identifier): Promise<void> {

@@ -36,6 +36,8 @@ export interface BuildResult {
   readonly diagnostics: readonly Diagnostic[];
   /** Wall-clock duration in milliseconds. */
   readonly durationMs?: number;
+  /** Combined stdout+stderr output from the build command. */
+  readonly output?: string;
 }
 
 /** Build-specific status (extends the general Status). */

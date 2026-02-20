@@ -41,51 +41,73 @@ export class BuildExecutor {
   async executeBatch(
     targets: readonly BuildTarget[],
   ): Promise<ReadonlyMap<Identifier, BuildResult>> {
-    // Resolve dependencies to get execution order
+    // Resolve dependencies to get execution order with levels
     const resolver = new DependencyResolver(targets, this.context.rules);
     const plan = resolver.resolve();
 
     const results = new Map<Identifier, BuildResult>();
     const failedTargets = new Set<Identifier>();
+    const rebuiltTargets = new Set<Identifier>();
+    const maxConcurrency = this.context.maxConcurrency ?? 4;
 
-    // Execute targets in dependency order
-    for (const target of plan.targets) {
-      // Check if any dependency failed
-      const rule = this.context.rules.get(target.ruleId);
-      if (!rule) {
-        throw new BuildExecutionError(
-          `No build rule found for target '${target.id}' (ruleId: '${target.ruleId}')`,
-          target.id,
-          'execution-failed',
+    // Execute wave by wave — all targets in a wave can run in parallel
+    for (const wave of plan.levels) {
+      // Filter out targets whose dependencies failed
+      const eligible: { target: BuildTarget; rule: NonNullable<ReturnType<typeof this.context.rules.get>> }[] = [];
+
+      for (const target of wave) {
+        const rule = this.context.rules.get(target.ruleId);
+        if (!rule) {
+          throw new BuildExecutionError(
+            `No build rule found for target '${target.id}' (ruleId: '${target.ruleId}')`,
+            target.id,
+            'execution-failed',
+          );
+        }
+
+        const dependencies = target.dependsOn || [];
+        const hasFailedDependency = dependencies.some((depId) =>
+          failedTargets.has(depId),
         );
+
+        if (hasFailedDependency) {
+          results.set(target.id, {
+            targetId: target.id,
+            status: 'skipped',
+            diagnostics: [],
+            startedAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+            durationMs: 0,
+          });
+          failedTargets.add(target.id);
+        } else {
+          eligible.push({ target, rule });
+        }
       }
 
-      const dependencies = target.dependsOn || [];
-      const hasFailedDependency = dependencies.some((depId) =>
-        failedTargets.has(depId),
-      );
+      // Execute eligible targets in batches of maxConcurrency
+      for (let i = 0; i < eligible.length; i += maxConcurrency) {
+        const batch = eligible.slice(i, i + maxConcurrency);
+        const batchResults = await Promise.all(
+          batch.map(({ target, rule }) => {
+            // Force rebuild if any dependency was rebuilt (incremental invalidation)
+            const forceRebuild = (target.dependsOn || []).some((depId) =>
+              rebuiltTargets.has(depId),
+            );
+            return this.executeTarget(target, rule, forceRebuild);
+          }),
+        );
 
-      if (hasFailedDependency) {
-        // Skip this target because a dependency failed
-        results.set(target.id, {
-          targetId: target.id,
-          status: 'skipped',
-          diagnostics: [],
-          startedAt: new Date().toISOString(),
-          finishedAt: new Date().toISOString(),
-          durationMs: 0,
-        });
-        failedTargets.add(target.id);
-        continue;
-      }
-
-      // Execute target
-      const result = await this.executeTarget(target, rule);
-      results.set(target.id, result);
-
-      // Track failed targets
-      if (result.status === 'failure') {
-        failedTargets.add(target.id);
+        for (const result of batchResults) {
+          results.set(result.targetId, result);
+          if (result.status === 'failure') {
+            failedTargets.add(result.targetId);
+          }
+          if (result.status === 'success') {
+            // This target actually built (not cached), so mark dependents for rebuild
+            rebuiltTargets.add(result.targetId);
+          }
+        }
       }
     }
 
@@ -101,92 +123,86 @@ export class BuildExecutor {
    */
   private async executeTarget(
     target: BuildTarget,
-    rule: ReturnType<typeof this.context.rules.get>,
+    rule: NonNullable<ReturnType<typeof this.context.rules.get>>,
+    forceRebuild = false,
   ): Promise<BuildResult> {
-    if (!rule) {
-      throw new BuildExecutionError(
-        `No build rule found for target '${target.id}'`,
-        target.id,
-        'execution-failed',
-      );
-    }
-
     const startedAt = new Date();
+    const onProgress = this.context.onProgress;
 
-    // Check cache validity
-    const isCacheValid = await this.cacheManager.isCacheValid(
-      target,
-      rule,
-      this.context.workspaceRoot,
-    );
+    // Check cache validity (skip cache if a dependency was rebuilt)
+    if (!forceRebuild) {
+      const isCacheValid = await this.cacheManager.isCacheValid(
+        target,
+        rule,
+        this.context.workspaceRoot,
+      );
 
-    if (isCacheValid) {
-      // Return cached result
-      const finishedAt = new Date();
-      return {
-        targetId: target.id,
-        status: 'cached',
-        diagnostics: [],
-        startedAt: startedAt.toISOString(),
-        finishedAt: finishedAt.toISOString(),
-        durationMs: finishedAt.getTime() - startedAt.getTime(),
-      };
+      if (isCacheValid) {
+        const finishedAt = new Date();
+        const result: BuildResult = {
+          targetId: target.id,
+          status: 'cached',
+          diagnostics: [],
+          startedAt: startedAt.toISOString(),
+          finishedAt: finishedAt.toISOString(),
+          durationMs: finishedAt.getTime() - startedAt.getTime(),
+        };
+        onProgress?.({ type: 'target-completed', targetId: target.id, result });
+        return result;
+      }
     }
+
+    // Emit started event
+    onProgress?.({ type: 'target-started', targetId: target.id, timestamp: startedAt.toISOString() });
 
     // Execute build command
     try {
-      // Convert BuildRule.command to ToolConfig
       const toolConfig: ToolConfig = {
         id: rule.id,
         name: rule.name,
         command: rule.command,
-        parameters: [], // No parameters for now
+        parameters: [],
         env: target.env,
       };
 
-      // Execute using ToolRunner
       const output = await this.context.runner.run({
         tool: toolConfig,
-        parameters: {}, // Empty parameter values
+        parameters: {},
         cwd: this.context.workspaceRoot,
         env: target.env,
       });
 
+      // Emit output lines
+      const fullOutput = output.stdout + '\n' + output.stderr;
+      if (onProgress) {
+        for (const line of fullOutput.split('\n')) {
+          if (line) onProgress({ type: 'target-output', targetId: target.id, line });
+        }
+      }
+
       const finishedAt = new Date();
-
-      // Parse diagnostics from output
-      const diagnostics = parseDiagnostics(
-        output.stdout + '\n' + output.stderr,
-        this.context.workspaceRoot,
-      );
-
-      // Determine status based on exit code
-      const status: BuildStatus =
-        output.exitCode === 0 ? 'success' : 'failure';
+      const diagnostics = parseDiagnostics(fullOutput, this.context.workspaceRoot);
+      const status: BuildStatus = output.exitCode === 0 ? 'success' : 'failure';
 
       const result: BuildResult = {
         targetId: target.id,
         status,
         diagnostics,
+        output: fullOutput.trim() || undefined,
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         durationMs: finishedAt.getTime() - startedAt.getTime(),
       };
 
-      // Save cache if successful
       if (status === 'success') {
-        await this.cacheManager.saveCache(
-          target,
-          rule,
-          this.context.workspaceRoot,
-        );
+        await this.cacheManager.saveCache(target, rule, this.context.workspaceRoot);
       }
 
+      onProgress?.({ type: 'target-completed', targetId: target.id, result });
       return result;
     } catch (error) {
       const finishedAt = new Date();
-
-      return {
+      const result: BuildResult = {
         targetId: target.id,
         status: 'failure',
         diagnostics: [
@@ -195,14 +211,16 @@ export class BuildExecutor {
             line: 0,
             column: 0,
             severity: 'error',
-            message:
-              error instanceof Error ? error.message : String(error),
+            message: error instanceof Error ? error.message : String(error),
           },
         ],
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         durationMs: finishedAt.getTime() - startedAt.getTime(),
       };
+
+      onProgress?.({ type: 'target-completed', targetId: target.id, result });
+      return result;
     }
   }
 }

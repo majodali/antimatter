@@ -55,7 +55,17 @@ export interface BuildContext {
   readonly rules: ReadonlyMap<Identifier, BuildRule>;
   /** Optional cache directory (defaults to .antimatter-cache) */
   readonly cacheDir?: string;
+  /** Maximum number of parallel target executions (default: 4) */
+  readonly maxConcurrency?: number;
+  /** Progress callback for streaming build events */
+  readonly onProgress?: (event: BuildProgressEvent) => void;
 }
+
+/** Events emitted during build execution for streaming progress. */
+export type BuildProgressEvent =
+  | { readonly type: 'target-started'; readonly targetId: Identifier; readonly timestamp: string }
+  | { readonly type: 'target-output'; readonly targetId: Identifier; readonly line: string }
+  | { readonly type: 'target-completed'; readonly targetId: Identifier; readonly result: import('@antimatter/project-model').BuildResult }
 
 /**
  * Execution plan with topologically sorted targets.
@@ -64,6 +74,8 @@ export interface BuildContext {
 export interface ExecutionPlan {
   /** Targets in execution order (dependencies first) */
   readonly targets: readonly BuildTarget[];
+  /** Targets grouped by wave — all targets in a wave can run in parallel */
+  readonly levels: readonly (readonly BuildTarget[])[];
 }
 
 /**

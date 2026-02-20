@@ -153,7 +153,91 @@ export async function executeBuild(
   return results;
 }
 
+export interface BuildProgressEvent {
+  type: 'target-started' | 'target-output' | 'target-completed' | 'build-complete' | 'build-error';
+  targetId?: string;
+  timestamp?: string;
+  line?: string;
+  result?: BuildResult;
+  results?: BuildResult[];
+  error?: string;
+}
+
+export async function executeBuildStreaming(
+  targets: BuildTarget[],
+  rules: BuildRule[],
+  onEvent: (event: BuildProgressEvent) => void,
+  projectId?: string,
+): Promise<void> {
+  const res = await fetch(`${buildBase(projectId)}/execute`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({ targets, rules }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.message ?? body.error);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const event = JSON.parse(line.slice(6)) as BuildProgressEvent;
+          onEvent(event);
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
+}
+
 export async function fetchBuildResults(projectId?: string): Promise<BuildResult[]> {
   const { results } = await apiFetch<{ results: BuildResult[] }>(`${buildBase(projectId)}/results`);
   return results;
+}
+
+export interface BuildConfig {
+  rules: BuildRule[];
+  targets: BuildTarget[];
+}
+
+export async function fetchBuildConfig(projectId?: string): Promise<BuildConfig> {
+  return apiFetch<BuildConfig>(`${buildBase(projectId)}/config`);
+}
+
+export async function saveBuildConfig(config: BuildConfig, projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`${buildBase(projectId)}/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+}
+
+export async function clearBuildCache(targetId?: string, projectId?: string): Promise<void> {
+  const query = targetId ? `?targetId=${encodeURIComponent(targetId)}` : '';
+  await apiFetch<{ success: boolean }>(`${buildBase(projectId)}/cache${query}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function fetchBuildChanges(projectId?: string): Promise<string[]> {
+  const { staleTargetIds } = await apiFetch<{ staleTargetIds: string[] }>(`${buildBase(projectId)}/changes`);
+  return staleTargetIds;
 }

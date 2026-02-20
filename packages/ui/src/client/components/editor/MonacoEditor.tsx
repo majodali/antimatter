@@ -8,6 +8,7 @@ interface MonacoEditorProps {
   language: string;
   readOnly?: boolean;
   onChange?: (value: string | undefined) => void;
+  onEditorReady?: (editor: editor.IStandaloneCodeEditor, monaco: typeof import('monaco-editor')) => void;
 }
 
 export function MonacoEditor({
@@ -15,6 +16,7 @@ export function MonacoEditor({
   language,
   readOnly = false,
   onChange,
+  onEditorReady,
 }: MonacoEditorProps) {
   const { theme } = useTheme();
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -46,6 +48,8 @@ export function MonacoEditor({
 
     // Suppress browser "Save Page As" dialog when editor is focused
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {});
+
+    onEditorReady?.(editor, monaco as any);
   };
 
   useEffect(() => {

@@ -2,8 +2,8 @@ import { LocalFileSystem } from '@antimatter/filesystem';
 import type { FileSystem, WorkspacePath, FileEntry } from '@antimatter/filesystem';
 import { SubprocessRunner } from '@antimatter/tool-integration';
 import type { ToolRunner } from '@antimatter/tool-integration';
-import { BuildExecutor } from '@antimatter/build-system';
-import type { BuildContext } from '@antimatter/build-system';
+import { BuildExecutor, CacheManager } from '@antimatter/build-system';
+import type { BuildContext, BuildProgressEvent } from '@antimatter/build-system';
 import {
   Agent,
   AgentConfigBuilder,
@@ -113,12 +113,14 @@ export class WorkspaceService {
   async executeBuild(
     targets: readonly BuildTarget[],
     rules: ReadonlyMap<Identifier, BuildRule>,
+    onProgress?: (event: BuildProgressEvent) => void,
   ): Promise<ReadonlyMap<Identifier, BuildResult>> {
     const context: BuildContext = {
       workspaceRoot: this.workspaceRoot,
       fs: this.fs,
       runner: this.runner,
       rules,
+      onProgress,
     };
 
     const executor = new BuildExecutor(context);
@@ -130,6 +132,44 @@ export class WorkspaceService {
     }
 
     return results;
+  }
+
+  async clearBuildCache(targetId?: string): Promise<void> {
+    const cacheManager = new CacheManager(this.fs);
+    if (targetId) {
+      await cacheManager.clearCache(targetId);
+    } else {
+      // Clear cache for all known targets
+      for (const id of this.buildResults.keys()) {
+        await cacheManager.clearCache(id);
+      }
+    }
+  }
+
+  async getStaleTargets(
+    targets: readonly BuildTarget[],
+    rules: ReadonlyMap<Identifier, BuildRule>,
+  ): Promise<Identifier[]> {
+    const cacheManager = new CacheManager(this.fs);
+    return cacheManager.getStaleTargets(targets, rules, this.workspaceRoot);
+  }
+
+  async loadBuildConfig(): Promise<{ rules: BuildRule[]; targets: BuildTarget[] }> {
+    const configPath = '.antimatter/build.json';
+    try {
+      const content = await this.fs.readTextFile(configPath as any);
+      return JSON.parse(content);
+    } catch {
+      return { rules: [], targets: [] };
+    }
+  }
+
+  async saveBuildConfig(config: { rules: BuildRule[]; targets: BuildTarget[] }): Promise<void> {
+    const configPath = '.antimatter/build.json';
+    try {
+      await this.fs.mkdir('.antimatter' as any);
+    } catch { /* already exists */ }
+    await this.fs.writeFile(configPath as any, JSON.stringify(config, null, 2));
   }
 
   getBuildResult(targetId: string): BuildResult | undefined {

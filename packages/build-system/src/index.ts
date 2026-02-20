@@ -8,7 +8,7 @@ export type {
 
 // Export error classes and types
 export { BuildExecutionError, CacheError } from './types.js';
-export type { BuildContext } from './types.js';
+export type { BuildContext, BuildProgressEvent, ExecutionPlan } from './types.js';
 
 // Export main classes
 export { BuildExecutor } from './build-executor.js';
