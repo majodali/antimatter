@@ -8,57 +8,73 @@ Step-by-step walkthroughs for demoing new functionality against the live deploym
 ## Build System (Items 1.1–1.6)
 
 ### Prerequisites
-- Open the app in your browser
+- Open the app at `https://d33wyunpiwy2df.cloudfront.net`
 - Create or select a project from the sidebar
 
 ### 1. Configure a Build
 
-1. Click the **Build** tab in the right sidebar (hammer icon).
-2. Under **Rules**, click **Add Rule**:
-   - **ID:** `compile-ts`
-   - **Command:** `echo "Compiling TypeScript..."`
-   - Click **Save**.
-3. Under **Targets**, click **Add Target**:
-   - **ID:** `app`
-   - **Rule:** select `compile-ts`
-   - **Inputs:** `src/index.ts` (type it in)
-   - **Outputs:** `dist/index.js`
-   - Click **Save**.
-4. The config is persisted to `.antimatter/build.json`. Reload the page — the rule and target are still there.
+1. Click the **Hammer** icon in the left sidebar icon bar to open the Build panel.
+2. Click the **Settings** (gear) icon in the Build panel header to enter config mode.
+3. In the **BUILD RULES** section, click the **+** button:
+   - **Name:** `compile-ts`
+   - **Command:** `echo "Compiling TypeScript..."` (monospace input)
+   - **Input globs:** `src/**/*.ts` (comma-separated)
+   - **Output globs:** `dist/**/*.js`
+4. In the **BUILD TARGETS** section, click the **+** button:
+   - **Target ID:** `app`
+   - **Rule:** select `compile-ts` from the dropdown
+   - **Module ID:** `app`
+5. Click the **Save Configuration** button at the bottom.
+6. The config is persisted to `.antimatter/build.json`. Reload the page — the rule and target are still there.
 
 ### 2. Run a Build (Streaming Output)
 
-1. Click the **Run Build** button.
-2. Watch the terminal panel at the bottom — build progress events stream in real-time via SSE:
-   - `target-started` for `app`
-   - `target-output` lines
-   - `target-completed` with status and duration
-   - `build-complete` summary
-3. The **Build Results** section updates showing pass/fail per target.
+1. Click the **Play** (triangle) icon in the Build panel header to run all targets.
+2. Watch the results list — each target shows a status row with:
+   - A spinning **Loader** icon (yellow) while running
+   - A **CheckCircle** (green) or **XCircle** (red) when complete
+   - Duration displayed as `123ms` or `1.23s`
+   - A colored status badge (success/failure/cached/running/pending/skipped)
+3. Build output also streams to the terminal panel at the bottom of the screen.
+4. A summary bar appears below the header showing total/passed/failed counts.
 
 ### 3. Parallel Execution
 
-1. Add a second target (`lib`, rule `compile-ts`, input `src/lib.ts`, output `dist/lib.js`).
-2. Run the build again — both `app` and `lib` execute concurrently (you'll see interleaved output).
+1. Enter config mode (gear icon) and add a second target (`lib`, rule `compile-ts`).
+   - If both targets are independent, they'll execute concurrently.
+   - To add a dependency, use the **Depends on** buttons that appear when multiple targets exist.
+2. Save and run the build — independent targets execute in parallel (interleaved output in terminal).
 
 ### 4. Incremental Builds
 
 1. Run the build a second time without changing any files.
-2. Targets with unchanged inputs are skipped (cached). You'll see `status: "cached"` in the results.
-3. Edit one of the input files (e.g. `src/index.ts`), run build again — only the affected target rebuilds.
+2. Cached targets show a blue **Database** icon and a "cached" status badge.
+3. Edit one of the input files, then run the build again — only the affected target rebuilds; the rest stay cached.
 
 ### 5. Watch Mode
 
-1. Click the **Watch** toggle in the build panel.
-2. Edit and save a source file listed as a target input.
+1. Click the **Eye** icon in the Build panel header to enable watch mode.
+   - The icon switches to **EyeOff** (primary color) and a "Watch active" label appears in the summary bar.
+   - The system polls for file changes every 5 seconds.
+2. Edit and save a source file that is an input to a build target.
 3. The build automatically re-runs for affected targets.
+4. Click the **EyeOff** icon again to disable watch mode.
 
 ### 6. Diagnostics Overlay
 
-1. Create a build rule with a command that produces diagnostic-style output.
-2. After a build with errors, open the file referenced in a diagnostic.
-3. Red/yellow squiggles appear inline in the Monaco editor at the reported line/column.
-4. Hover over a squiggle to see the error message.
+1. After a build with errors, expand a failed target row by clicking the **chevron** on the left.
+2. Diagnostics appear below the target, color-coded by severity:
+   - **Red** (left border) — errors
+   - **Yellow** — warnings
+   - **Blue** — info
+3. Each diagnostic shows severity label, message, and a clickable **file:line:column** link.
+4. Click the file link — the file opens in the editor with red/yellow squiggles at the reported location.
+5. Hover over a squiggle in the editor to see the error message.
+
+### 7. Clearing Results
+
+1. Click the **Trash** icon in the Build panel header to clear all build results.
+2. The panel returns to the empty state with placeholder text.
 
 ---
 
@@ -66,7 +82,7 @@ Step-by-step walkthroughs for demoing new functionality against the live deploym
 
 ### Prerequisites
 - Open the app at `https://d33wyunpiwy2df.cloudfront.net`
-- The chat panel is in the right sidebar (speech bubble icon)
+- The chat panel is in the left sidebar — click the **MessageSquare** icon in the icon bar
 - Without an Anthropic API key, the agent uses a mock provider that returns
   `"Mock response"`. To test real streaming, set the `ANTHROPIC_API_KEY`
   environment variable in the Lambda configuration.
@@ -75,7 +91,7 @@ Step-by-step walkthroughs for demoing new functionality against the live deploym
 
 **What it does:** Assistant tokens stream into the chat progressively instead of appearing all at once.
 
-1. Open the **AI Chat** panel in the right sidebar.
+1. Click the **MessageSquare** icon in the left sidebar icon bar to open the AI Chat panel.
 2. Type a message (e.g. `"Hello"`) and press Enter.
 3. Observe:
    - A bouncing-dots typing indicator appears briefly.
