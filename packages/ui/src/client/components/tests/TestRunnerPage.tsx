@@ -3,12 +3,14 @@ import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 
 type TestStatus = 'pending' | 'running' | 'pass' | 'fail';
+type SuiteFilter = 'all' | 'smoke' | 'functional';
 
 interface TestResult {
   name: string;
   status: TestStatus;
   durationMs?: number;
   detail?: string;
+  suite?: string;
 }
 
 const DEFAULT_API_BASE = 'https://cxpofzihnl.execute-api.us-west-2.amazonaws.com/prod';
@@ -23,9 +25,16 @@ function statusIcon(status: TestStatus) {
   }
 }
 
+const SUITE_OPTIONS: { value: SuiteFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'smoke', label: 'Smoke' },
+  { value: 'functional', label: 'Functional' },
+];
+
 export function TestRunnerPage() {
   const [apiBase, setApiBase] = useState(DEFAULT_API_BASE);
   const [frontendBase, setFrontendBase] = useState(DEFAULT_FRONTEND_BASE);
+  const [suite, setSuite] = useState<SuiteFilter>('all');
   const [tests, setTests] = useState<TestResult[]>([]);
   const [running, setRunning] = useState(false);
 
@@ -37,7 +46,7 @@ export function TestRunnerPage() {
       const res = await fetch('/api/tests/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiBase, frontendBase }),
+        body: JSON.stringify({ apiBase, frontendBase, suite }),
       });
       const data = await res.json();
 
@@ -53,6 +62,7 @@ export function TestRunnerPage() {
           status: r.pass ? 'pass' : 'fail',
           durationMs: r.durationMs,
           detail: r.detail,
+          suite: r.suite,
         })),
       );
     } catch (err: unknown) {
@@ -61,12 +71,53 @@ export function TestRunnerPage() {
     }
 
     setRunning(false);
-  }, [apiBase, frontendBase]);
+  }, [apiBase, frontendBase, suite]);
 
   const passed = tests.filter((t) => t.status === 'pass').length;
   const failed = tests.filter((t) => t.status === 'fail').length;
   const pending = tests.filter((t) => t.status === 'pending' || t.status === 'running').length;
   const totalMs = tests.reduce((sum, t) => sum + (t.durationMs ?? 0), 0);
+
+  // Group tests by suite
+  const smokeTests = tests.filter((t) => t.suite === 'smoke');
+  const functionalTests = tests.filter((t) => t.suite === 'functional');
+  const ungrouped = tests.filter((t) => !t.suite);
+
+  const hasSuiteGroups = smokeTests.length > 0 || functionalTests.length > 0;
+
+  function renderTestRow(t: TestResult, i: number) {
+    return (
+      <div key={i} className="px-6 py-3 flex items-start gap-3">
+        <span className="mt-0.5 text-lg leading-none w-5 text-center">{statusIcon(t.status)}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{t.name}</span>
+            {t.durationMs !== undefined && (
+              <span className="text-xs text-muted-foreground">{t.durationMs}ms</span>
+            )}
+          </div>
+          {t.detail && (
+            <pre className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap break-all font-mono">
+              {t.detail}
+            </pre>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function renderSuiteHeader(label: string, items: TestResult[]) {
+    const p = items.filter((t) => t.status === 'pass').length;
+    const f = items.filter((t) => t.status === 'fail').length;
+    return (
+      <div className="px-6 py-2 bg-secondary/50 border-b border-border flex items-center gap-3">
+        <span className="text-sm font-semibold">{label}</span>
+        <span className="text-xs text-green-500">{p} passed</span>
+        <span className="text-xs text-red-500">{f} failed</span>
+        <span className="text-xs text-muted-foreground">/ {items.length} total</span>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
@@ -74,7 +125,7 @@ export function TestRunnerPage() {
       <div className="flex items-center justify-between px-6 py-4 border-b border-border">
         <h1 className="text-xl font-semibold">Cloud Test Runner</h1>
         <Button onClick={runAll} disabled={running}>
-          {running ? 'Running...' : 'Run All Tests'}
+          {running ? 'Running...' : 'Run Tests'}
         </Button>
       </div>
 
@@ -100,6 +151,26 @@ export function TestRunnerPage() {
             disabled={running}
           />
         </div>
+        {/* Suite selector */}
+        <div className="flex items-center gap-3">
+          <label className="text-sm text-muted-foreground w-28 shrink-0">Suite</label>
+          <div className="flex gap-1">
+            {SUITE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setSuite(opt.value)}
+                disabled={running}
+                className={`px-3 py-1 text-sm rounded-md border transition-colors ${
+                  suite === opt.value
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-secondary text-foreground border-border hover:bg-secondary/80'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Summary bar */}
@@ -112,26 +183,30 @@ export function TestRunnerPage() {
 
       {/* Test list */}
       <ScrollArea className="flex-1">
-        <div className="divide-y divide-border">
-          {tests.map((t, i) => (
-            <div key={i} className="px-6 py-3 flex items-start gap-3">
-              <span className="mt-0.5 text-lg leading-none w-5 text-center">{statusIcon(t.status)}</span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{t.name}</span>
-                  {t.durationMs !== undefined && (
-                    <span className="text-xs text-muted-foreground">{t.durationMs}ms</span>
-                  )}
+        {hasSuiteGroups ? (
+          <div>
+            {smokeTests.length > 0 && (
+              <>
+                {renderSuiteHeader('Smoke Tests', smokeTests)}
+                <div className="divide-y divide-border">
+                  {smokeTests.map((t, i) => renderTestRow(t, i))}
                 </div>
-                {t.detail && (
-                  <pre className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap break-all font-mono">
-                    {t.detail}
-                  </pre>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
+              </>
+            )}
+            {functionalTests.length > 0 && (
+              <>
+                {renderSuiteHeader('Functional Tests', functionalTests)}
+                <div className="divide-y divide-border">
+                  {functionalTests.map((t, i) => renderTestRow(t, i))}
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {ungrouped.map((t, i) => renderTestRow(t, i))}
+          </div>
+        )}
       </ScrollArea>
     </div>
   );
