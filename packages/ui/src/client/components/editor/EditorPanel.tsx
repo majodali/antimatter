@@ -10,6 +10,7 @@ import { useProjectStore } from '@/stores/projectStore';
 import { useBuildStore } from '@/stores/buildStore';
 import { detectLanguage } from '@/lib/languageDetection';
 import { fetchFileContent } from '@/lib/api';
+import { eventLog } from '@/lib/eventLog';
 import type { WorkspacePath } from '@antimatter/filesystem';
 import type { editor as monacoEditor } from 'monaco-editor';
 
@@ -42,10 +43,11 @@ export function EditorPanel() {
       const content = await fetchFileContent(path, currentProjectId ?? undefined);
       const language = detectLanguage(path);
       openFile(path, content, language);
+      eventLog.info('editor', `Opened: ${path}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load file';
       setError(msg);
-      console.error('Failed to load file:', err);
+      eventLog.error('editor', `Failed to load file: ${path}`, msg);
     } finally {
       setIsLoading(false);
     }

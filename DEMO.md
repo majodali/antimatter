@@ -212,6 +212,57 @@ Step-by-step walkthroughs for demoing new functionality against the live deploym
 
 ---
 
+## Activity Log + WebSocket Fix
+
+### Overview
+
+The Activity Log captures structured events from all IDE subsystems (builds, chat, files, editor, projects, network) into a single view. The WebSocket client has been fixed to degrade gracefully in production — no more silent retry loops.
+
+### Prerequisites
+- Open the app at `https://d33wyunpiwy2df.cloudfront.net`
+- Create or select a project
+
+### 1. Activity Sidebar Panel
+
+1. Click the **ScrollText** icon (bottom of the left icon bar) to open the Activity panel.
+2. You should see an **"IDE initialized"** event already logged.
+3. The panel shows events in chronological order with:
+   - A **category icon** (hammer for build, message for chat, folder for files, etc.)
+   - A **level dot** (blue = info, yellow = warn, red = error)
+   - A **message** and **relative timestamp** (e.g. "3s ago")
+4. Click the **Trash** icon in the header to clear all events.
+
+### 2. Seeing Events in Action
+
+1. **File operations:** Switch to the Files panel, create a new file — switch back to Activity to see "File created: filename" events.
+2. **Editor:** Open a file, edit and save it — see "Opened: path" and "Saved: path" events.
+3. **Chat:** Send a message in the AI Chat panel — see "Message sent", "Response complete" events.
+4. **Build:** Configure and run a build — see "Build started", "Build complete" events.
+5. **Errors:** Any API errors appear as red-dotted error events with expandable details.
+
+### 3. Expandable Detail
+
+1. Events with extra detail (error stacks, payloads) show a **chevron** on the left.
+2. Click the event row to expand and see the full detail in a code block.
+
+### 4. Full-Page Activity Log (`/logs`)
+
+1. Navigate to `https://d33wyunpiwy2df.cloudfront.net/logs`.
+2. The page shows all activity events with:
+   - **Category filter chips** — click to toggle categories on/off
+   - **Level filter buttons** — toggle info/warn/error visibility
+   - **Summary counts** — total events, errors, warnings
+3. Click the **Back** button to return to the IDE.
+
+### 5. WebSocket Graceful Degradation
+
+1. Open the browser DevTools console.
+2. You should see **no** WebSocket connection errors or retry loops.
+3. In the Activity panel, look for the event: **"WebSocket disabled in production (not localhost)"**.
+4. In a local dev environment, WebSocket would attempt to connect with a maximum of 3 retries before giving up.
+
+---
+
 ## Smoke Tests
 
 Verify everything works end-to-end:

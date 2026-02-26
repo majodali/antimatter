@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { FileText, MessageSquare, Folder, Hammer } from 'lucide-react';
+import { FileText, MessageSquare, Folder, Hammer, ScrollText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Separator } from '../ui/separator';
 import { FileExplorer } from '../file-explorer/FileExplorer';
 import { ChatPanel } from '../chat/ChatPanel';
 import { BuildPanel } from '../build/BuildPanel';
+import { ActivityPanel } from '../activity/ActivityPanel';
 
-type SidebarView = 'files' | 'chat' | 'docs' | 'build';
+type SidebarView = 'files' | 'chat' | 'docs' | 'build' | 'activity';
 
 export function Sidebar() {
   const [activeView, setActiveView] = useState<SidebarView>('files');
@@ -56,6 +57,16 @@ export function Sidebar() {
         >
           <Hammer className="h-5 w-5" />
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            activeView === 'activity' && 'bg-accent text-accent-foreground'
+          )}
+          onClick={() => setActiveView('activity')}
+        >
+          <ScrollText className="h-5 w-5" />
+        </Button>
       </div>
 
       <Separator orientation="vertical" />
@@ -73,6 +84,7 @@ export function Sidebar() {
           </div>
         )}
         {activeView === 'build' && <BuildPanel />}
+        {activeView === 'activity' && <ActivityPanel />}
       </div>
     </div>
   );

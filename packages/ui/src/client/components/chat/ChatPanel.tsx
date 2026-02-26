@@ -7,6 +7,7 @@ import { ChatInput } from './ChatInput';
 import { useChatStore } from '@/stores/chatStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { sendChatMessageStreaming, clearChatHistory } from '@/lib/api';
+import { eventLog } from '@/lib/eventLog';
 
 export function ChatPanel() {
   const {
@@ -67,6 +68,8 @@ export function ChatPanel() {
     // Show typing indicator
     setTyping(true);
 
+    eventLog.info('chat', `Message sent: "${message.slice(0, 80)}${message.length > 80 ? '...' : ''}"`);
+
     const controller = new AbortController();
     setAbortController(controller);
 
@@ -95,15 +98,18 @@ export function ChatPanel() {
               // Tool results are handled server-side, just note completion
               break;
             case 'handoff':
+              eventLog.info('chat', `Agent handoff: ${event.fromRole} → ${event.toRole}`);
               addMessage({
                 role: 'system',
                 content: `Agent handoff: ${event.fromRole} → ${event.toRole}`,
               });
               break;
             case 'error':
+              eventLog.error('chat', 'Streaming error', event.error);
               appendToMessage(msgId, `\n\n**Error:** ${event.error}`);
               break;
             case 'done':
+              eventLog.info('chat', 'Response complete');
               // Set agent role on the streaming message if provided
               if (event.agentRole) {
                 useChatStore.getState().setMessageAgentRole(msgId, event.agentRole);
@@ -118,9 +124,11 @@ export function ChatPanel() {
       if (controller.signal.aborted) {
         appendToMessage(msgId, '\n\n*[Cancelled]*');
       } else {
+        const errMsg = error instanceof Error ? error.message : 'Failed to get response';
+        eventLog.error('chat', 'Chat request failed', errMsg);
         addMessage({
           role: 'system',
-          content: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
+          content: `Error: ${errMsg}`,
         });
       }
     } finally {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Trash2, Save } from 'lucide-react';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
@@ -67,14 +67,14 @@ export function BuildConfigEditor() {
             </Button>
           </div>
           <div className="space-y-2">
-            {Array.from(targets.values()).map((target) => (
+            {Array.from(targets.entries()).map(([mapKey, target]) => (
               <TargetEditor
-                key={target.id}
+                key={mapKey}
                 target={target}
                 rules={rules}
                 allTargets={targets}
-                onUpdate={(updated) => updateTarget(target.id, updated)}
-                onRemove={() => removeTarget(target.id)}
+                onUpdate={(updated) => updateTarget(mapKey, updated)}
+                onRemove={() => removeTarget(mapKey)}
               />
             ))}
             {targets.size === 0 && (
@@ -167,7 +167,19 @@ function TargetEditor({
   onUpdate: (t: BuildTarget) => void;
   onRemove: () => void;
 }) {
+  const [localId, setLocalId] = useState(target.id);
+  useEffect(() => { setLocalId(target.id); }, [target.id]);
+
   const otherTargets = Array.from(allTargets.values()).filter((t) => t.id !== target.id);
+
+  const commitId = () => {
+    const trimmed = localId.trim();
+    if (trimmed && trimmed !== target.id) {
+      onUpdate({ ...target, id: trimmed });
+    } else {
+      setLocalId(target.id);
+    }
+  };
 
   return (
     <div className="border border-border rounded p-2 space-y-1.5 bg-accent/20">
@@ -180,8 +192,10 @@ function TargetEditor({
       <input
         className="w-full text-xs bg-background border border-border rounded px-2 py-1"
         placeholder="Target ID"
-        value={target.id}
-        onChange={(e) => onUpdate({ ...target, id: e.target.value })}
+        value={localId}
+        onChange={(e) => setLocalId(e.target.value)}
+        onBlur={commitId}
+        onKeyDown={(e) => { if (e.key === 'Enter') commitId(); }}
       />
       <select
         className="w-full text-xs bg-background border border-border rounded px-2 py-1"

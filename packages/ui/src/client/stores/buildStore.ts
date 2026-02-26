@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { BuildResult, BuildTarget, BuildRule, Diagnostic } from '@antimatter/project-model';
 import { fetchBuildConfig, saveBuildConfig as saveBuildConfigApi } from '@/lib/api';
+import { eventLog } from '@/lib/eventLog';
 
 interface BuildState {
   // Build configuration
@@ -115,7 +116,7 @@ export const useBuildStore = create<BuildState>((set, get) => ({
         targets: new Map(config.targets.map((t) => [t.id, t])),
       });
     } catch (err) {
-      console.error('Failed to load build config:', err);
+      eventLog.error('build', 'Failed to load build config', String(err));
     }
   },
 
@@ -130,7 +131,7 @@ export const useBuildStore = create<BuildState>((set, get) => ({
         projectId,
       );
     } catch (err) {
-      console.error('Failed to save build config:', err);
+      eventLog.error('build', 'Failed to save build config', String(err));
     }
   },
 
@@ -164,9 +165,14 @@ export const useBuildStore = create<BuildState>((set, get) => ({
     }),
 
   updateTarget: (targetId, target) =>
-    set((state) => ({
-      targets: new Map(state.targets).set(targetId, target),
-    })),
+    set((state) => {
+      const targets = new Map(state.targets);
+      if (target.id !== targetId) {
+        targets.delete(targetId);
+      }
+      targets.set(target.id, target);
+      return { targets };
+    }),
 
   getDiagnosticsForFile: (filePath: string) => {
     const state = get();

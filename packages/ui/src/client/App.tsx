@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider } from './components/theme-provider';
 import { MainLayout } from './components/layout/MainLayout';
 import { TestRunnerPage } from './components/tests/TestRunnerPage';
+import { ActivityLogPage } from './components/activity/ActivityLogPage';
 import { ProjectPicker } from './components/projects/ProjectPicker';
 import { useProjectStore } from './stores/projectStore';
 
@@ -21,6 +22,7 @@ function App() {
       <ThemeProvider defaultTheme="dark" storageKey="antimatter-theme">
         <Routes>
           <Route path="/tests" element={<TestRunnerPage />} />
+          <Route path="/logs" element={<ActivityLogPage />} />
           <Route path="/*" element={<ProjectGate />} />
         </Routes>
       </ThemeProvider>

@@ -3,6 +3,7 @@ import { FolderOpen, GitBranch, Loader2, Plus, Trash2, Upload } from 'lucide-rea
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { useProjectStore } from '@/stores/projectStore';
+import { eventLog } from '@/lib/eventLog';
 
 export function ProjectPicker() {
   const {
@@ -42,7 +43,7 @@ export function ProjectPicker() {
       selectProject(project.id);
       setNewName('');
     } catch (err) {
-      console.error('Failed to create project:', err);
+      eventLog.error('project', 'Failed to create project', String(err));
     } finally {
       setCreating(false);
     }
@@ -94,7 +95,7 @@ export function ProjectPicker() {
     try {
       await remove(id);
     } catch (err) {
-      console.error('Failed to delete project:', err);
+      eventLog.error('project', 'Failed to delete project', String(err));
     }
   };
 

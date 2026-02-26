@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { WorkspacePath } from '@antimatter/filesystem';
 import { saveFile as apiSaveFile } from '@/lib/api';
+import { eventLog } from '@/lib/eventLog';
 
 interface EditorFile {
   path: WorkspacePath;
@@ -121,6 +122,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         return { openFiles: newOpenFiles, saveState: { status: 'saved' } };
       });
 
+      eventLog.info('editor', `Saved: ${path}`);
+
       savedClearTimer = setTimeout(() => {
         savedClearTimer = null;
         set({ saveState: { status: 'idle' } });
@@ -133,6 +136,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
+      eventLog.error('editor', `Save failed: ${path}`, message);
       set({ saveState: { status: 'error', error: message } });
       errorClearTimer = setTimeout(() => {
         errorClearTimer = null;

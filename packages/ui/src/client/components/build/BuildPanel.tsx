@@ -12,6 +12,7 @@ import {
   fetchBuildChanges,
 } from '@/lib/api';
 import { onBuildUpdate } from '@/lib/ws';
+import { eventLog } from '@/lib/eventLog';
 
 export function BuildPanel() {
   const {
@@ -39,7 +40,7 @@ export function BuildPanel() {
 
     fetchBuildResults(currentProjectId ?? undefined)
       .then((res) => setResults(res))
-      .catch((err) => console.error('Failed to load build results:', err));
+      .catch((err) => eventLog.error('build', 'Failed to load build results', String(err)));
 
     const unsub = onBuildUpdate((payload) => {
       setResult({
@@ -64,7 +65,7 @@ export function BuildPanel() {
             handleRunAll();
           }
         } catch (err) {
-          console.error('Watch poll failed:', err);
+          eventLog.error('build', 'Watch poll failed', String(err));
         }
       }, 5000);
     }
@@ -81,6 +82,7 @@ export function BuildPanel() {
     if (isRunning) return;
     setIsRunning(true);
     clearOutput();
+    eventLog.info('build', 'Build started');
     try {
       const targetList = Array.from(targets.values());
       const ruleList = Array.from(rules.values());
@@ -122,15 +124,16 @@ export function BuildPanel() {
               }
               break;
             case 'build-error':
-              console.error('Build error:', event.error);
+              eventLog.error('build', 'Build error', event.error);
               break;
           }
         },
         currentProjectId ?? undefined,
       );
     } catch (err) {
-      console.error('Build failed:', err);
+      eventLog.error('build', 'Build failed', String(err));
     } finally {
+      eventLog.info('build', 'Build complete');
       setIsRunning(false);
     }
   }, [isRunning, targets, rules, currentProjectId]);

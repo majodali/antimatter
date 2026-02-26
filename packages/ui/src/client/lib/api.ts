@@ -1,5 +1,6 @@
 import type { WorkspacePath } from '@antimatter/filesystem';
 import type { BuildResult, BuildTarget, BuildRule } from '@antimatter/project-model';
+import { eventLog } from './eventLog';
 
 export interface FileNode {
   name: string;
@@ -23,7 +24,9 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
     const body: ApiError = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.message ?? body.error);
+    const msg = body.message ?? body.error;
+    eventLog.error('network', `API ${init?.method ?? 'GET'} ${url} failed: ${msg}`);
+    throw new Error(msg);
   }
   return res.json() as Promise<T>;
 }

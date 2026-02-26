@@ -1,0 +1,56 @@
+import { useEffect, useRef } from 'react';
+import { ScrollText, Trash2 } from 'lucide-react';
+import { ScrollArea } from '../ui/scroll-area';
+import { Button } from '../ui/button';
+import { ActivityEventRow } from './ActivityEventRow';
+import { useActivityStore } from '@/stores/activityStore';
+
+export function ActivityPanel() {
+  const events = useActivityStore((s) => s.events);
+  const clear = useActivityStore((s) => s.clear);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when new events arrive
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [events.length]);
+
+  return (
+    <div className="h-full flex flex-col bg-card">
+      {/* Header */}
+      <div className="px-3 py-2 border-b border-border flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <ScrollText className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-medium">Activity</h3>
+          <span className="text-xs text-muted-foreground">{events.length}</span>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={clear}
+          title="Clear activity log"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {/* Events list */}
+      <ScrollArea className="flex-1">
+        {events.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center p-4">
+            <ScrollText className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
+            <p className="text-sm text-muted-foreground">No activity yet</p>
+          </div>
+        ) : (
+          <div>
+            {events.map((event) => (
+              <ActivityEventRow key={event.id} event={event} />
+            ))}
+            <div ref={bottomRef} />
+          </div>
+        )}
+      </ScrollArea>
+    </div>
+  );
+}

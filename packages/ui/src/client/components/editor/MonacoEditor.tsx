@@ -45,6 +45,35 @@ export function MonacoEditor({
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
 
+    // Configure TypeScript/JavaScript language defaults
+    const tsDefaults = monaco.languages.typescript.typescriptDefaults;
+    const jsDefaults = monaco.languages.typescript.javascriptDefaults;
+    const tsCompilerOptions: monaco.languages.typescript.CompilerOptions = {
+      target: monaco.languages.typescript.ScriptTarget.ESNext,
+      module: monaco.languages.typescript.ModuleKind.ESNext,
+      moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+      allowJs: true,
+      esModuleInterop: true,
+      jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+      strict: false,
+      skipLibCheck: true,
+      allowImportingTsExtensions: true,
+      noEmit: true,
+    };
+    tsDefaults.setCompilerOptions(tsCompilerOptions);
+    jsDefaults.setCompilerOptions(tsCompilerOptions);
+
+    // Suppress semantic diagnostics for imports Monaco can't resolve
+    // (it only has the current file, not the full project)
+    tsDefaults.setDiagnosticsOptions({
+      noSemanticValidation: true,
+      noSuggestionDiagnostics: true,
+    });
+    jsDefaults.setDiagnosticsOptions({
+      noSemanticValidation: true,
+      noSuggestionDiagnostics: true,
+    });
+
     // Configure editor options
     editor.updateOptions({
       readOnly,

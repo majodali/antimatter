@@ -8,6 +8,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { fetchFileTree, saveFile, createFolder } from '@/lib/api';
 import { onFileChange } from '@/lib/ws';
+import { eventLog } from '@/lib/eventLog';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
 export function FileExplorer() {
@@ -49,10 +50,11 @@ export function FileExplorer() {
     try {
       const tree = await fetchFileTree('/', currentProjectId ?? undefined);
       setFiles(tree);
+      eventLog.info('file', `File tree loaded (${tree.length} items)`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load files';
       setError(msg);
-      console.error('Failed to load files:', err);
+      eventLog.error('file', 'Failed to load file tree', msg);
     } finally {
       setIsLoading(false);
     }
@@ -74,6 +76,7 @@ export function FileExplorer() {
     try {
       if (creatingType === 'file') {
         await saveFile(name, '', pid);
+        eventLog.info('file', `File created: ${name}`);
         await loadFiles();
         // Detect language from extension
         const ext = name.split('.').pop() ?? '';
@@ -86,10 +89,11 @@ export function FileExplorer() {
         openFile(name as WorkspacePath, '', langMap[ext] ?? 'plaintext');
       } else {
         await createFolder(name, pid);
+        eventLog.info('file', `Folder created: ${name}`);
         await loadFiles();
       }
     } catch (err) {
-      console.error(`Failed to create ${creatingType}:`, err);
+      eventLog.error('file', `Failed to create ${creatingType}: ${name}`, String(err));
     }
     cancelCreation();
   }
