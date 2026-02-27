@@ -99,39 +99,94 @@ This step is a **pure refactor** — no new infrastructure, no EFS, no CDK chang
 - Step 5: Deployment model (module/packaging/deployment separation) and Deployment Panel
 - Step 6: Self-hosting verification
 
-## Build & Test Commands
+## Development & Testing Process
+
+### Test-Driven Development Cycle
+
+Every change follows this cycle:
+
+1. **Define functional test cases** — Document the intended behavior as test cases. Each functional test is defined once in a shared specification, then implemented in two contexts:
+   - **Service context** (`@antimatter/test-harness`) — calls `WorkspaceService` methods directly with `MemoryFileSystem`/`MockRunner`. Runs locally, fast, no infrastructure needed.
+   - **API context** (`packages/ui/src/server/tests/`) — calls REST endpoints via `FetchActionContext`. Runs against the deployed AWS stack (Lambda + S3).
+   - (Future) **UI context** — drives the same scenarios through the browser.
+
+2. **Break down into unit tests** — For each functional test case, identify the packages involved and create/update unit tests in those packages (`packages/*/src/__tests__/*.spec.ts`). Unit tests cover the component-level behavior that the functional test exercises end-to-end.
+
+3. **Develop until unit tests pass locally** — Implement the change across packages. Run unit tests locally with `nx run-many --target=test --all` until everything passes.
+
+4. **Deploy and run functional tests** — When all unit tests pass, deploy to AWS and run the full functional test suite against the live environment via the `/tests` page or `POST /api/tests/run`.
+
+### Test Architecture
+
+```
+Functional test spec (shared definition)
+├── Service-level implementation (test-harness)
+│   └── WorkspaceService + MemoryFileSystem + MockRunner
+│       Tests real service logic without infrastructure
+├── API-level implementation (smoke + functional tests)
+│   └── FetchActionContext → REST → Lambda + S3
+│       Tests full deployed stack including transport/storage
+└── (Future) UI-level implementation
+    └── Browser automation driving same scenarios
+
+Unit tests (per package)
+├── filesystem/src/__tests__/ — FS operations, paths, hashing, change tracking
+├── tool-integration/src/__tests__/ — subprocess, params, environment
+├── build-system/src/__tests__/ — executor, cache, deps, diagnostics
+├── agent-framework/src/__tests__/ — agent, tools, orchestrator, providers
+└── ui/ — (no unit tests yet; backend tested via functional tests)
+```
+
+### Why Not localhost?
+
+The local Express server (`index.ts`) and Lambda handler (`lambda.ts`) share the same Express routers and `WorkspaceService`, but differ in the filesystem layer: local uses `LocalFileSystem`, Lambda uses `S3FileSystem`. Running functional tests against localhost would test the same route logic as the service-level tests but miss the S3 behavior. It's not worth maintaining a localhost test path — service-direct for local, HTTP for deployed.
+
+### Shared ActionContext Interface
+
+Both test contexts use the same `ActionContext` interface (`packages/ui/src/server/tests/action-context.ts`):
+- **`FetchActionContext`** — implements `ActionContext` over HTTP (for deployed tests)
+- **`ServiceActionContext`** (to be built) — implements `ActionContext` by calling `WorkspaceService` directly (for local service-level tests)
+
+This ensures functional test logic is written once and runs in both contexts.
+
+### Test Locations
+
+| What | Where | Runs | Command |
+|------|-------|------|---------|
+| Unit tests (per package) | `packages/*/src/__tests__/*.spec.ts` | Local (Vitest) | `nx test <package>` |
+| Service-level functional | `packages/test-harness/src/__tests__/` | Local (Vitest) | `nx test test-harness` |
+| Smoke tests (deployed) | `packages/ui/src/server/tests/smoke-tests.ts` | AWS (Lambda) | `POST /api/tests/run?suite=smoke` |
+| Functional tests (deployed) | `packages/ui/src/server/tests/functional-tests.ts` | AWS (Lambda) | `POST /api/tests/run?suite=functional` |
+| Test dashboard (UI) | `/tests` route in frontend | Browser | Navigate to `/tests` |
+
+### Build & Test Commands
 
 ```bash
-# Build all packages
-nx run-many --target=build --all
-
-# Build specific package
-nx build project-model
-nx build filesystem
-nx build tool-integration
-nx build build-system
-nx build agent-framework
-nx build ui
-
-# Test all
+# Run all unit tests locally (the main development loop)
 nx run-many --target=test --all
 
 # Test specific package
 nx test filesystem
 nx test build-system
 nx test agent-framework
+nx test test-harness
 
-# Lint
+# Build all packages
+nx run-many --target=build --all
+
+# Build specific package
+nx build <package-name>
+
+# Lint / Typecheck
 nx run-many --target=lint --all
-
-# Typecheck
 nx run-many --target=typecheck --all
 
-# Deploy infrastructure
-cd infrastructure && npx cdk deploy
+# Deploy to AWS
+nx run ui:build && bash scripts/build-lambda.sh && cd infrastructure && MSYS_NO_PATHCONV=1 npx cdk deploy --require-approval never
 
-# Build Lambda bundle
-node packages/ui/scripts/build-lambda.mjs
+# Run deployed functional tests
+# Via browser: https://d33wyunpiwy2df.cloudfront.net/tests
+# Via API: POST https://d33wyunpiwy2df.cloudfront.net/api/tests/run?suite=all
 ```
 
 ## Conventions
@@ -140,7 +195,7 @@ node packages/ui/scripts/build-lambda.mjs
 - **Immutable domain types** — all interfaces use `readonly` properties
 - **Interface-first** — define interfaces, then implementations. Depend on abstractions.
 - **Test with Vitest** — tests colocated with source (`*.spec.ts`) or in `__tests__/` directories
-- **Functional tests decomposed to unit tests** — integration tests define the behavior, unit tests cover the components
+- **Test-driven** — functional tests define the behavior, unit tests cover the components. Tests are written before implementation.
 - **pnpm workspaces** for package management, **Nx** for task orchestration
 - **Zustand** for frontend state management
 - **Express** for backend API (runs both locally and on Lambda via serverless-express)

@@ -133,6 +133,9 @@ importers:
       '@antimatter/tool-integration':
         specifier: workspace:*
         version: link:../tool-integration
+      '@antimatter/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       '@codegenie/serverless-express':
         specifier: ^4.17.1
         version: 4.17.1
@@ -257,6 +260,18 @@ importers:
       vite:
         specifier: ^5.1.6
         version: 5.4.21(@types/node@20.19.33)
+
+  packages/workspace:
+    dependencies:
+      '@antimatter/filesystem':
+        specifier: workspace:*
+        version: link:../filesystem
+      '@antimatter/project-model':
+        specifier: workspace:*
+        version: link:../project-model
+      '@antimatter/tool-integration':
+        specifier: workspace:*
+        version: link:../tool-integration
 
 packages:
 

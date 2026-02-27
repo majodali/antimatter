@@ -2,6 +2,8 @@ import { LocalFileSystem } from '@antimatter/filesystem';
 import type { FileSystem, WorkspacePath, FileEntry } from '@antimatter/filesystem';
 import { SubprocessRunner } from '@antimatter/tool-integration';
 import type { ToolRunner } from '@antimatter/tool-integration';
+import type { WorkspaceEnvironment } from '@antimatter/workspace';
+import { WorkspaceEnvironmentRunnerAdapter } from '@antimatter/workspace';
 import { BuildExecutor, CacheManager } from '@antimatter/build-system';
 import type { BuildContext, BuildProgressEvent } from '@antimatter/build-system';
 import {
@@ -20,9 +22,14 @@ import type { AgentResult, AgentTool, StreamCallbacks, CustomToolDefinition } fr
 import type { BuildRule, BuildTarget, BuildResult, Identifier } from '@antimatter/project-model';
 
 export interface WorkspaceServiceOptions {
+  /** Unified workspace environment (new). When provided, fs and runner are derived from it. */
+  readonly env?: WorkspaceEnvironment;
+  /** Legacy: workspace root path. Ignored when env is provided. */
   readonly workspaceRoot?: string;
   readonly anthropicApiKey?: string;
+  /** Legacy: file system. Ignored when env is provided. */
   readonly fs?: FileSystem;
+  /** Legacy: tool runner. Ignored when env is provided. */
   readonly runner?: ToolRunner;
 }
 
@@ -37,9 +44,17 @@ export class WorkspaceService {
   private customToolsLoaded = false;
 
   constructor(options: WorkspaceServiceOptions = {}) {
-    this.workspaceRoot = options.workspaceRoot ?? process.cwd();
-    this.fs = options.fs ?? new LocalFileSystem(this.workspaceRoot);
-    this.runner = options.runner ?? new SubprocessRunner();
+    if (options.env) {
+      // New path: derive fs and runner from the WorkspaceEnvironment
+      this.fs = options.env.fileSystem;
+      this.runner = new WorkspaceEnvironmentRunnerAdapter(options.env);
+      this.workspaceRoot = options.workspaceRoot ?? '/';
+    } else {
+      // Legacy path: use separate fs + runner (or defaults)
+      this.workspaceRoot = options.workspaceRoot ?? process.cwd();
+      this.fs = options.fs ?? new LocalFileSystem(this.workspaceRoot);
+      this.runner = options.runner ?? new SubprocessRunner();
+    }
 
     // Build agent tools
     const tools: AgentTool[] = [

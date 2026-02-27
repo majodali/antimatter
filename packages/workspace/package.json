@@ -1,0 +1,23 @@
+{
+  "name": "@antimatter/workspace",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "@antimatter/source": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "dependencies": {
+    "@antimatter/project-model": "workspace:*",
+    "@antimatter/filesystem": "workspace:*",
+    "@antimatter/tool-integration": "workspace:*"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "lint": "eslint ."
+  }
+}

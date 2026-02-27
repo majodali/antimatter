@@ -1,7 +1,7 @@
 import { MemoryFileSystem } from '@antimatter/filesystem';
-import type { FileSystem, WorkspacePath } from '@antimatter/filesystem';
+import type { FileSystem, WorkspacePath, FileEntry } from '@antimatter/filesystem';
 import { MockRunner } from '@antimatter/tool-integration';
-import { BuildExecutor } from '@antimatter/build-system';
+import { BuildExecutor, CacheManager } from '@antimatter/build-system';
 import type { BuildContext } from '@antimatter/build-system';
 import {
   Agent,
@@ -12,36 +12,55 @@ import type { AgentTool, AgentResult } from '@antimatter/agent-framework';
 import type { BuildRule, BuildTarget, BuildResult, Identifier } from '@antimatter/project-model';
 import { createTypeScriptProjectFixture, type ProjectFixture } from './fixtures.js';
 
+const BUILD_CONFIG_PATH = '.antimatter/build.json' as WorkspacePath;
+const CUSTOM_TOOLS_PATH = '.antimatter/tools.json' as WorkspacePath;
+
+/**
+ * Test harness that provides service-level access to workspace operations.
+ *
+ * This interface mirrors the operations available via the REST API (ActionContext)
+ * but calls the underlying packages directly. In Step 1 of the EFS migration,
+ * this will be replaced by ServiceActionContext wrapping WorkspaceService.
+ */
 export interface WorkspaceHarness {
+  // Core components — exposed for test setup (mock configuration, assertions)
   readonly fs: MemoryFileSystem;
   readonly runner: MockRunner;
   readonly provider: MockProvider;
   readonly agent: Agent;
   readonly fixture: ProjectFixture;
 
-  /** Run the build using BuildExecutor with fixture targets. */
-  executeBuild(targets?: readonly BuildTarget[]): Promise<ReadonlyMap<Identifier, BuildResult>>;
-
-  /** Send a chat message to the agent. */
-  chat(message: string): Promise<AgentResult>;
-
-  /** Read a text file from the in-memory FS. */
+  // --- File operations (↔ ActionContext file methods) ---
   readFile(path: string): Promise<string>;
-
-  /** Write a text file to the in-memory FS. */
   writeFile(path: string, content: string): Promise<void>;
-
-  /** Check if a file exists. */
+  deleteFile(path: string): Promise<void>;
   fileExists(path: string): Promise<boolean>;
+  mkdir(path: string): Promise<void>;
+  getFileTree(path?: string): Promise<FileEntry[]>;
+
+  // --- Build operations (↔ ActionContext build methods) ---
+  saveBuildConfig(config: { rules: any[]; targets: any[] }): Promise<void>;
+  loadBuildConfig(): Promise<{ rules: any[]; targets: any[] }>;
+  executeBuild(targets?: readonly BuildTarget[]): Promise<ReadonlyMap<Identifier, BuildResult>>;
+  getBuildResults(): any[];
+  clearBuildResults(): void;
+  clearBuildCache(targetId?: string): Promise<void>;
+  getStaleTargets(): Promise<string[]>;
+
+  // --- Agent operations (↔ ActionContext agent methods) ---
+  sendChat(message: string): Promise<AgentResult>;
+  getHistory(): any[];
+  clearHistory(): void;
+  getCustomTools(): Promise<any[]>;
+  saveCustomTools(tools: any[]): Promise<void>;
 }
 
 /**
- * Create a fully-wired workspace harness.
+ * Create a fully-wired workspace harness for service-level functional testing.
  *
  * Combines MemoryFileSystem + MockRunner + MockProvider + BuildExecutor
- * + Agent with registered tools into a single object with convenience methods.
- *
- * @param tools - Optional extra agent tools to register
+ * + Agent with registered tools into a single object that mirrors the
+ * operations available through the REST API.
  */
 export async function createWorkspaceHarness(
   tools: readonly AgentTool[] = [],
@@ -67,21 +86,33 @@ export async function createWorkspaceHarness(
     builder.withTool(tool);
   }
 
-  // Build agent from config + inject our provider so we can control responses
   const config = builder.buildConfig();
   const agent = new Agent(config, provider);
+
+  // Internal state for tracking build results across calls
+  let buildResults: any[] = [];
+
+  // --- Build helpers ---
+
+  const buildContext = (): BuildContext => ({
+    workspaceRoot: '/',
+    fs,
+    runner,
+    rules: fixture.rules,
+  });
 
   const executeBuild = async (
     targets?: readonly BuildTarget[],
   ): Promise<ReadonlyMap<Identifier, BuildResult>> => {
-    const ctx: BuildContext = {
-      workspaceRoot: '/',
-      fs,
-      runner,
-      rules: fixture.rules,
-    };
-    const executor = new BuildExecutor(ctx);
-    return executor.executeBatch(targets ?? fixture.targets);
+    const executor = new BuildExecutor(buildContext());
+    const results = await executor.executeBatch(targets ?? fixture.targets);
+    // Store results as array for getBuildResults()
+    const newResults = Array.from(results.entries()).map(([targetId, result]) => ({
+      targetId,
+      ...result,
+    }));
+    buildResults = [...buildResults, ...newResults];
+    return results;
   };
 
   return {
@@ -90,11 +121,60 @@ export async function createWorkspaceHarness(
     provider,
     agent,
     fixture,
-    executeBuild,
-    chat: (message: string) => agent.chat(message),
+
+    // --- File operations ---
     readFile: (path: string) => fs.readTextFile(path as WorkspacePath),
     writeFile: (path: string, content: string) =>
       fs.writeFile(path as WorkspacePath, content),
+    deleteFile: (path: string) => fs.deleteFile(path as WorkspacePath),
     fileExists: (path: string) => fs.exists(path as WorkspacePath),
+    mkdir: (path: string) => fs.mkdir(path as WorkspacePath),
+    getFileTree: (path?: string) => fs.readDirectory((path ?? '') as WorkspacePath),
+
+    // --- Build operations ---
+    saveBuildConfig: async (config: { rules: any[]; targets: any[] }) => {
+      await fs.writeFile(BUILD_CONFIG_PATH, JSON.stringify(config, null, 2));
+    },
+    loadBuildConfig: async () => {
+      const content = await fs.readTextFile(BUILD_CONFIG_PATH);
+      return JSON.parse(content);
+    },
+    executeBuild,
+    getBuildResults: () => buildResults,
+    clearBuildResults: () => { buildResults = []; },
+    clearBuildCache: async (targetId?: string) => {
+      const cache = new CacheManager(fs, '/');
+      if (targetId) {
+        cache.clearCache(targetId);
+      } else {
+        // Clear cache for all known targets
+        for (const target of fixture.targets) {
+          cache.clearCache(target.id);
+        }
+      }
+    },
+    getStaleTargets: async () => {
+      const cache = new CacheManager(fs, '/');
+      return cache.getStaleTargets(fixture.targets, fixture.rules, '/');
+    },
+
+    // --- Agent operations ---
+    sendChat: (message: string) => agent.chat(message),
+    getHistory: () => {
+      const ctx = agent.getContext();
+      return ctx.conversationHistory;
+    },
+    clearHistory: () => { agent.clearHistory(); },
+    getCustomTools: async () => {
+      try {
+        const content = await fs.readTextFile(CUSTOM_TOOLS_PATH);
+        return JSON.parse(content).tools ?? [];
+      } catch {
+        return [];
+      }
+    },
+    saveCustomTools: async (toolDefs: any[]) => {
+      await fs.writeFile(CUSTOM_TOOLS_PATH, JSON.stringify({ tools: toolDefs }));
+    },
   };
 }

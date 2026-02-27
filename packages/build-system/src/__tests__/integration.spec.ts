@@ -313,11 +313,11 @@ describe('Integration Tests', () => {
       // Change lib file
       await fs.writeFile('packages/lib/src/index.ts' as WorkspacePath, 'export const util = () => { return 42; };');
 
-      // Third build - lib should rebuild, app's inputs didn't change so it stays cached
+      // Third build - lib should rebuild, and app should also rebuild because
+      // its dependency (build-lib) was rebuilt (incremental invalidation)
       results = await executor.executeBatch(targets);
       expect(results.get('build-lib')?.status).toBe('success');
-      // App's inputs didn't change, so it gets cached
-      expect(results.get('build-app')?.status).toBe('cached');
+      expect(results.get('build-app')?.status).toBe('success');
     });
   });
 

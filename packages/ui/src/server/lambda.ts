@@ -1,7 +1,7 @@
 import serverlessExpress from '@codegenie/serverless-express';
 import express from 'express';
 import { S3Client } from '@aws-sdk/client-s3';
-import { S3FileSystem } from '@antimatter/filesystem';
+import { S3WorkspaceEnvironment } from '@antimatter/workspace';
 import { WorkspaceService } from './services/workspace-service.js';
 import { createFileRouter } from './routes/filesystem.js';
 import { createBuildRouter } from './routes/build.js';
@@ -67,44 +67,30 @@ apiRouter.use('/projects', createProjectRouter(s3Client, projectsBucket));
 // Test runner
 apiRouter.use('/tests', createTestRouter());
 
-// Project-scoped routes — create a per-request WorkspaceService backed by S3
-apiRouter.use('/projects/:projectId/files', (req, res, next) => {
-  const fs = new S3FileSystem({
+// Helper: create a per-request WorkspaceService backed by S3
+function createProjectWorkspace(projectId: string): WorkspaceService {
+  const env = new S3WorkspaceEnvironment({
     s3Client,
     bucket: projectsBucket,
-    prefix: `projects/${req.params.projectId}/files/`,
+    prefix: `projects/${projectId}/files/`,
   });
-  const ws = new WorkspaceService({
-    fs,
+  return new WorkspaceService({
+    env,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   });
-  createFileRouter(ws)(req, res, next);
+}
+
+// Project-scoped routes — create a per-request WorkspaceService backed by S3
+apiRouter.use('/projects/:projectId/files', (req, res, next) => {
+  createFileRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
 });
 
 apiRouter.use('/projects/:projectId/build', (req, res, next) => {
-  const fs = new S3FileSystem({
-    s3Client,
-    bucket: projectsBucket,
-    prefix: `projects/${req.params.projectId}/files/`,
-  });
-  const ws = new WorkspaceService({
-    fs,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-  });
-  createBuildRouter(ws)(req, res, next);
+  createBuildRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
 });
 
 apiRouter.use('/projects/:projectId/agent', (req, res, next) => {
-  const fs = new S3FileSystem({
-    s3Client,
-    bucket: projectsBucket,
-    prefix: `projects/${req.params.projectId}/files/`,
-  });
-  const ws = new WorkspaceService({
-    fs,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-  });
-  createAgentRouter(ws)(req, res, next);
+  createAgentRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
 });
 
 app.use('/api', apiRouter);

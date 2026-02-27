@@ -1,6 +1,7 @@
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
+import { LocalWorkspaceEnvironment } from '@antimatter/workspace';
 import { WorkspaceService } from './services/workspace-service.js';
 import { createFileRouter } from './routes/filesystem.js';
 import { createBuildRouter } from './routes/build.js';
@@ -26,8 +27,10 @@ app.use((req, res, next) => {
   }
 });
 
-// Create shared workspace service
+// Create shared workspace service backed by local file system
+const env = new LocalWorkspaceEnvironment({ rootPath: process.cwd() });
 const workspace = new WorkspaceService({
+  env,
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
 });
 

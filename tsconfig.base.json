@@ -24,7 +24,8 @@
       "@antimatter/build-system": ["./packages/build-system/src/index.ts"],
       "@antimatter/ui": ["./packages/ui/src/index.ts"],
       "@antimatter/agent-framework": ["./packages/agent-framework/src/index.ts"],
-      "@antimatter/test-harness": ["./packages/test-harness/src/index.ts"]
+      "@antimatter/test-harness": ["./packages/test-harness/src/index.ts"],
+      "@antimatter/workspace": ["./packages/workspace/src/index.ts"]
     }
   }
 }
