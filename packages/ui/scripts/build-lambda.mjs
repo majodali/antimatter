@@ -11,11 +11,8 @@ const outDir = resolve(uiRoot, 'dist-lambda');
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
-console.log('Bundling Lambda function with esbuild...');
-
-await build({
-  entryPoints: [resolve(uiRoot, 'src/server/lambda.ts')],
-  outfile: resolve(outDir, 'index.js'),
+// Shared esbuild configuration
+const sharedConfig = {
   bundle: true,
   platform: 'node',
   target: 'node20',
@@ -26,6 +23,22 @@ await build({
   sourcemap: false,
   minify: false, // Keep readable for debugging
   logLevel: 'info',
+};
+
+// Build API Lambda
+console.log('Bundling API Lambda...');
+await build({
+  ...sharedConfig,
+  entryPoints: [resolve(uiRoot, 'src/server/lambda.ts')],
+  outfile: resolve(outDir, 'index.js'),
 });
 
-console.log('Lambda bundle written to dist-lambda/index.js');
+// Build Command Lambda
+console.log('Bundling Command Lambda...');
+await build({
+  ...sharedConfig,
+  entryPoints: [resolve(uiRoot, 'src/server/command-lambda.ts')],
+  outfile: resolve(outDir, 'command.js'),
+});
+
+console.log('Lambda bundles written to dist-lambda/index.js and dist-lambda/command.js');

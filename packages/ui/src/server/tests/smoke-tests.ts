@@ -236,6 +236,55 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
         return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
       },
     },
+    // ---- Command Lambda tests ----
+    {
+      name: 'Command Health',
+      suite: 'smoke',
+      run: async () => {
+        const res = await fetch(`${apiBase}/api/commands/health`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const body = await res.json();
+        if (res.status === 200 && body.status === 'ok' && body.efs?.mounted === true)
+          return { pass: true, detail: `EFS mounted=${body.efs.mounted}, writable=${body.efs.writable}, node=${body.node?.version}` };
+        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
+      },
+    },
+    {
+      name: 'Command Exec',
+      suite: 'smoke',
+      run: async () => {
+        const res = await fetch(`${apiBase}/api/commands/exec`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: 'node', args: ['--version'] }),
+        });
+        const body = await res.json();
+        if (res.status === 200 && body.exitCode === 0 && body.stdout?.startsWith('v'))
+          return { pass: true, detail: `node ${body.stdout.trim()}, ${body.durationMs}ms` };
+        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
+      },
+    },
+    {
+      name: 'Command EFS Write/Read',
+      suite: 'smoke',
+      run: async () => {
+        const res = await fetch(`${apiBase}/api/commands/exec`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            command: 'sh',
+            args: ['-c', 'echo "hello-efs" > _smoke_test.txt && cat _smoke_test.txt && rm _smoke_test.txt'],
+          }),
+        });
+        const body = await res.json();
+        if (res.status === 200 && body.exitCode === 0 && body.stdout?.trim() === 'hello-efs')
+          return { pass: true, detail: 'EFS read/write verified' };
+        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
+      },
+    },
     // ---- Frontend tests ----
     {
       name: 'Frontend HTML',
