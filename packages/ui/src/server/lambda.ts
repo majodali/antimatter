@@ -9,6 +9,7 @@ import { createFileRouter } from './routes/filesystem.js';
 import { createBuildRouter } from './routes/build.js';
 import { createAgentRouter } from './routes/agent.js';
 import { createDeployRouter } from './routes/deploy.js';
+import { createEnvironmentRouter } from './routes/environments.js';
 import { createProjectRouter } from './routes/projects.js';
 import { createTestRouter } from './routes/tests.js';
 import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
@@ -169,6 +170,11 @@ apiRouter.use('/projects/:projectId/deploy', (req, res, next) => {
       cloudfrontClient: getDeployCloudfrontClient(),
     },
   )(req, res, next);
+});
+
+// --- Environment routes (project-scoped) ---
+apiRouter.use('/projects/:projectId/environments', (req, res, next) => {
+  createEnvironmentRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
 });
 
 app.use('/api', apiRouter);

@@ -242,6 +242,26 @@ When asked to fix code, explain code, or refactor code, read the relevant files 
     await this.fs.writeFile(configPath as any, JSON.stringify(config, null, 2));
   }
 
+  // --- Environment config operations ---
+
+  async loadEnvironmentConfig(): Promise<{ pipeline: any; environments: any[]; transitions: any[] }> {
+    const configPath = '.antimatter/environments.json';
+    try {
+      const content = await this.fs.readTextFile(configPath as any);
+      return JSON.parse(content);
+    } catch {
+      return { pipeline: { id: '', name: '', stages: [] }, environments: [], transitions: [] };
+    }
+  }
+
+  async saveEnvironmentConfig(config: { pipeline: any; environments: any[]; transitions: any[] }): Promise<void> {
+    const configPath = '.antimatter/environments.json';
+    try {
+      await this.fs.mkdir('.antimatter' as any);
+    } catch { /* already exists */ }
+    await this.fs.writeFile(configPath as any, JSON.stringify(config, null, 2));
+  }
+
   // --- Agent operations ---
 
   private async prepareAgent(): Promise<void> {

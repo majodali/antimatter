@@ -60,3 +60,12 @@ export type {
   DeploymentResult,
   DeployProgressEvent,
 } from './deployment.js';
+
+export type {
+  PipelineStage,
+  Pipeline,
+  EnvironmentStatus,
+  Environment,
+  StageTransition,
+  EnvironmentConfig,
+} from './environment.js';

@@ -26,6 +26,14 @@ export interface ActionContext {
   getDeployResults(): Promise<any[]>;
   clearDeployResults(): Promise<void>;
 
+  // Environment operations (project-scoped)
+  saveEnvironmentConfig(config: { pipeline: any; environments: any[]; transitions: any[] }): Promise<void>;
+  loadEnvironmentConfig(): Promise<{ pipeline: any; environments: any[]; transitions: any[] }>;
+  createEnvironment(name: string, stageId?: string): Promise<any>;
+  listEnvironments(): Promise<any[]>;
+  getEnvironment(envId: string): Promise<any>;
+  destroyEnvironment(envId: string): Promise<void>;
+
   // Agent operations (project-scoped)
   sendChat(message: string): Promise<{ response: string }>;
   getHistory(): Promise<any[]>;
@@ -180,6 +188,48 @@ export class FetchActionContext implements ActionContext {
 
   async clearDeployResults(): Promise<void> {
     const res = await fetch(this.url('/deploy/results'), { method: 'DELETE' });
+    await this.json(res);
+  }
+
+  // ---- Environments ----
+
+  async saveEnvironmentConfig(config: { pipeline: any; environments: any[]; transitions: any[] }): Promise<void> {
+    const res = await fetch(this.url('/environments/config'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    await this.json(res);
+  }
+
+  async loadEnvironmentConfig(): Promise<{ pipeline: any; environments: any[]; transitions: any[] }> {
+    const res = await fetch(this.url('/environments/config'));
+    const body = await this.json(res);
+    return { pipeline: body.pipeline, environments: body.environments ?? [], transitions: body.transitions ?? [] };
+  }
+
+  async createEnvironment(name: string, stageId?: string): Promise<any> {
+    const res = await fetch(this.url('/environments'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, stageId }),
+    });
+    return this.json(res);
+  }
+
+  async listEnvironments(): Promise<any[]> {
+    const res = await fetch(this.url('/environments'));
+    const body = await this.json(res);
+    return body.environments ?? [];
+  }
+
+  async getEnvironment(envId: string): Promise<any> {
+    const res = await fetch(this.url(`/environments/${envId}`));
+    return this.json(res);
+  }
+
+  async destroyEnvironment(envId: string): Promise<void> {
+    const res = await fetch(this.url(`/environments/${envId}`), { method: 'DELETE' });
     await this.json(res);
   }
 

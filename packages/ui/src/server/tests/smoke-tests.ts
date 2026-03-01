@@ -472,6 +472,68 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
         return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
       },
     },
+    // ---- Environment Config API ----
+    {
+      name: 'Environment Config Save',
+      suite: 'smoke',
+      run: async (ctx) => {
+        // Create a project for environment config testing
+        const createRes = await fetch(`${apiBase}/api/projects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: `_env_smoke_${Date.now()}` }),
+        });
+        const { id: projectId } = await createRes.json();
+        ctx.envProjectId = projectId;
+
+        const config = {
+          pipeline: {
+            id: 'pipe-smoke',
+            name: 'Smoke Pipeline',
+            stages: [
+              { id: 'dev', name: 'Development', order: 1, buildCommand: 'echo dev' },
+              { id: 'prod', name: 'Production', order: 2, buildCommand: 'echo prod' },
+            ],
+          },
+          environments: [],
+          transitions: [],
+        };
+        const res = await fetch(`${apiBase}/api/projects/${projectId}/environments/config`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        const body = await res.json();
+        if (res.status === 200 && body.success === true)
+          return { pass: true, detail: `Saved env config for project ${projectId}` };
+        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
+      },
+    },
+    {
+      name: 'Environment Config Load',
+      suite: 'smoke',
+      run: async (ctx) => {
+        const projectId = ctx.envProjectId;
+        if (!projectId) return { pass: false, detail: 'No project from previous test' };
+
+        const res = await fetch(`${apiBase}/api/projects/${projectId}/environments/config`);
+        const body = await res.json();
+
+        // Clean up the test project
+        await fetch(`${apiBase}/api/projects/${projectId}`, { method: 'DELETE' });
+
+        if (
+          res.status === 200 &&
+          body.pipeline?.id === 'pipe-smoke' &&
+          body.pipeline?.stages?.length === 2 &&
+          Array.isArray(body.environments) &&
+          Array.isArray(body.transitions)
+        ) {
+          return { pass: true, detail: `pipeline="${body.pipeline.name}", stages=${body.pipeline.stages.length}` };
+        }
+        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
+      },
+    },
     // ---- Frontend tests ----
     {
       name: 'Frontend HTML',

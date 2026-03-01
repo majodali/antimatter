@@ -373,6 +373,97 @@ export function getFunctionalTests(
       },
     },
 
+    // ---- Environment System (DEMO 4.1–4.5) ----
+    {
+      name: 'FT: Save Environment Config',
+      suite: 'functional',
+      run: async () => {
+        const config = {
+          pipeline: {
+            id: 'pipe-ft',
+            name: 'FT Pipeline',
+            stages: [
+              { id: 'dev', name: 'Development', order: 1, buildCommand: 'echo dev-build' },
+              { id: 'staging', name: 'Staging', order: 2, buildCommand: 'echo staging-build', gateCommand: 'echo gate-ok' },
+              { id: 'prod', name: 'Production', order: 3, buildCommand: 'echo prod-build' },
+            ],
+          },
+          environments: [],
+          transitions: [],
+        };
+        await actions.saveEnvironmentConfig(config);
+        return { pass: true, detail: 'Environment config saved' };
+      },
+    },
+    {
+      name: 'FT: Load Environment Config',
+      suite: 'functional',
+      run: async () => {
+        const config = await actions.loadEnvironmentConfig();
+        const ok =
+          config.pipeline?.id === 'pipe-ft' &&
+          config.pipeline?.stages?.length === 3 &&
+          Array.isArray(config.environments) &&
+          Array.isArray(config.transitions);
+        return {
+          pass: ok,
+          detail: ok
+            ? `pipeline="${config.pipeline.name}", stages=${config.pipeline.stages.length}`
+            : `Unexpected config: ${JSON.stringify(config)}`,
+        };
+      },
+    },
+    {
+      name: 'FT: Create Environment',
+      suite: 'functional',
+      run: async (ctx) => {
+        const env = await actions.createEnvironment('ft-env-1');
+        ctx.__ftEnvId = env.id;
+        const ok =
+          typeof env.id === 'string' &&
+          env.name === 'ft-env-1' &&
+          env.currentStageId === 'dev' &&
+          env.status === 'ready';
+        return {
+          pass: ok,
+          detail: ok
+            ? `id=${env.id}, stage=${env.currentStageId}, status=${env.status}`
+            : `Unexpected env: ${JSON.stringify(env)}`,
+        };
+      },
+    },
+    {
+      name: 'FT: List Environments',
+      suite: 'functional',
+      run: async () => {
+        const envs = await actions.listEnvironments();
+        const ok = envs.length >= 1 && envs.some((e: any) => e.name === 'ft-env-1');
+        return {
+          pass: ok,
+          detail: ok
+            ? `${envs.length} environment(s), ft-env-1 found`
+            : `Unexpected: ${JSON.stringify(envs)}`,
+        };
+      },
+    },
+    {
+      name: 'FT: Delete Environment',
+      suite: 'functional',
+      run: async (ctx) => {
+        const envId = ctx.__ftEnvId;
+        if (!envId) return { pass: false, detail: 'No env ID from create test' };
+        await actions.destroyEnvironment(envId);
+        const env = await actions.getEnvironment(envId);
+        const ok = env.status === 'destroyed';
+        return {
+          pass: ok,
+          detail: ok
+            ? `Environment ${envId} destroyed`
+            : `Unexpected status: ${env.status}`,
+        };
+      },
+    },
+
     // ---- Frontend Routes ----
     {
       name: 'FT: /logs Route',
