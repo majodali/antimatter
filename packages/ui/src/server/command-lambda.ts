@@ -9,9 +9,15 @@ import {
   mkdirSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { S3Client } from '@aws-sdk/client-s3';
+import { EfsWorkspaceEnvironment } from '@antimatter/workspace';
 
 const EFS_MOUNT_PATH = process.env.EFS_MOUNT_PATH || '/mnt/projects';
+const PROJECTS_BUCKET = process.env.PROJECTS_BUCKET || '';
 const MAX_EXEC_TIMEOUT_MS = 60_000;
+
+// Shared S3 client for sync operations
+const s3Client = new S3Client({});
 
 const app = express();
 
@@ -205,6 +211,129 @@ function executeCommand(
   });
 }
 
+// ---- Project-scoped routes (S3 ↔ EFS sync + execution) ----
+
+/** Create an EfsWorkspaceEnvironment for a project. */
+function createEfsEnv(projectId: string): EfsWorkspaceEnvironment {
+  return new EfsWorkspaceEnvironment({
+    efsRootPath: EFS_MOUNT_PATH,
+    projectId,
+    s3Client,
+    bucket: PROJECTS_BUCKET,
+    s3Prefix: `projects/${projectId}/files/`,
+  });
+}
+
+// Sync S3 → EFS
+router.post('/projects/:projectId/sync', async (req, res) => {
+  const { projectId } = req.params;
+  const startTime = Date.now();
+
+  try {
+    const env = createEfsEnv(projectId);
+    await env.initialize();
+
+    const result = await env.syncFromS3();
+    res.json({
+      success: true,
+      projectId,
+      sync: result,
+      durationMs: Date.now() - startTime,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: 'Sync failed',
+      message: err.message,
+      durationMs: Date.now() - startTime,
+    });
+  }
+});
+
+// Execute command with auto-sync
+router.post('/projects/:projectId/exec', async (req, res) => {
+  const { projectId } = req.params;
+  const {
+    command,
+    args = [],
+    cwd,
+    timeout = 30_000,
+    syncBefore = true,
+    syncAfter = false,
+  } = req.body as {
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    timeout?: number;
+    syncBefore?: boolean;
+    syncAfter?: boolean;
+  };
+
+  if (!command) {
+    res.status(400).json({ error: 'Missing required field: command' });
+    return;
+  }
+
+  const startTime = Date.now();
+
+  try {
+    const env = createEfsEnv(projectId);
+
+    if (syncBefore) {
+      await env.initialize();
+    }
+
+    const effectiveTimeout = Math.min(timeout, MAX_EXEC_TIMEOUT_MS);
+    const result = await env.execute({
+      command,
+      args,
+      cwd,
+      timeout: effectiveTimeout,
+    });
+
+    let syncBackResult;
+    if (syncAfter) {
+      syncBackResult = await env.syncToS3();
+    }
+
+    res.json({
+      ...result,
+      projectId,
+      ...(syncBackResult ? { syncBack: syncBackResult } : {}),
+      durationMs: Date.now() - startTime,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: 'Project command execution failed',
+      message: err.message,
+      durationMs: Date.now() - startTime,
+    });
+  }
+});
+
+// Sync EFS → S3
+router.post('/projects/:projectId/sync-back', async (req, res) => {
+  const { projectId } = req.params;
+  const startTime = Date.now();
+
+  try {
+    const env = createEfsEnv(projectId);
+    const result = await env.syncToS3();
+
+    res.json({
+      success: true,
+      projectId,
+      sync: result,
+      durationMs: Date.now() - startTime,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: 'Sync-back failed',
+      message: err.message,
+      durationMs: Date.now() - startTime,
+    });
+  }
+});
+
 // Mount at all possible paths.
 // Through CloudFront: /api/commands/health → API GW sees /api/commands/health
 // Direct API GW:      /commands/health     → API GW sees /commands/health
@@ -213,5 +342,104 @@ app.use('/api/commands', router);
 app.use('/commands', router);
 app.use('/', router);
 
-// Export Lambda handler
-export const handler = serverlessExpress({ app });
+// ---- Direct Lambda invocation handler ----
+// Supports Lambda-to-Lambda invocation without HTTP overhead.
+// Detects direct invocations by the presence of an `action` field
+// and the absence of API Gateway proxy event fields.
+
+interface DirectInvocationEvent {
+  action: 'exec' | 'sync' | 'sync-back';
+  projectId: string;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  timeout?: number;
+  syncBefore?: boolean;
+  syncAfter?: boolean;
+}
+
+async function directHandler(event: DirectInvocationEvent) {
+  const { action, projectId } = event;
+
+  if (!projectId) {
+    return { error: 'Missing required field: projectId' };
+  }
+
+  const startTime = Date.now();
+
+  try {
+    switch (action) {
+      case 'exec': {
+        const { command, args = [], cwd, timeout = 30_000, syncBefore = true, syncAfter = false } = event;
+        if (!command) {
+          return { error: 'Missing required field: command' };
+        }
+
+        const env = createEfsEnv(projectId);
+
+        if (syncBefore) {
+          await env.initialize();
+        }
+
+        const effectiveTimeout = Math.min(timeout, MAX_EXEC_TIMEOUT_MS);
+        const result = await env.execute({ command, args, cwd, timeout: effectiveTimeout });
+
+        let syncBackResult;
+        if (syncAfter) {
+          syncBackResult = await env.syncToS3();
+        }
+
+        return {
+          ...result,
+          projectId,
+          ...(syncBackResult ? { syncBack: syncBackResult } : {}),
+          durationMs: Date.now() - startTime,
+        };
+      }
+
+      case 'sync': {
+        const env = createEfsEnv(projectId);
+        await env.initialize();
+        const result = await env.syncFromS3();
+        return {
+          success: true,
+          projectId,
+          sync: result,
+          durationMs: Date.now() - startTime,
+        };
+      }
+
+      case 'sync-back': {
+        const env = createEfsEnv(projectId);
+        const result = await env.syncToS3();
+        return {
+          success: true,
+          projectId,
+          sync: result,
+          durationMs: Date.now() - startTime,
+        };
+      }
+
+      default:
+        return { error: `Unknown action: ${action}` };
+    }
+  } catch (err: any) {
+    return {
+      error: `${action} failed`,
+      message: err.message,
+      durationMs: Date.now() - startTime,
+    };
+  }
+}
+
+// Export Lambda handler — supports both API Gateway proxy events and
+// direct Lambda invocations. Direct invocations have an `action` field
+// but no httpMethod or requestContext.
+const serverlessExpressHandler = serverlessExpress({ app });
+
+export async function handler(event: any, context: any) {
+  if (event.action && !event.httpMethod && !event.requestContext) {
+    return directHandler(event as DirectInvocationEvent);
+  }
+  return serverlessExpressHandler(event, context);
+}

@@ -1,7 +1,7 @@
 import serverlessExpress from '@codegenie/serverless-express';
 import express from 'express';
 import { S3Client } from '@aws-sdk/client-s3';
-import { S3WorkspaceEnvironment } from '@antimatter/workspace';
+import { S3WorkspaceEnvironment, CommandLambdaEnvironment, AwsLambdaInvoker } from '@antimatter/workspace';
 import { WorkspaceService } from './services/workspace-service.js';
 import { createFileRouter } from './routes/filesystem.js';
 import { createBuildRouter } from './routes/build.js';
@@ -41,6 +41,10 @@ app.use((req, res, next) => {
 // S3 client singleton + bucket name from environment
 const s3Client = new S3Client({});
 const projectsBucket = process.env.PROJECTS_BUCKET ?? '';
+const commandFunctionName = process.env.COMMAND_FUNCTION_NAME ?? '';
+
+// Lambda invoker for Command Lambda (lazy-initialized, only when needed)
+let lambdaInvoker: AwsLambdaInvoker | undefined;
 
 // Legacy shared workspace service (for non-project-scoped routes)
 const workspace = new WorkspaceService({
@@ -67,13 +71,26 @@ apiRouter.use('/projects', createProjectRouter(s3Client, projectsBucket));
 // Test runner
 apiRouter.use('/tests', createTestRouter());
 
-// Helper: create a per-request WorkspaceService backed by S3
+// Helper: create a per-request WorkspaceService for a project.
+// When COMMAND_FUNCTION_NAME is set (deployed with Command Lambda),
+// uses CommandLambdaEnvironment so build/test/lint execution is routed
+// to the Command Lambda (which has VPC + EFS). Otherwise falls back to
+// S3WorkspaceEnvironment (file browsing only, no command execution).
 function createProjectWorkspace(projectId: string): WorkspaceService {
-  const env = new S3WorkspaceEnvironment({
-    s3Client,
-    bucket: projectsBucket,
-    prefix: `projects/${projectId}/files/`,
-  });
+  const env = commandFunctionName
+    ? new CommandLambdaEnvironment({
+        projectId,
+        s3Client,
+        bucket: projectsBucket,
+        prefix: `projects/${projectId}/files/`,
+        lambdaInvoker: (lambdaInvoker ??= new AwsLambdaInvoker()),
+        functionName: commandFunctionName,
+      })
+    : new S3WorkspaceEnvironment({
+        s3Client,
+        bucket: projectsBucket,
+        prefix: `projects/${projectId}/files/`,
+      });
   return new WorkspaceService({
     env,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,

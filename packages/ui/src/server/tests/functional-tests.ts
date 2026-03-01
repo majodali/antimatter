@@ -116,6 +116,80 @@ export function getFunctionalTests(
       },
     },
     {
+      name: 'FT: Build Output Correctness',
+      suite: 'functional',
+      run: async (ctx) => {
+        // The build rule is `echo compiled` — verify stdout appears in the output
+        const results = JSON.parse(ctx.__buildResults || '[]');
+        if (results.length === 0) return { pass: false, detail: 'No results from execute' };
+        const output = (results[0].output ?? '').trim();
+        const ok = output === 'compiled';
+        return {
+          pass: ok,
+          detail: ok
+            ? `Build command output verified: "${output}"`
+            : `Expected "compiled", got "${output}"`,
+        };
+      },
+    },
+    {
+      name: 'FT: Build Reads Project Files (S3→EFS)',
+      suite: 'functional',
+      run: async () => {
+        // Write a source file via S3, configure a build that reads it,
+        // then verify the build can see the file (proving S3→EFS sync works)
+        await actions.writeFile('build-input.txt', 'ft-sync-value');
+        await actions.saveBuildConfig({
+          rules: [{ ...testRule, id: 'cat-rule', command: 'cat build-input.txt' }],
+          targets: [{ ...testTarget, id: 'cat-target', ruleId: 'cat-rule' }],
+        });
+        const results = await actions.executeBuild();
+
+        // Restore original build config for subsequent tests
+        await actions.saveBuildConfig({ rules: [testRule], targets: [testTarget] });
+
+        if (results.length === 0) return { pass: false, detail: 'No build results' };
+        const output = (results[0].output ?? '').trim();
+        const ok = results[0].status === 'success' && output === 'ft-sync-value';
+        return {
+          pass: ok,
+          detail: ok
+            ? `Build read S3 file via EFS: "${output}"`
+            : `status=${results[0].status}, output="${output}"`,
+        };
+      },
+    },
+    {
+      name: 'FT: Build Writes Files (EFS→S3)',
+      suite: 'functional',
+      run: async () => {
+        // Configure a build that writes a file, verify it syncs back to S3
+        await actions.saveBuildConfig({
+          rules: [{ ...testRule, id: 'write-rule', command: 'echo efs-output > build-output.txt' }],
+          targets: [{ ...testTarget, id: 'write-target', ruleId: 'write-rule' }],
+        });
+        const results = await actions.executeBuild();
+
+        // Restore original config
+        await actions.saveBuildConfig({ rules: [testRule], targets: [testTarget] });
+
+        if (results.length === 0) return { pass: false, detail: 'No build results' };
+        if (results[0].status !== 'success') {
+          return { pass: false, detail: `Build failed: status=${results[0].status}` };
+        }
+
+        // Read the file back via S3 (API Lambda) to verify EFS→S3 sync
+        const content = await actions.readFile('build-output.txt');
+        const ok = content.trim() === 'efs-output';
+        return {
+          pass: ok,
+          detail: ok
+            ? `Build output synced to S3: "${content.trim()}"`
+            : `Expected "efs-output", got "${content.trim()}"`,
+        };
+      },
+    },
+    {
       name: 'FT: Stale Target Detection',
       suite: 'functional',
       run: async () => {

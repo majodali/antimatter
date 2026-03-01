@@ -179,8 +179,17 @@ export class AntimatterStack extends cdk.Stack {
       },
     });
 
-    // Grant Command Lambda access to data bucket (needed for S3↔EFS sync in Step 3)
+    // Grant Command Lambda access to data bucket (needed for S3↔EFS sync)
     dataBucket.grantReadWrite(commandFunction);
+
+    // Grant API Lambda permission to invoke Command Lambda (Step 4).
+    // Build/test/lint execution on the API Lambda is routed to the Command
+    // Lambda via direct Lambda invoke (CommandLambdaEnvironment).
+    commandFunction.grantInvoke(apiFunction);
+
+    // Pass Command Lambda function name to the API Lambda so it can
+    // create a CommandLambdaEnvironment pointing at the right function.
+    apiFunction.addEnvironment('COMMAND_FUNCTION_NAME', commandFunction.functionName);
 
     // ==========================================
     // API Gateway
