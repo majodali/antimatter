@@ -418,6 +418,60 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
         return { pass: false, detail: `${buildRes.status}: ${JSON.stringify(buildBody)}` };
       },
     },
+    // ---- Deploy Config API ----
+    {
+      name: 'Deploy Config Save',
+      suite: 'smoke',
+      run: async (ctx) => {
+        // Create a project for deploy config testing
+        const createRes = await fetch(`${apiBase}/api/projects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: `_deploy_smoke_${Date.now()}` }),
+        });
+        const { id: projectId } = await createRes.json();
+        ctx.deployProjectId = projectId;
+
+        const config = {
+          modules: [{ id: 'm1', name: 'Test Module', type: 'lambda', buildCommand: 'echo ok' }],
+          packaging: [{ id: 'p1', moduleId: 'm1', type: 'lambda-zip', config: { type: 'lambda-zip', bundlePath: 'dist/index.js' } }],
+          targets: [{ id: 't1', moduleId: 'm1', packagingId: 'p1', type: 'lambda-update', config: { type: 'lambda-update', functionName: 'test-fn', region: 'us-west-2' } }],
+        };
+        const res = await fetch(`${apiBase}/api/projects/${projectId}/deploy/config`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        const body = await res.json();
+        if (res.status === 200 && body.success === true)
+          return { pass: true, detail: `Saved deploy config for project ${projectId}` };
+        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
+      },
+    },
+    {
+      name: 'Deploy Config Load',
+      suite: 'smoke',
+      run: async (ctx) => {
+        const projectId = ctx.deployProjectId;
+        if (!projectId) return { pass: false, detail: 'No project from previous test' };
+
+        const res = await fetch(`${apiBase}/api/projects/${projectId}/deploy/config`);
+        const body = await res.json();
+
+        // Clean up the test project
+        await fetch(`${apiBase}/api/projects/${projectId}`, { method: 'DELETE' });
+
+        if (
+          res.status === 200 &&
+          Array.isArray(body.modules) && body.modules.length === 1 &&
+          body.modules[0].name === 'Test Module' &&
+          Array.isArray(body.targets) && body.targets.length === 1
+        ) {
+          return { pass: true, detail: `modules=${body.modules.length}, targets=${body.targets.length}` };
+        }
+        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
+      },
+    },
     // ---- Frontend tests ----
     {
       name: 'Frontend HTML',

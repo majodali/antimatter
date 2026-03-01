@@ -19,6 +19,13 @@ export interface ActionContext {
   clearBuildCache(targetId?: string): Promise<void>;
   getStaleTargets(): Promise<string[]>;
 
+  // Deploy operations (project-scoped)
+  saveDeployConfig(config: { modules: any[]; packaging: any[]; targets: any[] }): Promise<void>;
+  loadDeployConfig(): Promise<{ modules: any[]; packaging: any[]; targets: any[] }>;
+  executeDeploy(options?: { targetIds?: string[]; dryRun?: boolean }): Promise<any[]>;
+  getDeployResults(): Promise<any[]>;
+  clearDeployResults(): Promise<void>;
+
   // Agent operations (project-scoped)
   sendChat(message: string): Promise<{ response: string }>;
   getHistory(): Promise<any[]>;
@@ -136,6 +143,44 @@ export class FetchActionContext implements ActionContext {
     const res = await fetch(this.url('/build/changes'));
     const body = await this.json(res);
     return body.staleTargetIds ?? [];
+  }
+
+  // ---- Deploy ----
+
+  async saveDeployConfig(config: { modules: any[]; packaging: any[]; targets: any[] }): Promise<void> {
+    const res = await fetch(this.url('/deploy/config'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    await this.json(res);
+  }
+
+  async loadDeployConfig(): Promise<{ modules: any[]; packaging: any[]; targets: any[] }> {
+    const res = await fetch(this.url('/deploy/config'));
+    const body = await this.json(res);
+    return { modules: body.modules ?? [], packaging: body.packaging ?? [], targets: body.targets ?? [] };
+  }
+
+  async executeDeploy(options?: { targetIds?: string[]; dryRun?: boolean }): Promise<any[]> {
+    const res = await fetch(this.url('/deploy/execute'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options ?? {}),
+    });
+    const body = await this.json(res);
+    return body.results ?? [];
+  }
+
+  async getDeployResults(): Promise<any[]> {
+    const res = await fetch(this.url('/deploy/results'));
+    const body = await this.json(res);
+    return body.results ?? [];
+  }
+
+  async clearDeployResults(): Promise<void> {
+    const res = await fetch(this.url('/deploy/results'), { method: 'DELETE' });
+    await this.json(res);
   }
 
   // ---- Agent ----

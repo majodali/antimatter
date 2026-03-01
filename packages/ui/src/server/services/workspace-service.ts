@@ -37,6 +37,8 @@ export class WorkspaceService {
   readonly fs: FileSystem;
   readonly runner: ToolRunner;
   readonly agent: Agent;
+  /** The underlying WorkspaceEnvironment (if provided at construction). */
+  readonly env?: WorkspaceEnvironment;
   private readonly orchestrator: Orchestrator | null = null;
   private readonly workspaceRoot: string;
   private readonly buildResults = new Map<string, BuildResult>();
@@ -46,6 +48,7 @@ export class WorkspaceService {
   constructor(options: WorkspaceServiceOptions = {}) {
     if (options.env) {
       // New path: derive fs and runner from the WorkspaceEnvironment
+      this.env = options.env;
       this.fs = options.env.fileSystem;
       this.runner = new WorkspaceEnvironmentRunnerAdapter(options.env);
       this.workspaceRoot = options.workspaceRoot ?? '/';
@@ -217,6 +220,26 @@ When asked to fix code, explain code, or refactor code, read the relevant files 
 
   clearBuildResults(): void {
     this.buildResults.clear();
+  }
+
+  // --- Deployment config operations ---
+
+  async loadDeployConfig(): Promise<{ modules: any[]; packaging: any[]; targets: any[] }> {
+    const configPath = '.antimatter/deploy.json';
+    try {
+      const content = await this.fs.readTextFile(configPath as any);
+      return JSON.parse(content);
+    } catch {
+      return { modules: [], packaging: [], targets: [] };
+    }
+  }
+
+  async saveDeployConfig(config: { modules: any[]; packaging: any[]; targets: any[] }): Promise<void> {
+    const configPath = '.antimatter/deploy.json';
+    try {
+      await this.fs.mkdir('.antimatter' as any);
+    } catch { /* already exists */ }
+    await this.fs.writeFile(configPath as any, JSON.stringify(config, null, 2));
   }
 
   // --- Agent operations ---

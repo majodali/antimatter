@@ -6,6 +6,7 @@ import { WorkspaceService } from './services/workspace-service.js';
 import { createFileRouter } from './routes/filesystem.js';
 import { createBuildRouter } from './routes/build.js';
 import { createAgentRouter } from './routes/agent.js';
+import { createDeployRouter } from './routes/deploy.js';
 import { setupWebSocket } from './websocket.js';
 
 const app = express();
@@ -38,6 +39,7 @@ const workspace = new WorkspaceService({
 app.use('/api/files', createFileRouter(workspace));
 app.use('/api/build', createBuildRouter(workspace));
 app.use('/api/agent', createAgentRouter(workspace));
+app.use('/api/deploy', createDeployRouter(workspace, undefined));
 
 // Health check
 app.get('/api/health', (req, res) => {

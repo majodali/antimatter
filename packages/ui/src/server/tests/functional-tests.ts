@@ -281,6 +281,98 @@ export function getFunctionalTests(
       },
     },
 
+    // ---- Deployment System (DEMO 3.1–3.5) ----
+    {
+      name: 'FT: Save Deploy Config',
+      suite: 'functional',
+      run: async () => {
+        const config = {
+          modules: [{ id: 'ft-mod', name: 'FT Module', type: 'lambda', buildCommand: 'echo deploy-test-output' }],
+          packaging: [{ id: 'ft-pkg', moduleId: 'ft-mod', type: 'lambda-zip', config: { type: 'lambda-zip', bundlePath: 'dist/index.js' } }],
+          targets: [{ id: 'ft-target', moduleId: 'ft-mod', packagingId: 'ft-pkg', type: 'lambda-update', config: { type: 'lambda-update', functionName: 'test-fn', region: 'us-west-2' } }],
+        };
+        await actions.saveDeployConfig(config);
+        return { pass: true, detail: 'Deploy config saved' };
+      },
+    },
+    {
+      name: 'FT: Load Deploy Config',
+      suite: 'functional',
+      run: async () => {
+        const config = await actions.loadDeployConfig();
+        const ok =
+          config.modules.length === 1 &&
+          config.modules[0].name === 'FT Module' &&
+          config.packaging.length === 1 &&
+          config.targets.length === 1;
+        return {
+          pass: ok,
+          detail: ok
+            ? `modules=${config.modules.length}, packaging=${config.packaging.length}, targets=${config.targets.length}`
+            : `Unexpected config: ${JSON.stringify(config)}`,
+        };
+      },
+    },
+    {
+      name: 'FT: Deploy Config Persistence',
+      suite: 'functional',
+      run: async () => {
+        // Save a different config, load it back, verify round-trip
+        const config2 = {
+          modules: [
+            { id: 'mod-a', name: 'Module A', type: 'lambda', buildCommand: 'echo a' },
+            { id: 'mod-b', name: 'Module B', type: 'frontend', buildCommand: 'echo b' },
+          ],
+          packaging: [
+            { id: 'pkg-a', moduleId: 'mod-a', type: 'lambda-zip', config: { type: 'lambda-zip', bundlePath: 'a.js' } },
+            { id: 'pkg-b', moduleId: 'mod-b', type: 's3-static', config: { type: 's3-static', outputDir: 'dist/client' } },
+          ],
+          targets: [
+            { id: 'tgt-a', moduleId: 'mod-a', packagingId: 'pkg-a', type: 'lambda-update', config: { type: 'lambda-update', functionName: 'fn-a', region: 'us-west-2' } },
+            { id: 'tgt-b', moduleId: 'mod-b', packagingId: 'pkg-b', type: 's3-upload', config: { type: 's3-upload', bucket: 'my-bucket', region: 'us-west-2' } },
+          ],
+        };
+        await actions.saveDeployConfig(config2);
+        const loaded = await actions.loadDeployConfig();
+        const ok =
+          loaded.modules.length === 2 &&
+          loaded.packaging.length === 2 &&
+          loaded.targets.length === 2 &&
+          loaded.modules[0].name === 'Module A' &&
+          loaded.modules[1].name === 'Module B';
+        return {
+          pass: ok,
+          detail: ok
+            ? `Round-trip verified: 2 modules, 2 packaging, 2 targets`
+            : `Mismatch: ${JSON.stringify(loaded)}`,
+        };
+      },
+    },
+    {
+      name: 'FT: Deploy Results Initially Empty',
+      suite: 'functional',
+      run: async () => {
+        const results = await actions.getDeployResults();
+        const ok = Array.isArray(results) && results.length === 0;
+        return {
+          pass: ok,
+          detail: ok ? 'No results (as expected)' : `Unexpected: ${JSON.stringify(results)}`,
+        };
+      },
+    },
+    {
+      name: 'FT: Clear Deploy Results',
+      suite: 'functional',
+      run: async () => {
+        await actions.clearDeployResults();
+        const results = await actions.getDeployResults();
+        return {
+          pass: results.length === 0,
+          detail: results.length === 0 ? 'Results cleared' : `${results.length} results remain`,
+        };
+      },
+    },
+
     // ---- Frontend Routes ----
     {
       name: 'FT: /logs Route',

@@ -192,6 +192,31 @@ export class AntimatterStack extends cdk.Stack {
     apiFunction.addEnvironment('COMMAND_FUNCTION_NAME', commandFunction.functionName);
 
     // ==========================================
+    // Self-Deployment Permissions (Step 5)
+    // ==========================================
+
+    // Allow API Lambda to update its own code and the Command Lambda's code
+    // (for deploying from within the IDE).
+    // IMPORTANT: Can't reference apiFunction.functionArn here — it creates a
+    // circular dependency (role policy → Lambda → role policy). Use a wildcard
+    // for Lambda functions in this account instead.
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: [
+        'lambda:UpdateFunctionCode',
+        'lambda:GetFunctionConfiguration',
+      ],
+      resources: [
+        `arn:aws:lambda:${this.region}:${this.account}:function:*`,
+      ],
+    }));
+
+    // Allow API Lambda to write to the website bucket (frontend deployment)
+    websiteBucket.grantReadWrite(apiFunction);
+
+    // Pass website bucket name and distribution ID to API Lambda
+    apiFunction.addEnvironment('WEBSITE_BUCKET', websiteBucket.bucketName);
+
+    // ==========================================
     // API Gateway
     // ==========================================
 
@@ -283,6 +308,20 @@ export class AntimatterStack extends cdk.Stack {
       originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
       allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
     });
+
+    // ==========================================
+    // Self-Deployment: CloudFront Permissions
+    // ==========================================
+    // (Must be after distribution is created)
+
+    // Allow API Lambda to invalidate the CloudFront cache (for frontend deploy).
+    // Uses wildcard resource to avoid CDK/CloudFormation circular dependency:
+    // Lambda → Distribution → API Gateway → Lambda.
+    // The distribution ID is passed to deploy configs directly (not as env var).
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudfront:CreateInvalidation'],
+      resources: [`arn:aws:cloudfront::${this.account}:distribution/*`],
+    }));
 
     // ==========================================
     // Outputs

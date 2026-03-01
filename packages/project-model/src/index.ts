@@ -45,3 +45,18 @@ export type {
   ProjectMetadata,
   Project,
 } from './project.js';
+
+export type {
+  DeploymentModule,
+  PackagingStrategy,
+  LambdaZipPackagingConfig,
+  S3StaticPackagingConfig,
+  DeploymentTarget,
+  LambdaDeployTargetConfig,
+  S3DeployTargetConfig,
+  DeploymentConfig,
+  DeploymentStepType,
+  DeploymentStepProgress,
+  DeploymentResult,
+  DeployProgressEvent,
+} from './deployment.js';

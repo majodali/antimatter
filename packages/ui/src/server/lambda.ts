@@ -1,13 +1,17 @@
 import serverlessExpress from '@codegenie/serverless-express';
 import express from 'express';
 import { S3Client } from '@aws-sdk/client-s3';
+import { LambdaClient, UpdateFunctionCodeCommand, GetFunctionConfigurationCommand } from '@aws-sdk/client-lambda';
+import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { S3WorkspaceEnvironment, CommandLambdaEnvironment, AwsLambdaInvoker } from '@antimatter/workspace';
 import { WorkspaceService } from './services/workspace-service.js';
 import { createFileRouter } from './routes/filesystem.js';
 import { createBuildRouter } from './routes/build.js';
 import { createAgentRouter } from './routes/agent.js';
+import { createDeployRouter } from './routes/deploy.js';
 import { createProjectRouter } from './routes/projects.js';
 import { createTestRouter } from './routes/tests.js';
+import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
 
 const app = express();
 
@@ -108,6 +112,63 @@ apiRouter.use('/projects/:projectId/build', (req, res, next) => {
 
 apiRouter.use('/projects/:projectId/agent', (req, res, next) => {
   createAgentRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
+});
+
+// --- Deployment route (project-scoped) ---
+// Lazy-initialized AWS SDK clients for deployment operations
+let deployLambdaClient: DeployLambdaClient | undefined;
+let deployCloudfrontClient: DeployCloudfrontClient | undefined;
+
+function getDeployLambdaClient(): DeployLambdaClient {
+  if (!deployLambdaClient) {
+    const client = new LambdaClient({});
+    deployLambdaClient = {
+      async updateFunctionCode(params) {
+        const res = await client.send(new UpdateFunctionCodeCommand({
+          FunctionName: params.FunctionName,
+          ZipFile: params.ZipFile,
+        }));
+        return { FunctionName: res.FunctionName, LastUpdateStatus: res.LastUpdateStatus };
+      },
+      async getFunctionConfiguration(params) {
+        const res = await client.send(new GetFunctionConfigurationCommand({
+          FunctionName: params.FunctionName,
+        }));
+        return { LastUpdateStatus: res.LastUpdateStatus, State: res.State };
+      },
+    };
+  }
+  return deployLambdaClient;
+}
+
+function getDeployCloudfrontClient(): DeployCloudfrontClient {
+  if (!deployCloudfrontClient) {
+    const client = new CloudFrontClient({});
+    deployCloudfrontClient = {
+      async createInvalidation(params) {
+        const res = await client.send(new CreateInvalidationCommand({
+          DistributionId: params.DistributionId,
+          InvalidationBatch: params.InvalidationBatch,
+        }));
+        return { Invalidation: { Id: res.Invalidation?.Id } };
+      },
+    };
+  }
+  return deployCloudfrontClient;
+}
+
+apiRouter.use('/projects/:projectId/deploy', (req, res, next) => {
+  const projectId = req.params.projectId;
+  createDeployRouter(
+    createProjectWorkspace(projectId),
+    s3Client,
+    {
+      bucket: projectsBucket,
+      prefix: `projects/${projectId}/files/`,
+      lambdaClient: getDeployLambdaClient(),
+      cloudfrontClient: getDeployCloudfrontClient(),
+    },
+  )(req, res, next);
 });
 
 app.use('/api', apiRouter);

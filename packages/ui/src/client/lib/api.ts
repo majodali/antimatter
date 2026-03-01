@@ -303,3 +303,91 @@ export async function fetchBuildChanges(projectId?: string): Promise<string[]> {
   const { staleTargetIds } = await apiFetch<{ staleTargetIds: string[] }>(`${buildBase(projectId)}/changes`);
   return staleTargetIds;
 }
+
+// ---------------------------------------------------------------------------
+// Deploy API — project-scoped when projectId is provided
+// ---------------------------------------------------------------------------
+
+function deployBase(projectId?: string): string {
+  return projectId ? `/api/projects/${projectId}/deploy` : '/api/deploy';
+}
+
+export interface DeployConfig {
+  modules: any[];
+  packaging: any[];
+  targets: any[];
+}
+
+export async function fetchDeployConfig(projectId?: string): Promise<DeployConfig> {
+  return apiFetch<DeployConfig>(`${deployBase(projectId)}/config`);
+}
+
+export async function saveDeployConfig(config: DeployConfig, projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`${deployBase(projectId)}/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+}
+
+export interface DeployProgressEvent {
+  type: 'step-started' | 'step-output' | 'step-completed' | 'deploy-complete' | 'deploy-error';
+  targetId?: string;
+  moduleId?: string;
+  step?: string;
+  output?: string;
+  result?: any;
+  results?: any[];
+  error?: string;
+  timestamp?: string;
+}
+
+export async function executeDeployStreaming(
+  targetIds: string[] | undefined,
+  onEvent: (event: DeployProgressEvent) => void,
+  projectId?: string,
+  dryRun?: boolean,
+): Promise<void> {
+  const res = await fetch(`${deployBase(projectId)}/execute`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({ targetIds, dryRun }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.message ?? body.error);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const event = JSON.parse(line.slice(6)) as DeployProgressEvent;
+          onEvent(event);
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
+}
+
+export async function fetchDeployResults(projectId?: string): Promise<any[]> {
+  const { results } = await apiFetch<{ results: any[] }>(`${deployBase(projectId)}/results`);
+  return results;
+}
