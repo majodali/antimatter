@@ -11,39 +11,51 @@ import * as efs from 'aws-cdk-lib/aws-efs';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
-export class AntimatterStack extends cdk.Stack {
-  public readonly vpc: ec2.Vpc;
-  public readonly projectEfs: efs.FileSystem;
-  public readonly efsAccessPoint: efs.AccessPoint;
+/**
+ * Props for a reusable Antimatter environment stack.
+ *
+ * Each environment gets its own S3 buckets, Lambda functions, API Gateway,
+ * and CloudFront distribution while sharing the VPC and EFS from the
+ * production stack.
+ */
+export interface AntimatterEnvStackProps extends cdk.StackProps {
+  /** Unique environment identifier — used in all resource names (e.g. 'e1', 'feat-auth', 'v2') */
+  readonly envId: string;
+  /** Shared VPC from the production stack */
+  readonly vpc: ec2.IVpc;
+  /** Shared EFS from the production stack */
+  readonly projectEfs: efs.IFileSystem;
+  /** Shared EFS access point from the production stack */
+  readonly efsAccessPoint: efs.IAccessPoint;
+  /** Security group ID of the shared EFS (for adding NFS ingress) */
+  readonly efsSecurityGroupId: string;
+}
 
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+export class AntimatterEnvStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props: AntimatterEnvStackProps) {
     super(scope, id, props);
+
+    const { envId, vpc, efsAccessPoint, efsSecurityGroupId } = props;
 
     // ==========================================
     // Frontend - S3 + CloudFront
     // ==========================================
 
-    // S3 bucket for frontend static files
     const websiteBucket = new s3.Bucket(this, 'WebsiteBucket', {
-      bucketName: `antimatter-ide-${this.account}`,
-      // No websiteIndexDocument — CloudFront handles SPA routing via error pages.
-      // Setting websiteIndexDocument causes S3Origin to use the website endpoint
-      // (CustomOriginConfig) instead of OAI, breaking private bucket access.
+      bucketName: `antimatter-ide-${envId}-${this.account}`,
       publicReadAccess: false,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      removalPolicy: cdk.RemovalPolicy.DESTROY, // WARNING: For dev only
-      autoDeleteObjects: true, // WARNING: For dev only
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
       encryption: s3.BucketEncryption.S3_MANAGED,
     });
 
-    // CloudFront Origin Access Identity
     const oai = new cloudfront.OriginAccessIdentity(this, 'OAI', {
-      comment: 'OAI for Antimatter IDE',
+      comment: `OAI for Antimatter IDE environment ${envId}`,
     });
 
     websiteBucket.grantRead(oai);
 
-    // CloudFront distribution
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       defaultBehavior: {
         origin: new origins.S3Origin(websiteBucket, {
@@ -67,7 +79,7 @@ export class AntimatterStack extends cdk.Stack {
           ttl: cdk.Duration.minutes(5),
         },
       ],
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_100, // Use only North America and Europe
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
     });
 
     // Deploy frontend to S3
@@ -83,65 +95,18 @@ export class AntimatterStack extends cdk.Stack {
     // ==========================================
 
     const dataBucket = new s3.Bucket(this, 'DataBucket', {
-      bucketName: `antimatter-data-${this.account}`,
+      bucketName: `antimatter-data-${envId}-${this.account}`,
       publicReadAccess: false,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      removalPolicy: cdk.RemovalPolicy.DESTROY, // WARNING: For dev only
-      autoDeleteObjects: true, // WARNING: For dev only
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
       encryption: s3.BucketEncryption.S3_MANAGED,
-    });
-
-    // ==========================================
-    // Network - VPC for Command Lambda + EFS
-    // ==========================================
-
-    // VPC with private subnets for Lambda + EFS.
-    // NAT Gateway required for Lambda internet access (S3, Claude API, npm registry).
-    // Cost: ~$32/month for NAT Gateway. Acceptable for dev.
-    this.vpc = new ec2.Vpc(this, 'Vpc', {
-      maxAzs: 2,
-      natGateways: 1,
-    });
-
-    // ==========================================
-    // Storage - EFS for project working trees
-    // ==========================================
-
-    // EFS provides the POSIX file system that build tools need.
-    // S3 remains the durable source of truth; EFS is a working copy
-    // for command execution (synced on demand in Step 3).
-    this.projectEfs = new efs.FileSystem(this, 'ProjectEfs', {
-      vpc: this.vpc,
-      performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
-      throughputMode: efs.ThroughputMode.ELASTIC,
-      removalPolicy: cdk.RemovalPolicy.DESTROY, // WARNING: For dev only
-      encrypted: true,
-      lifecyclePolicy: efs.LifecyclePolicy.AFTER_30_DAYS,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-      },
-    });
-
-    // Access point creates /projects with non-root uid/gid
-    this.efsAccessPoint = this.projectEfs.addAccessPoint('LambdaAccess', {
-      path: '/projects',
-      createAcl: {
-        ownerGid: '1001',
-        ownerUid: '1001',
-        permissions: '755',
-      },
-      posixUser: {
-        gid: '1001',
-        uid: '1001',
-      },
     });
 
     // ==========================================
     // Backend - API Lambda (no VPC)
     // ==========================================
 
-    // API Lambda handles file CRUD (via S3), agent chat, build config.
-    // Stays outside VPC for low latency and fast cold starts.
     const apiFunction = new lambda.Function(this, 'ApiFunction', {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
@@ -151,31 +116,26 @@ export class AntimatterStack extends cdk.Stack {
       environment: {
         NODE_ENV: 'production',
         PROJECTS_BUCKET: dataBucket.bucketName,
-        // ANTHROPIC_API_KEY will be added via Secrets Manager or environment variable
       },
     });
 
-    // Grant API Lambda read/write access to the data bucket
     dataBucket.grantReadWrite(apiFunction);
 
     // ==========================================
-    // Command Execution - Lambda with EFS
+    // Command Execution - Lambda with shared VPC + EFS
     // ==========================================
 
-    // Command Lambda runs build tools, tests, and other commands against
-    // a POSIX file system (EFS). Lives in VPC for EFS access.
-    // Higher memory and timeout than API Lambda for build workloads.
     const commandFunction = new lambda.Function(this, 'CommandFunction', {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'command.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../packages/ui/dist-lambda')),
       timeout: cdk.Duration.minutes(15),
       memorySize: 2048,
-      vpc: this.vpc,
+      vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
-      filesystem: lambda.FileSystem.fromEfsAccessPoint(this.efsAccessPoint, '/mnt/projects'),
+      filesystem: lambda.FileSystem.fromEfsAccessPoint(efsAccessPoint, '/mnt/projects'),
       environment: {
         NODE_ENV: 'production',
         EFS_MOUNT_PATH: '/mnt/projects',
@@ -183,27 +143,24 @@ export class AntimatterStack extends cdk.Stack {
       },
     });
 
-    // Grant Command Lambda access to data bucket (needed for S3↔EFS sync)
     dataBucket.grantReadWrite(commandFunction);
-
-    // Grant API Lambda permission to invoke Command Lambda (Step 4).
-    // Build/test/lint execution on the API Lambda is routed to the Command
-    // Lambda via direct Lambda invoke (CommandLambdaEnvironment).
     commandFunction.grantInvoke(apiFunction);
-
-    // Pass Command Lambda function name to the API Lambda so it can
-    // create a CommandLambdaEnvironment pointing at the right function.
     apiFunction.addEnvironment('COMMAND_FUNCTION_NAME', commandFunction.functionName);
 
+    // Allow the environment's Command Lambda NFS access to the shared EFS.
+    // Created here (not in the prod stack) so the prod stack template is untouched.
+    new ec2.CfnSecurityGroupIngress(this, 'EfsAccess', {
+      groupId: efsSecurityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 2049,
+      toPort: 2049,
+      sourceSecurityGroupId: commandFunction.connections.securityGroups[0].securityGroupId,
+    });
+
     // ==========================================
-    // Self-Deployment Permissions (Step 5)
+    // Self-Deployment Permissions
     // ==========================================
 
-    // Allow API Lambda to update its own code and the Command Lambda's code
-    // (for deploying from within the IDE).
-    // IMPORTANT: Can't reference apiFunction.functionArn here — it creates a
-    // circular dependency (role policy → Lambda → role policy). Use a wildcard
-    // for Lambda functions in this account instead.
     apiFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: [
         'lambda:UpdateFunctionCode',
@@ -214,10 +171,7 @@ export class AntimatterStack extends cdk.Stack {
       ],
     }));
 
-    // Allow API Lambda to write to the website bucket (frontend deployment)
     websiteBucket.grantReadWrite(apiFunction);
-
-    // Pass website bucket name and distribution ID to API Lambda
     apiFunction.addEnvironment('WEBSITE_BUCKET', websiteBucket.bucketName);
 
     // ==========================================
@@ -225,8 +179,8 @@ export class AntimatterStack extends cdk.Stack {
     // ==========================================
 
     const api = new apigateway.RestApi(this, 'ApiGateway', {
-      restApiName: 'Antimatter API',
-      description: 'API for Antimatter IDE',
+      restApiName: `Antimatter API (${envId})`,
+      description: `API for Antimatter IDE environment ${envId}`,
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
         allowMethods: apigateway.Cors.ALL_METHODS,
@@ -239,30 +193,10 @@ export class AntimatterStack extends cdk.Stack {
       },
     });
 
-    // API Lambda integration (handles all routes except commands)
-    const apiIntegration = new apigateway.LambdaIntegration(apiFunction, {
-      proxy: true,
-    });
+    const apiIntegration = new apigateway.LambdaIntegration(apiFunction, { proxy: true });
+    const commandIntegration = new apigateway.LambdaIntegration(commandFunction, { proxy: true });
 
-    // Command Lambda integration (handles command execution routes)
-    const commandIntegration = new apigateway.LambdaIntegration(commandFunction, {
-      proxy: true,
-    });
-
-    // ---- Route structure ----
-    // CloudFront sends /api/* paths to API Gateway, so the path the gateway
-    // sees is /api/commands/health, /api/files/tree, etc.  We need explicit
-    // /api/commands/* routes so they reach the Command Lambda instead of
-    // falling through to the API Lambda catch-all.
-    //
-    // API Gateway REST API precedence: explicit resources > {proxy+}.
-    //
-    //   /api/commands/*  → Command Lambda  (CloudFront path)
-    //   /api/{proxy+}    → API Lambda      (CloudFront path, everything else)
-    //   /commands/*       → Command Lambda  (direct API Gateway access)
-    //   /{proxy+}         → API Lambda      (direct API Gateway access)
-
-    // -- CloudFront paths (under /api) --
+    // Route structure (same as production)
     const apiResource = api.root.addResource('api');
 
     const apiCommandsResource = apiResource.addResource('commands');
@@ -277,7 +211,6 @@ export class AntimatterStack extends cdk.Stack {
       anyMethod: true,
     });
 
-    // -- Direct API Gateway paths (under /commands) --
     const commandsResource = api.root.addResource('commands');
     commandsResource.addMethod('ANY', commandIntegration);
     commandsResource.addProxy({
@@ -285,7 +218,6 @@ export class AntimatterStack extends cdk.Stack {
       anyMethod: true,
     });
 
-    // -- Root catch-all for everything else --
     api.root.addProxy({
       defaultIntegration: apiIntegration,
       anyMethod: true,
@@ -295,9 +227,6 @@ export class AntimatterStack extends cdk.Stack {
     // CloudFront → API Gateway proxy for /api/*
     // ==========================================
 
-    // Route /api/* requests through CloudFront to API Gateway so the
-    // frontend can use relative URLs (e.g. /api/projects) instead of
-    // hard-coding the API Gateway domain.
     const apiOrigin = new origins.HttpOrigin(
       `${api.restApiId}.execute-api.${this.region}.amazonaws.com`,
       {
@@ -313,15 +242,7 @@ export class AntimatterStack extends cdk.Stack {
       allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
     });
 
-    // ==========================================
-    // Self-Deployment: CloudFront Permissions
-    // ==========================================
-    // (Must be after distribution is created)
-
-    // Allow API Lambda to invalidate the CloudFront cache (for frontend deploy).
-    // Uses wildcard resource to avoid CDK/CloudFormation circular dependency:
-    // Lambda → Distribution → API Gateway → Lambda.
-    // The distribution ID is passed to deploy configs directly (not as env var).
+    // CloudFront invalidation permissions
     apiFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cloudfront:CreateInvalidation'],
       resources: [`arn:aws:cloudfront::${this.account}:distribution/*`],
@@ -333,42 +254,27 @@ export class AntimatterStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'WebsiteURL', {
       value: `https://${distribution.distributionDomainName}`,
-      description: 'CloudFront distribution URL for the frontend',
+      description: `CloudFront URL for environment ${envId}`,
     });
 
     new cdk.CfnOutput(this, 'ApiURL', {
       value: api.url,
-      description: 'API Gateway URL for the backend',
-    });
-
-    new cdk.CfnOutput(this, 'S3BucketName', {
-      value: websiteBucket.bucketName,
-      description: 'S3 bucket name for frontend deployment',
+      description: `API Gateway URL for environment ${envId}`,
     });
 
     new cdk.CfnOutput(this, 'DistributionId', {
       value: distribution.distributionId,
-      description: 'CloudFront distribution ID',
+      description: `CloudFront distribution ID for environment ${envId}`,
     });
 
     new cdk.CfnOutput(this, 'DataBucketName', {
       value: dataBucket.bucketName,
-      description: 'S3 bucket name for project data storage',
-    });
-
-    new cdk.CfnOutput(this, 'VpcId', {
-      value: this.vpc.vpcId,
-      description: 'VPC ID for Command Lambda',
-    });
-
-    new cdk.CfnOutput(this, 'EfsId', {
-      value: this.projectEfs.fileSystemId,
-      description: 'EFS file system ID for project working trees',
+      description: `Data bucket for environment ${envId}`,
     });
 
     new cdk.CfnOutput(this, 'CommandFunctionArn', {
       value: commandFunction.functionArn,
-      description: 'Command Lambda function ARN',
+      description: `Command Lambda function ARN for environment ${envId}`,
     });
   }
 }
