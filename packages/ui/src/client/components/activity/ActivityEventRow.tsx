@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Hammer, MessageSquare, FolderOpen, FileText, Globe, Monitor, ChevronDown, ChevronRight } from 'lucide-react';
+import { Hammer, MessageSquare, FolderOpen, FileText, Globe, Monitor, Server, Rocket, Bot, ChevronDown, ChevronRight } from 'lucide-react';
 import type { ActivityEvent, EventCategory } from '@/stores/activityStore';
 
 const categoryIcons: Record<EventCategory, typeof Hammer> = {
@@ -10,6 +10,9 @@ const categoryIcons: Record<EventCategory, typeof Hammer> = {
   project: FolderOpen,
   network: Globe,
   system: Monitor,
+  workspace: Server,
+  deploy: Rocket,
+  agent: Bot,
 };
 
 const levelColors: Record<string, string> = {
@@ -20,10 +23,12 @@ const levelColors: Record<string, string> = {
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 0) return 'just now';
   if (diff < 1000) return 'just now';
   if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  return `${Math.floor(diff / 3_600_000)}h ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 interface Props {
@@ -32,8 +37,9 @@ interface Props {
 
 export function ActivityEventRow({ event }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const Icon = categoryIcons[event.category];
+  const Icon = categoryIcons[event.category] ?? Monitor;
   const hasDetail = !!event.detail;
+  const isServerEvent = event.source === 'lambda' || event.source === 'workspace';
 
   return (
     <div
@@ -52,6 +58,11 @@ export function ActivityEventRow({ event }: Props) {
         )}
         <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
         <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${levelColors[event.level]}`} />
+        {isServerEvent && (
+          <span className="text-[9px] px-1 rounded bg-primary/15 text-primary shrink-0" title={`Source: ${event.source}`}>
+            {event.source === 'workspace' ? 'EC2' : 'API'}
+          </span>
+        )}
         <span className="flex-1 truncate">{event.message}</span>
         <span className="text-muted-foreground shrink-0">{relativeTime(event.timestamp)}</span>
       </div>

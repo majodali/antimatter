@@ -8,12 +8,15 @@ import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { EditorPanel } from '../editor/EditorPanel';
 import { TerminalPanel } from '../terminal/TerminalPanel';
+import { ChatPanel } from '../chat/ChatPanel';
 import { Separator } from '../ui/separator';
 import { useProjectStore } from '@/stores/projectStore';
 import { useTerminalStore } from '@/stores/terminalStore';
+import { useUIStore } from '@/stores/uiStore';
 
 export function MainLayout() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const chatPanelVisible = useUIStore((s) => s.chatPanelVisible);
 
   // Auto-connect to workspace when project opens
   useEffect(() => {
@@ -31,14 +34,14 @@ export function MainLayout() {
       <div className="flex-1 overflow-hidden">
         <PanelGroup direction="horizontal">
           {/* Sidebar */}
-          <Panel defaultSize={20} minSize={15} maxSize={30}>
+          <Panel defaultSize={18} minSize={15} maxSize={30}>
             <Sidebar />
           </Panel>
 
           <PanelResizeHandle className="w-1 bg-border hover:bg-primary/50 transition-colors" />
 
           {/* Main content area */}
-          <Panel defaultSize={80} minSize={50}>
+          <Panel minSize={35}>
             <PanelGroup direction="vertical">
               {/* Editor */}
               <Panel defaultSize={70} minSize={30}>
@@ -48,11 +51,21 @@ export function MainLayout() {
               <PanelResizeHandle className="h-1 bg-border hover:bg-primary/50 transition-colors" />
 
               {/* Terminal/Output */}
-              <Panel defaultSize={30} minSize={15} maxSize={50}>
+              <Panel defaultSize={30} minSize={15}>
                 <TerminalPanel />
               </Panel>
             </PanelGroup>
           </Panel>
+
+          {/* Agent chat panel (right side, toggleable) */}
+          {chatPanelVisible && (
+            <>
+              <PanelResizeHandle className="w-1 bg-border hover:bg-primary/50 transition-colors" />
+              <Panel defaultSize={25} minSize={15} maxSize={40}>
+                <ChatPanel />
+              </Panel>
+            </>
+          )}
         </PanelGroup>
       </div>
     </div>

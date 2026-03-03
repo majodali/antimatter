@@ -22,6 +22,15 @@ interface ApiError {
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
+
+  // Guard against non-JSON responses (e.g. CloudFront serving index.html for 404s)
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('json')) {
+    const method = init?.method ?? 'GET';
+    eventLog.error('network', `API ${method} ${url} returned non-JSON (${contentType || 'no content-type'})`);
+    throw new Error(`Server returned an unexpected response. You may need to restart your workspace.`);
+  }
+
   if (!res.ok) {
     const body: ApiError = await res.json().catch(() => ({ error: res.statusText }));
     const msg = body.message ?? body.error;
@@ -527,4 +536,172 @@ export async function getWorkspaceWsUrl(projectId: string, sessionToken: string)
   // WebSocket goes through CloudFront /ws/* → ALB → EC2 instance
   // Using relative URL so it automatically uses the CloudFront host
   return `/ws/terminal/${encodeURIComponent(projectId)}?token=${encodeURIComponent(sessionToken)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Chat History Persistence API
+// ---------------------------------------------------------------------------
+
+function chatHistoryBase(projectId?: string): string {
+  return `${agentBase(projectId)}/chat/history`;
+}
+
+export async function fetchChatHistory(projectId?: string): Promise<any[]> {
+  const { messages } = await apiFetch<{ messages: any[] }>(chatHistoryBase(projectId));
+  return messages;
+}
+
+export async function saveChatHistory(messages: any[], projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(chatHistoryBase(projectId), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Activity Log Persistence API
+// ---------------------------------------------------------------------------
+
+function activityBase(projectId?: string): string {
+  if (projectId && activeWorkspaceProjectId === projectId) {
+    return `/workspace/${projectId}/api/activity`;
+  }
+  return projectId ? `/api/projects/${projectId}/activity` : '/api/activity';
+}
+
+export async function fetchActivityLog(projectId?: string): Promise<any[]> {
+  const { events } = await apiFetch<{ events: any[] }>(activityBase(projectId));
+  return events;
+}
+
+export async function saveActivityLog(events: any[], projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(activityBase(projectId), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ events }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// System Events API — centralized event log from S3
+// ---------------------------------------------------------------------------
+
+export interface SystemEvent {
+  id: string;
+  timestamp: string;
+  projectId: string;
+  source: 'lambda' | 'workspace';
+  category: string;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+  detail?: Record<string, unknown>;
+}
+
+function eventsBase(projectId?: string): string {
+  if (projectId && activeWorkspaceProjectId === projectId) {
+    return `/workspace/${projectId}/api/events`;
+  }
+  return projectId ? `/api/projects/${projectId}/events` : '/api/events';
+}
+
+export async function fetchSystemEvents(
+  projectId?: string,
+  days = 1,
+  limit = 200,
+): Promise<SystemEvent[]> {
+  const { events } = await apiFetch<{ events: SystemEvent[] }>(
+    `${eventsBase(projectId)}?days=${days}&limit=${limit}`,
+  );
+  return events;
+}
+
+// ---------------------------------------------------------------------------
+// Git API
+// ---------------------------------------------------------------------------
+
+function gitBase(projectId?: string): string {
+  if (projectId && activeWorkspaceProjectId === projectId) {
+    return `/workspace/${projectId}/api/git`;
+  }
+  return projectId ? `/api/projects/${projectId}/git` : '/api/git';
+}
+
+export interface GitStatus {
+  initialized: boolean;
+  branch?: string;
+  staged: GitFileChange[];
+  unstaged: GitFileChange[];
+  untracked: string[];
+}
+
+export interface GitFileChange {
+  path: string;
+  status: 'modified' | 'added' | 'deleted' | 'renamed';
+}
+
+export async function fetchGitStatus(projectId?: string): Promise<GitStatus> {
+  return apiFetch<GitStatus>(`${gitBase(projectId)}/status`);
+}
+
+export async function gitInit(projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/init`, { method: 'POST' });
+}
+
+export async function gitStage(files: string[], projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/stage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files }),
+  });
+}
+
+export async function gitUnstage(files: string[], projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/unstage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files }),
+  });
+}
+
+export async function gitCommit(message: string, projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  });
+}
+
+export async function gitPush(remote?: string, branch?: string, projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ remote, branch }),
+  });
+}
+
+export async function gitPull(remote?: string, branch?: string, projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/pull`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ remote, branch }),
+  });
+}
+
+export async function gitAddRemote(name: string, url: string, projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/remote/add`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, url }),
+  });
+}
+
+export async function fetchGitRemotes(projectId?: string): Promise<{ name: string; url: string; type: string }[]> {
+  const { remotes } = await apiFetch<{ remotes: { name: string; url: string; type: string }[] }>(`${gitBase(projectId)}/remotes`);
+  return remotes;
+}
+
+export async function fetchGitLog(limit = 20, projectId?: string): Promise<{ hash: string; message: string }[]> {
+  const { commits } = await apiFetch<{ commits: { hash: string; message: string }[] }>(`${gitBase(projectId)}/log?limit=${limit}`);
+  return commits;
 }

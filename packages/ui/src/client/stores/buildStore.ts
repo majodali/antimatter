@@ -1,7 +1,9 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { BuildResult, BuildRule, Diagnostic } from '@antimatter/project-model';
 import { fetchBuildConfig, saveBuildConfig as saveBuildConfigApi } from '@/lib/api';
 import { eventLog } from '@/lib/eventLog';
+import { createProjectStorage, serializeMap, deserializeMap } from '@/lib/storePersist';
 
 interface BuildState {
   // Build configuration
@@ -38,115 +40,140 @@ interface BuildState {
   getDiagnosticsForFile: (filePath: string) => Diagnostic[];
 }
 
-export const useBuildStore = create<BuildState>((set, get) => ({
-  rules: new Map(),
-  results: new Map(),
-  buildOutput: new Map(),
-  expandedRules: new Set(),
-  configMode: false,
-
-  setRules: (rules) =>
-    set({
-      rules: new Map(rules.map((r) => [r.id, r])),
-    }),
-
-  setResult: (result) =>
-    set((state) => ({
-      results: new Map(state.results).set(result.ruleId, result),
-    })),
-
-  setResults: (results) =>
-    set({
-      results: new Map(results.map((r) => [r.ruleId, r])),
-    }),
-
-  clearResults: () =>
-    set({
+export const useBuildStore = create<BuildState>()(
+  persist(
+    (set, get) => ({
+      rules: new Map(),
       results: new Map(),
       buildOutput: new Map(),
       expandedRules: new Set(),
-    }),
+      configMode: false,
 
-  toggleExpanded: (ruleId) =>
-    set((state) => {
-      const expanded = new Set(state.expandedRules);
-      if (expanded.has(ruleId)) {
-        expanded.delete(ruleId);
-      } else {
-        expanded.add(ruleId);
-      }
-      return { expandedRules: expanded };
-    }),
+      setRules: (rules) =>
+        set({
+          rules: new Map(rules.map((r) => [r.id, r])),
+        }),
 
-  appendOutput: (ruleId, line) =>
-    set((state) => {
-      const output = new Map(state.buildOutput);
-      const existing = output.get(ruleId) || [];
-      output.set(ruleId, [...existing, line]);
-      return { buildOutput: output };
-    }),
+      setResult: (result) =>
+        set((state) => ({
+          results: new Map(state.results).set(result.ruleId, result),
+        })),
 
-  clearOutput: () => set({ buildOutput: new Map() }),
+      setResults: (results) =>
+        set({
+          results: new Map(results.map((r) => [r.ruleId, r])),
+        }),
 
-  setConfigMode: (mode) => set({ configMode: mode }),
+      clearResults: () =>
+        set({
+          results: new Map(),
+          buildOutput: new Map(),
+          expandedRules: new Set(),
+        }),
 
-  loadConfig: async (projectId?: string) => {
-    try {
-      const config = await fetchBuildConfig(projectId);
-      set({
-        rules: new Map(config.rules.map((r) => [r.id, r])),
-      });
-    } catch (err) {
-      eventLog.error('build', 'Failed to load build config', String(err));
-    }
-  },
+      toggleExpanded: (ruleId) =>
+        set((state) => {
+          const expanded = new Set(state.expandedRules);
+          if (expanded.has(ruleId)) {
+            expanded.delete(ruleId);
+          } else {
+            expanded.add(ruleId);
+          }
+          return { expandedRules: expanded };
+        }),
 
-  saveConfig: async (projectId?: string) => {
-    const state = get();
-    try {
-      await saveBuildConfigApi(
-        {
-          rules: Array.from(state.rules.values()),
-        },
-        projectId,
-      );
-    } catch (err) {
-      eventLog.error('build', 'Failed to save build config', String(err));
-    }
-  },
+      appendOutput: (ruleId, line) =>
+        set((state) => {
+          const output = new Map(state.buildOutput);
+          const existing = output.get(ruleId) || [];
+          output.set(ruleId, [...existing, line]);
+          return { buildOutput: output };
+        }),
 
-  addRule: (rule) =>
-    set((state) => ({
-      rules: new Map(state.rules).set(rule.id, rule),
-    })),
+      clearOutput: () => set({ buildOutput: new Map() }),
 
-  removeRule: (ruleId) =>
-    set((state) => {
-      const rules = new Map(state.rules);
-      rules.delete(ruleId);
-      return { rules };
-    }),
+      setConfigMode: (mode) => set({ configMode: mode }),
 
-  updateRule: (ruleId, rule) =>
-    set((state) => {
-      const rules = new Map(state.rules);
-      if (rule.id !== ruleId) {
-        rules.delete(ruleId);
-      }
-      rules.set(rule.id, rule);
-      return { rules };
-    }),
-
-  getDiagnosticsForFile: (filePath: string) => {
-    const state = get();
-    const diagnostics: Diagnostic[] = [];
-    for (const result of state.results.values()) {
-      for (const diag of result.diagnostics) {
-        if (diag.file === filePath || diag.file.endsWith(filePath) || filePath.endsWith(diag.file)) {
-          diagnostics.push(diag);
+      loadConfig: async (projectId?: string) => {
+        try {
+          const config = await fetchBuildConfig(projectId);
+          set({
+            rules: new Map(config.rules.map((r) => [r.id, r])),
+          });
+        } catch (err) {
+          eventLog.error('build', 'Failed to load build config', String(err));
         }
-      }
-    }
-    return diagnostics;
-  },
-}));
+      },
+
+      saveConfig: async (projectId?: string) => {
+        const state = get();
+        try {
+          await saveBuildConfigApi(
+            {
+              rules: Array.from(state.rules.values()),
+            },
+            projectId,
+          );
+        } catch (err) {
+          eventLog.error('build', 'Failed to save build config', String(err));
+        }
+      },
+
+      addRule: (rule) =>
+        set((state) => ({
+          rules: new Map(state.rules).set(rule.id, rule),
+        })),
+
+      removeRule: (ruleId) =>
+        set((state) => {
+          const rules = new Map(state.rules);
+          rules.delete(ruleId);
+          return { rules };
+        }),
+
+      updateRule: (ruleId, rule) =>
+        set((state) => {
+          const rules = new Map(state.rules);
+          if (rule.id !== ruleId) {
+            rules.delete(ruleId);
+          }
+          rules.set(rule.id, rule);
+          return { rules };
+        }),
+
+      getDiagnosticsForFile: (filePath: string) => {
+        const state = get();
+        const diagnostics: Diagnostic[] = [];
+        for (const result of state.results.values()) {
+          for (const diag of result.diagnostics) {
+            if (diag.file === filePath || diag.file.endsWith(filePath) || filePath.endsWith(diag.file)) {
+              diagnostics.push(diag);
+            }
+          }
+        }
+        return diagnostics;
+      },
+    }),
+    {
+      name: 'antimatter-build',
+      storage: createProjectStorage('build'),
+      partialize: (state) => ({
+        rules: serializeMap(state.rules),
+        results: serializeMap(state.results),
+      }),
+      merge: (persisted: any, current) => ({
+        ...current,
+        ...(persisted || {}),
+        rules: persisted?.rules
+          ? deserializeMap<string, BuildRule>(persisted.rules)
+          : current.rules,
+        results: persisted?.results
+          ? deserializeMap<string, BuildResult>(persisted.results)
+          : current.results,
+        buildOutput: new Map<string, string[]>(),
+        expandedRules: new Set<string>(),
+        configMode: false,
+      }),
+    },
+  ),
+);

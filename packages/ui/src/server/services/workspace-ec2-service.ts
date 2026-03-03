@@ -38,6 +38,7 @@ import {
   DescribeRulesCommand,
 } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { randomUUID } from 'node:crypto';
+import type { EventLogger } from './event-logger.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,6 +81,7 @@ export class WorkspaceEc2Service {
   private readonly ec2: EC2Client;
   private readonly elbv2: ElasticLoadBalancingV2Client;
   private readonly config: WorkspaceEc2ServiceConfig;
+  private readonly eventLogger?: EventLogger;
 
   // In-memory cache of session tokens by project ID.
   // On cold start, recovered from instance tags.
@@ -89,10 +91,11 @@ export class WorkspaceEc2Service {
   // Lost on Lambda cold start — recovered via recoverRoutingState().
   private static routingCache = new Map<string, RoutingState>();
 
-  constructor(config: WorkspaceEc2ServiceConfig) {
+  constructor(config: WorkspaceEc2ServiceConfig, eventLogger?: EventLogger) {
     this.config = config;
     this.ec2 = new EC2Client({ region: config.region });
     this.elbv2 = new ElasticLoadBalancingV2Client({ region: config.region });
+    this.eventLogger = eventLogger;
   }
 
   /**
@@ -181,6 +184,8 @@ export class WorkspaceEc2Service {
 
     WorkspaceEc2Service.tokenCache.delete(projectId);
     console.log(`[workspace-ec2] Stopped instance ${info.instanceId} for project ${projectId}`);
+    await this.eventLogger?.emit('workspace.instance.stopped', 'workspace', 'info',
+      `Stopped instance ${info.instanceId}`, { instanceId: info.instanceId });
   }
 
   // ---- Instance lifecycle ----
@@ -238,10 +243,17 @@ export class WorkspaceEc2Service {
         Device: '/dev/sdf',
       }));
       console.log(`[workspace-ec2] Attached volume ${volumeId} to ${instanceId}`);
+      this.eventLogger?.info('workspace', `Attached volume ${volumeId} to ${instanceId}`, { instanceId, volumeId });
     } catch (err) {
       console.error(`[workspace-ec2] Failed to attach volume ${volumeId}:`, err);
+      this.eventLogger?.error('workspace', `Failed to attach volume ${volumeId}`, {
+        instanceId, volumeId, error: err instanceof Error ? err.message : String(err),
+      });
       // Continue — instance can still work without data volume
     }
+
+    await this.eventLogger?.emit('workspace.instance.launched', 'workspace', 'info',
+      `Launched new instance ${instanceId}`, { instanceId, volumeId });
 
     return {
       projectId,
@@ -280,6 +292,8 @@ export class WorkspaceEc2Service {
     }));
 
     console.log(`[workspace-ec2] Resumed instance ${instanceId} for project ${projectId}`);
+    await this.eventLogger?.emit('workspace.instance.resumed', 'workspace', 'info',
+      `Resumed stopped instance ${instanceId}`, { instanceId });
 
     return {
       projectId,
@@ -331,6 +345,7 @@ export class WorkspaceEc2Service {
 
     const volumeId = createResult.VolumeId!;
     console.log(`[workspace-ec2] Created new volume ${volumeId} for ${projectId} in ${az}`);
+    this.eventLogger?.info('workspace', `Created new EBS volume ${volumeId}`, { volumeId, az });
     return volumeId;
   }
 
@@ -360,6 +375,7 @@ export class WorkspaceEc2Service {
     const safeBucket = bucket.replace(/'/g, "'\\''");
     const safeToken = sessionToken.replace(/'/g, "'\\''");
     const safeKey = anthropicKey.replace(/'/g, "'\\''");
+    const eventBusName = process.env.EVENT_BUS_NAME ?? 'antimatter';
 
     return `#!/bin/bash
 set -x
@@ -402,6 +418,7 @@ PORT=8080
 NODE_ENV=production
 AWS_REGION=us-west-2
 AWS_DEFAULT_REGION=us-west-2
+EVENT_BUS_NAME=${eventBusName}
 ENVEOF
 
 # ---- Mount EBS data volume ----
@@ -581,8 +598,12 @@ echo "[workspace] Boot script complete"
       });
 
       console.log(`[workspace-ec2] Created ALB routing for ${projectId}: tg=${tgName}, rule priority=${priority}`);
+      this.eventLogger?.info('workspace', `Created ALB routing for ${projectId}`, { targetGroup: tgName, priority });
     } catch (err) {
       console.error(`[workspace-ec2] Failed to create ALB routing for ${projectId}:`, err);
+      this.eventLogger?.error('workspace', `Failed to create ALB routing`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
       throw err;
     }
   }

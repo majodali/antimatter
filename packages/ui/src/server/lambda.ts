@@ -8,6 +8,11 @@ import { createBuildRouter } from './routes/build.js';
 import { createProjectRouter } from './routes/projects.js';
 import { createTestRouter } from './routes/tests.js';
 import { createWorkspaceRouter } from './routes/workspace.js';
+import { createActivityRouter } from './routes/activity.js';
+import { createGitRouter } from './routes/git.js';
+import { createEventsRouter } from './routes/events.js';
+import { EventLogger } from './services/event-logger.js';
+import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import type { WorkspaceEc2ServiceConfig } from './services/workspace-ec2-service.js';
 
 const app = express();
@@ -42,6 +47,20 @@ app.use((req, res, next) => {
 // S3 client singleton + bucket name from environment
 const s3Client = new S3Client({});
 const projectsBucket = process.env.PROJECTS_BUCKET ?? '';
+const eventBridgeClient = new EventBridgeClient({});
+const eventBusName = process.env.EVENT_BUS_NAME ?? 'antimatter';
+
+/** Create a project-scoped EventLogger for Lambda requests */
+function createEventLogger(projectId: string): EventLogger {
+  return new EventLogger({
+    s3Client,
+    bucket: projectsBucket,
+    source: 'lambda',
+    projectId,
+    eventBridgeClient,
+    eventBusName,
+  });
+}
 
 // API Routes — serverless-express uses event.pathParameters.proxy which strips
 // the API Gateway resource prefix (/api), so we mount at both /api/* (for when
@@ -93,6 +112,32 @@ apiRouter.use('/projects/:projectId/build', (req, res, next) => {
   createBuildRouter(ws)(req, res, next);
 });
 
+// Project-scoped activity log routes — persisted to S3.
+apiRouter.use('/projects/:projectId/activity', (req, res, next) => {
+  const env = new S3WorkspaceEnvironment({
+    s3Client,
+    bucket: projectsBucket,
+    prefix: `projects/${req.params.projectId}/files/`,
+  });
+  const ws = new WorkspaceService({ env });
+  createActivityRouter(ws)(req, res, next);
+});
+
+// Project-scoped git routes — only functional when workspace is running (EC2).
+// On Lambda/S3, execute() throws and routes return 503 gracefully.
+apiRouter.use('/projects/:projectId/git', (req, res, next) => {
+  const env = new S3WorkspaceEnvironment({
+    s3Client,
+    bucket: projectsBucket,
+    prefix: `projects/${req.params.projectId}/files/`,
+  });
+  const ws = new WorkspaceService({ env });
+  createGitRouter(ws)(req, res, next);
+});
+
+// Project-scoped system events — reads JSONL event logs from S3.
+apiRouter.use('/projects/:projectId/events', createEventsRouter(s3Client, projectsBucket));
+
 // --- Workspace EC2 instance routes (project-scoped) ---
 // Manages EC2 instance lifecycle for workspace sessions.
 const workspaceConfig: WorkspaceEc2ServiceConfig | null = process.env.WORKSPACE_LAUNCH_TEMPLATE_ID
@@ -109,7 +154,7 @@ const workspaceConfig: WorkspaceEc2ServiceConfig | null = process.env.WORKSPACE_
   : null;
 
 if (workspaceConfig) {
-  apiRouter.use('/projects/:projectId/workspace', createWorkspaceRouter(workspaceConfig));
+  apiRouter.use('/projects/:projectId/workspace', createWorkspaceRouter(workspaceConfig, createEventLogger));
 }
 
 app.use('/api', apiRouter);

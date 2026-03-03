@@ -32,6 +32,7 @@ interface ProjectStore {
 }
 
 const STORAGE_KEY = 'antimatter-current-project';
+const PROJECTS_CACHE_KEY = 'antimatter-projects-cache';
 
 const SKIP_PATTERNS = [
   'node_modules/',
@@ -47,7 +48,14 @@ const SKIP_PATTERNS = [
 ];
 
 export const useProjectStore = create<ProjectStore>((set, get) => ({
-  projects: [],
+  projects: (() => {
+    try {
+      const cached = localStorage.getItem(PROJECTS_CACHE_KEY);
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  })(),
   currentProjectId: localStorage.getItem(STORAGE_KEY),
   isLoading: false,
   error: null,
@@ -57,6 +65,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const projects = await fetchProjects();
+      localStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify(projects));
       set({ projects, isLoading: false });
     } catch (err) {
       set({
@@ -68,7 +77,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   create: async (name: string) => {
     const project = await createProject(name);
-    set((state) => ({ projects: [...state.projects, project] }));
+    set((state) => {
+      const projects = [...state.projects, project];
+      localStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify(projects));
+      return { projects };
+    });
     return project;
   },
 
@@ -76,6 +89,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     await deleteProject(id);
     set((state) => {
       const projects = state.projects.filter((p) => p.id !== id);
+      localStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify(projects));
       const currentProjectId = state.currentProjectId === id ? null : state.currentProjectId;
       if (currentProjectId === null) {
         localStorage.removeItem(STORAGE_KEY);

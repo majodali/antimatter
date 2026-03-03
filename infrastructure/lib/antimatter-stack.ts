@@ -9,6 +9,7 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as efs from 'aws-cdk-lib/aws-efs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as events from 'aws-cdk-lib/aws-events';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -93,6 +94,14 @@ export class AntimatterStack extends cdk.Stack {
     });
 
     // ==========================================
+    // Events - EventBridge for system events
+    // ==========================================
+
+    const eventBus = new events.EventBus(this, 'EventBus', {
+      eventBusName: 'antimatter',
+    });
+
+    // ==========================================
     // Network - VPC for Lambda + EFS + EC2
     // ==========================================
 
@@ -158,6 +167,15 @@ export class AntimatterStack extends cdk.Stack {
 
     // Grant API Lambda read/write access to the data bucket
     dataBucket.grantReadWrite(apiFunction);
+
+    // Grant API Lambda permission to put events on EventBridge
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['events:PutEvents'],
+      resources: [eventBus.eventBusArn],
+    }));
+
+    // Pass event bus name to API Lambda
+    apiFunction.addEnvironment('EVENT_BUS_NAME', eventBus.eventBusName);
 
     // ==========================================
     // Command Execution - Lambda with EFS
@@ -539,6 +557,11 @@ export class AntimatterStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'WorkspaceAlbDns', {
       value: workspaceAlb.loadBalancerDnsName,
       description: 'ALB DNS name for workspace WebSocket connections',
+    });
+
+    new cdk.CfnOutput(this, 'EventBusName', {
+      value: eventBus.eventBusName,
+      description: 'EventBridge event bus for system events',
     });
   }
 }

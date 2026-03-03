@@ -1,6 +1,8 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { Message } from '@antimatter/agent-framework';
 import type { Identifier } from '@antimatter/project-model';
+import { createProjectStorage } from '@/lib/storePersist';
 
 export interface ChatMessage extends Message {
   id: string;
@@ -28,78 +30,89 @@ interface ChatStore {
   setMessageAgentRole: (id: string, agentRole: string) => void;
 }
 
-export const useChatStore = create<ChatStore>((set, get) => ({
-  messages: [],
-  isTyping: false,
-  currentAgent: 'assistant' as Identifier,
-  streamingMessageId: null,
-  abortController: null,
-  pendingMessage: null,
+export const useChatStore = create<ChatStore>()(
+  persist(
+    (set, get) => ({
+      messages: [],
+      isTyping: false,
+      currentAgent: 'assistant' as Identifier,
+      streamingMessageId: null,
+      abortController: null,
+      pendingMessage: null,
 
-  addMessage: (message) => {
-    const id = Math.random().toString(36).substring(7);
-    set((state) => ({
-      messages: [
-        ...state.messages,
-        {
-          ...message,
-          id,
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    }));
-    return id;
-  },
+      addMessage: (message) => {
+        const id = Math.random().toString(36).substring(7);
+        set((state) => ({
+          messages: [
+            ...state.messages,
+            {
+              ...message,
+              id,
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        }));
+        return id;
+      },
 
-  addStreamingMessage: () => {
-    const id = Math.random().toString(36).substring(7);
-    set((state) => ({
-      streamingMessageId: id,
-      messages: [
-        ...state.messages,
-        {
-          id,
-          role: 'assistant' as const,
-          content: '',
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    }));
-    return id;
-  },
+      addStreamingMessage: () => {
+        const id = Math.random().toString(36).substring(7);
+        set((state) => ({
+          streamingMessageId: id,
+          messages: [
+            ...state.messages,
+            {
+              id,
+              role: 'assistant' as const,
+              content: '',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        }));
+        return id;
+      },
 
-  appendToMessage: (id, delta) =>
-    set((state) => ({
-      messages: state.messages.map((msg) =>
-        msg.id === id ? { ...msg, content: msg.content + delta } : msg,
-      ),
-    })),
+      appendToMessage: (id, delta) =>
+        set((state) => ({
+          messages: state.messages.map((msg) =>
+            msg.id === id ? { ...msg, content: msg.content + delta } : msg,
+          ),
+        })),
 
-  finalizeStreaming: () =>
-    set({ streamingMessageId: null }),
+      finalizeStreaming: () =>
+        set({ streamingMessageId: null }),
 
-  setTyping: (isTyping) => set({ isTyping }),
+      setTyping: (isTyping) => set({ isTyping }),
 
-  setCurrentAgent: (agentId) => set({ currentAgent: agentId }),
+      setCurrentAgent: (agentId) => set({ currentAgent: agentId }),
 
-  clearMessages: () => set({ messages: [], streamingMessageId: null }),
+      clearMessages: () => set({ messages: [], streamingMessageId: null }),
 
-  setAbortController: (controller) => set({ abortController: controller }),
+      setAbortController: (controller) => set({ abortController: controller }),
 
-  cancelChat: () => {
-    const { abortController } = get();
-    if (abortController) {
-      abortController.abort();
-      set({ abortController: null, isTyping: false, streamingMessageId: null });
-    }
-  },
+      cancelChat: () => {
+        const { abortController } = get();
+        if (abortController) {
+          abortController.abort();
+          set({ abortController: null, isTyping: false, streamingMessageId: null });
+        }
+      },
 
-  setPendingMessage: (message) => set({ pendingMessage: message }),
+      setPendingMessage: (message) => set({ pendingMessage: message }),
 
-  setMessageAgentRole: (id, agentRole) =>
-    set((state) => ({
-      messages: state.messages.map((msg) =>
-        msg.id === id ? { ...msg, agentRole } : msg,
-      ),
-    })),
-}));
+      setMessageAgentRole: (id, agentRole) =>
+        set((state) => ({
+          messages: state.messages.map((msg) =>
+            msg.id === id ? { ...msg, agentRole } : msg,
+          ),
+        })),
+    }),
+    {
+      name: 'antimatter-chat',
+      storage: createProjectStorage('chat'),
+      partialize: (state) => ({
+        messages: state.messages,
+      }),
+    },
+  ),
+);

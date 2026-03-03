@@ -461,6 +461,67 @@ If tests fail and code changes are needed, respond with [HANDOFF:implementer] at
     );
   }
 
+  // --- Persistent data (chat history, activity log, build results) ---
+
+  async loadChatHistory(): Promise<any[]> {
+    try {
+      const content = await this.fs.readTextFile('.antimatter/chat-history.json' as WorkspacePath);
+      return JSON.parse(content);
+    } catch {
+      return [];
+    }
+  }
+
+  async saveChatHistory(messages: any[]): Promise<void> {
+    await this.ensureAntimatterDir();
+    await this.fs.writeFile(
+      '.antimatter/chat-history.json' as WorkspacePath,
+      JSON.stringify(messages, null, 2),
+    );
+  }
+
+  async loadActivityLog(): Promise<any[]> {
+    try {
+      const content = await this.fs.readTextFile('.antimatter/activity-log.json' as WorkspacePath);
+      return JSON.parse(content);
+    } catch {
+      return [];
+    }
+  }
+
+  async saveActivityLog(events: any[]): Promise<void> {
+    await this.ensureAntimatterDir();
+    await this.fs.writeFile(
+      '.antimatter/activity-log.json' as WorkspacePath,
+      JSON.stringify(events, null, 2),
+    );
+  }
+
+  async loadBuildResults(): Promise<any[]> {
+    try {
+      const content = await this.fs.readTextFile('.antimatter/build-results.json' as WorkspacePath);
+      return JSON.parse(content);
+    } catch {
+      return [];
+    }
+  }
+
+  async saveBuildResults(results: any[]): Promise<void> {
+    await this.ensureAntimatterDir();
+    await this.fs.writeFile(
+      '.antimatter/build-results.json' as WorkspacePath,
+      JSON.stringify(results, null, 2),
+    );
+  }
+
+  private async ensureAntimatterDir(): Promise<void> {
+    try {
+      await this.fs.mkdir('.antimatter' as WorkspacePath);
+    } catch {
+      // Already exists or can't create — ignore
+    }
+  }
+
   private setupMockResponses(): void {
     // Access the provider for mock setup
     // The agent was built with MockProvider, access it through config

@@ -38,7 +38,9 @@ import {
   EC2Client,
   StopInstancesCommand,
 } from '@aws-sdk/client-ec2';
+import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import { LocalWorkspaceEnvironment } from '@antimatter/workspace';
+import { EventLogger } from './services/event-logger.js';
 import { BuildWatcher } from '@antimatter/build-system';
 import type { BuildRule, BuildResult } from '@antimatter/project-model';
 import { WorkspaceService } from './services/workspace-service.js';
@@ -47,6 +49,9 @@ import { createBuildRouter } from './routes/build.js';
 import { createAgentRouter } from './routes/agent.js';
 import { createDeployRouter } from './routes/deploy.js';
 import { createEnvironmentRouter } from './routes/environments.js';
+import { createActivityRouter } from './routes/activity.js';
+import { createGitRouter } from './routes/git.js';
+import { createEventsRouter } from './routes/events.js';
 import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
 
 // ---------------------------------------------------------------------------
@@ -69,6 +74,20 @@ if (!PROJECT_ID) {
 console.log(`[workspace-server] Starting for project: ${PROJECT_ID}`);
 console.log(`[workspace-server] Workspace root: ${WORKSPACE_ROOT}`);
 console.log(`[workspace-server] S3 bucket: ${PROJECTS_BUCKET}`);
+
+// ---------------------------------------------------------------------------
+// Event Logger — centralized logging to S3 + EventBridge signaling
+// ---------------------------------------------------------------------------
+
+const eventLogger = new EventLogger({
+  s3Client: new S3Client({}),
+  bucket: PROJECTS_BUCKET,
+  source: 'workspace',
+  projectId: PROJECT_ID,
+  eventBridgeClient: new EventBridgeClient({}),
+  eventBusName: process.env.EVENT_BUS_NAME || 'antimatter',
+});
+eventLogger.startPeriodicFlush(10_000);
 
 // ---------------------------------------------------------------------------
 // PTY Manager — shared pseudo-terminal
@@ -175,6 +194,7 @@ class ConnectionManager {
 
   add(ws: WebSocket): void {
     this.connections.add(ws);
+    eventLogger.info('workspace', `Client connected (${this.connections.size} total)`);
     if (this.shutdownTimer) {
       clearTimeout(this.shutdownTimer);
       this.shutdownTimer = null;
@@ -184,10 +204,12 @@ class ConnectionManager {
 
   remove(ws: WebSocket): void {
     this.connections.delete(ws);
+    eventLogger.info('workspace', `Client disconnected (${this.connections.size} remaining)`);
     console.log(`[connections] Client removed (${this.connections.size} remaining)`);
 
     if (this.connections.size === 0) {
       console.log(`[connections] No connections — starting ${IDLE_TIMEOUT_MS / 1000}s shutdown timer`);
+      eventLogger.info('workspace', `No connections — idle shutdown timer started (${IDLE_TIMEOUT_MS / 1000}s)`);
       this.shutdownTimer = setTimeout(async () => {
         console.log('[connections] Idle timeout reached — stopping instance');
         await selfStop();
@@ -357,6 +379,9 @@ async function selfStop(): Promise<void> {
 
     console.log(`[workspace-server] Stopping instance ${instanceId}...`);
 
+    await eventLogger.emit('workspace.idle.shutdown', 'workspace', 'info',
+      `Stopping instance ${instanceId} due to idle timeout`, { instanceId });
+
     const ec2 = new EC2Client({});
     await ec2.send(new StopInstancesCommand({
       InstanceIds: [instanceId],
@@ -427,8 +452,12 @@ async function initialSyncFromS3(projectPath: string): Promise<void> {
     } while (continuationToken);
 
     console.log(`[sync] Downloaded ${downloaded} files from S3`);
+    eventLogger.info('workspace', `S3 sync complete: ${downloaded} files downloaded`, { downloaded });
   } catch (err) {
     console.error('[sync] S3 sync failed:', err);
+    eventLogger.error('workspace', 'S3 initial sync failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     // Continue — workspace can still function with an empty directory
   }
 }
@@ -588,6 +617,9 @@ app.use('/api/deploy', (req, res, next) => {
   )(req, res, next);
 });
 app.use('/api/environments', createEnvironmentRouter(workspace));
+app.use('/api/activity', createActivityRouter(workspace));
+app.use('/api/git', createGitRouter(workspace));
+app.use('/api/events', createEventsRouter(s3Client, PROJECTS_BUCKET, PROJECT_ID));
 
 // ---------------------------------------------------------------------------
 // HTTP + WebSocket server
@@ -735,14 +767,28 @@ async function startup() {
   await buildWatcherManager.start();
 
   // Start HTTP server
-  server.listen(PORT, () => {
+  server.listen(PORT, async () => {
     console.log(`[workspace-server] Listening on port ${PORT}`);
     console.log(`[workspace-server] Project: ${PROJECT_ID}`);
     console.log(`[workspace-server] Project path: ${projectPath}`);
+
+    // Signal that workspace is ready for connections
+    await eventLogger.emit('workspace.ready', 'workspace', 'info',
+      'Workspace server ready', { port: PORT, uptime: process.uptime() });
   });
 }
 
-startup().catch((err) => {
+// Graceful shutdown — flush events before exit
+process.on('SIGTERM', async () => {
+  console.log('[workspace-server] SIGTERM received — shutting down');
+  eventLogger.info('workspace', 'SIGTERM received — shutting down');
+  await eventLogger.shutdown();
+  process.exit(0);
+});
+
+startup().catch(async (err) => {
   console.error('[workspace-server] Fatal startup error:', err);
+  await eventLogger.emit('workspace.error', 'workspace', 'error',
+    'Fatal startup error', { error: err instanceof Error ? err.message : String(err) });
   process.exit(1);
 });

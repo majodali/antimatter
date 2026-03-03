@@ -1,4 +1,4 @@
-import { Moon, Sun, Settings, User, ArrowLeftRight } from 'lucide-react';
+import { Moon, Sun, Settings, User, ChevronDown } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useTheme } from '../theme-provider';
 import { useProjectStore } from '@/stores/projectStore';
@@ -34,28 +34,18 @@ export function Header() {
           Antimatter IDE
         </h1>
         {currentProject && (
-          <span className="text-sm text-muted-foreground">
-            / {currentProject.name}
-          </span>
+          <button
+            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            onClick={handleSwitchProject}
+            title="Switch project"
+          >
+            <span>/ {currentProject.name}</span>
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
         )}
-        <nav className="flex items-center gap-2">
-          <Button variant="ghost" size="sm">
-            Files
-          </Button>
-          <Button variant="ghost" size="sm">
-            Chat
-          </Button>
-          <Button variant="ghost" size="sm">
-            Build
-          </Button>
-        </nav>
       </div>
 
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="sm" onClick={handleSwitchProject} title="Switch Project">
-          <ArrowLeftRight className="h-4 w-4 mr-1" />
-          Switch
-        </Button>
         <Button variant="ghost" size="icon" onClick={toggleTheme}>
           {theme === 'dark' ? (
             <Sun className="h-4 w-4" />

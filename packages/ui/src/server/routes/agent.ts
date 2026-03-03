@@ -121,6 +121,32 @@ export function createAgentRouter(workspace: WorkspaceService): Router {
     }
   });
 
+  // Load persisted chat history from storage
+  router.get('/chat/history', async (_req, res) => {
+    try {
+      const messages = await workspace.loadChatHistory();
+      res.json({ messages });
+    } catch (error) {
+      console.error('Failed to load chat history:', error);
+      res.status(500).json({ error: 'Failed to load chat history' });
+    }
+  });
+
+  // Save chat history to persistent storage
+  router.put('/chat/history', async (req, res) => {
+    try {
+      const { messages } = req.body;
+      if (!Array.isArray(messages)) {
+        return res.status(400).json({ error: 'messages must be an array' });
+      }
+      await workspace.saveChatHistory(messages);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Failed to save chat history:', error);
+      res.status(500).json({ error: 'Failed to save chat history' });
+    }
+  });
+
   // Save custom tool definitions
   router.put('/tools', async (req, res) => {
     try {

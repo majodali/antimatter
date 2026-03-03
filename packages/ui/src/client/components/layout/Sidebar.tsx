@@ -1,18 +1,20 @@
 import { useState } from 'react';
-import { FileText, MessageSquare, Folder, Hammer, Rocket, ScrollText } from 'lucide-react';
+import { MessageSquare, Folder, Hammer, Rocket, ScrollText, GitBranch } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Separator } from '../ui/separator';
 import { FileExplorer } from '../file-explorer/FileExplorer';
-import { ChatPanel } from '../chat/ChatPanel';
 import { BuildPanel } from '../build/BuildPanel';
 import { DeployPanel } from '../deploy/DeployPanel';
 import { ActivityPanel } from '../activity/ActivityPanel';
+import { GitPanel } from '../git/GitPanel';
+import { useUIStore } from '@/stores/uiStore';
 
-type SidebarView = 'files' | 'chat' | 'docs' | 'build' | 'deploy' | 'activity';
+type SidebarView = 'files' | 'build' | 'deploy' | 'git' | 'activity';
 
 export function Sidebar() {
   const [activeView, setActiveView] = useState<SidebarView>('files');
+  const chatPanelVisible = useUIStore((s) => s.chatPanelVisible);
 
   return (
     <div className="h-full flex">
@@ -32,21 +34,12 @@ export function Sidebar() {
           variant="ghost"
           size="icon"
           className={cn(
-            activeView === 'chat' && 'bg-accent text-accent-foreground'
+            chatPanelVisible && 'bg-accent text-accent-foreground'
           )}
-          onClick={() => setActiveView('chat')}
+          onClick={() => useUIStore.getState().toggleChatPanel()}
+          title="Toggle chat panel"
         >
           <MessageSquare className="h-5 w-5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn(
-            activeView === 'docs' && 'bg-accent text-accent-foreground'
-          )}
-          onClick={() => setActiveView('docs')}
-        >
-          <FileText className="h-5 w-5" />
         </Button>
         <Button
           variant="ghost"
@@ -72,6 +65,16 @@ export function Sidebar() {
           variant="ghost"
           size="icon"
           className={cn(
+            activeView === 'git' && 'bg-accent text-accent-foreground'
+          )}
+          onClick={() => setActiveView('git')}
+        >
+          <GitBranch className="h-5 w-5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
             activeView === 'activity' && 'bg-accent text-accent-foreground'
           )}
           onClick={() => setActiveView('activity')}
@@ -85,17 +88,9 @@ export function Sidebar() {
       {/* Content area */}
       <div className="flex-1 overflow-hidden">
         {activeView === 'files' && <FileExplorer />}
-        {activeView === 'chat' && <ChatPanel />}
-        {activeView === 'docs' && (
-          <div className="p-4">
-            <h3 className="text-sm font-medium">Documentation</h3>
-            <p className="text-xs text-muted-foreground mt-2">
-              Coming soon...
-            </p>
-          </div>
-        )}
         {activeView === 'build' && <BuildPanel />}
         {activeView === 'deploy' && <DeployPanel />}
+        {activeView === 'git' && <GitPanel />}
         {activeView === 'activity' && <ActivityPanel />}
       </div>
     </div>
