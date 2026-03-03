@@ -27,6 +27,9 @@ export { AwsLambdaInvoker } from './lambda-invoker.js';
 export { MemoryWorkspaceEnvironment } from './memory-workspace-environment.js';
 export type { MemoryWorkspaceEnvironmentOptions } from './memory-workspace-environment.js';
 
+export { FargateWorkspaceEnvironment } from './fargate-workspace-environment.js';
+export type { FargateWorkspaceEnvironmentOptions } from './fargate-workspace-environment.js';
+
 // Adapter
 export { WorkspaceEnvironmentRunnerAdapter } from './runner-adapter.js';
 

@@ -12,7 +12,9 @@ import { createDeployRouter } from './routes/deploy.js';
 import { createEnvironmentRouter } from './routes/environments.js';
 import { createProjectRouter } from './routes/projects.js';
 import { createTestRouter } from './routes/tests.js';
+import { createWorkspaceRouter } from './routes/workspace.js';
 import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
+import type { WorkspaceContainerServiceConfig } from './services/workspace-container-service.js';
 
 const app = express();
 
@@ -68,6 +70,17 @@ apiRouter.use('/build', createBuildRouter(workspace));
 apiRouter.use('/agent', createAgentRouter(workspace));
 apiRouter.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Config endpoint — serves runtime URLs to the frontend
+apiRouter.get('/config', (_req, res) => {
+  res.json({
+    commandUrl: process.env.COMMAND_FUNCTION_URL || null,
+    // WebSocket base URL for workspace containers — CloudFront proxies /ws/* to ALB
+    wsBaseUrl: process.env.WORKSPACE_ALB_DNS
+      ? `wss://${process.env.WORKSPACE_ALB_DNS}`
+      : null,
+  });
 });
 
 // Project CRUD routes
@@ -176,6 +189,25 @@ apiRouter.use('/projects/:projectId/deploy', (req, res, next) => {
 apiRouter.use('/projects/:projectId/environments', (req, res, next) => {
   createEnvironmentRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
 });
+
+// --- Workspace container routes (project-scoped) ---
+// Manages Fargate container lifecycle for interactive terminal sessions.
+const workspaceConfig: WorkspaceContainerServiceConfig | null = process.env.ECS_CLUSTER_ARN
+  ? {
+      clusterArn: process.env.ECS_CLUSTER_ARN,
+      taskDefArn: process.env.WORKSPACE_TASK_DEF_ARN ?? '',
+      subnetIds: (process.env.WORKSPACE_SUBNET_IDS ?? '').split(',').filter(Boolean),
+      securityGroupId: process.env.WORKSPACE_SG_ID ?? '',
+      listenerArn: process.env.ALB_LISTENER_ARN ?? '',
+      vpcId: process.env.VPC_ID ?? '',
+      albDns: process.env.WORKSPACE_ALB_DNS ?? '',
+      projectsBucket,
+    }
+  : null;
+
+if (workspaceConfig) {
+  apiRouter.use('/projects/:projectId/workspace', createWorkspaceRouter(workspaceConfig));
+}
 
 app.use('/api', apiRouter);
 app.use('/', apiRouter);

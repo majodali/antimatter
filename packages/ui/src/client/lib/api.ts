@@ -391,3 +391,118 @@ export async function fetchDeployResults(projectId?: string): Promise<any[]> {
   const { results } = await apiFetch<{ results: any[] }>(`${deployBase(projectId)}/results`);
   return results;
 }
+
+// ---------------------------------------------------------------------------
+// Runtime Config — fetched once to get direct Lambda URLs
+// ---------------------------------------------------------------------------
+
+interface RuntimeConfig {
+  commandUrl: string | null;
+  wsBaseUrl: string | null;
+}
+
+let cachedConfig: RuntimeConfig | undefined;
+
+async function getRuntimeConfig(): Promise<RuntimeConfig> {
+  if (cachedConfig !== undefined) return cachedConfig;
+  try {
+    const config = await apiFetch<RuntimeConfig>('/api/config');
+    cachedConfig = {
+      commandUrl: config.commandUrl ?? null,
+      wsBaseUrl: config.wsBaseUrl ?? null,
+    };
+  } catch {
+    cachedConfig = { commandUrl: null, wsBaseUrl: null };
+  }
+  return cachedConfig;
+}
+
+async function getCommandUrl(): Promise<string | null> {
+  return (await getRuntimeConfig()).commandUrl;
+}
+
+// ---------------------------------------------------------------------------
+// Command Execution API — runs commands on the Command Lambda via EFS
+// ---------------------------------------------------------------------------
+
+export interface CommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+}
+
+export async function executeProjectCommand(
+  projectId: string,
+  command: string,
+  options?: { syncAfter?: boolean },
+): Promise<CommandResult> {
+  // Use direct Lambda Function URL (15-min timeout) when available,
+  // fall back to API Gateway path (29-second timeout).
+  const commandUrl = await getCommandUrl();
+  const baseUrl = commandUrl
+    ? `${commandUrl}projects/${encodeURIComponent(projectId)}/exec`
+    : `/api/commands/projects/${encodeURIComponent(projectId)}/exec`;
+
+  const res = await fetch(baseUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      command,
+      syncBefore: true,
+      syncAfter: options?.syncAfter ?? true,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    const msg = (body as any).message ?? (body as any).error ?? res.statusText;
+    throw new Error(msg);
+  }
+
+  return res.json() as Promise<CommandResult>;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace Container API — manages Fargate workspace lifecycle
+// ---------------------------------------------------------------------------
+
+export interface WorkspaceContainerInfo {
+  projectId: string;
+  taskArn: string;
+  status: 'PROVISIONING' | 'PENDING' | 'RUNNING' | 'DEPROVISIONING' | 'STOPPED' | 'UNKNOWN';
+  privateIp?: string;
+  port: number;
+  sessionToken: string;
+  startedAt?: string;
+}
+
+export async function startWorkspace(projectId: string): Promise<WorkspaceContainerInfo> {
+  return apiFetch<WorkspaceContainerInfo>(
+    `/api/projects/${encodeURIComponent(projectId)}/workspace/start`,
+    { method: 'POST' },
+  );
+}
+
+export async function getWorkspaceStatus(projectId: string): Promise<WorkspaceContainerInfo> {
+  return apiFetch<WorkspaceContainerInfo>(
+    `/api/projects/${encodeURIComponent(projectId)}/workspace/status`,
+  );
+}
+
+export async function stopWorkspace(projectId: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(
+    `/api/projects/${encodeURIComponent(projectId)}/workspace/stop`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * Get the WebSocket URL for connecting to a workspace terminal.
+ * Uses the CloudFront distribution which proxies /ws/* to the ALB.
+ */
+export async function getWorkspaceWsUrl(projectId: string, sessionToken: string): Promise<string> {
+  // WebSocket goes through CloudFront /ws/* → ALB → container
+  // Using relative URL so it automatically uses the CloudFront host
+  return `/ws/terminal/${encodeURIComponent(projectId)}?token=${encodeURIComponent(sessionToken)}`;
+}

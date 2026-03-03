@@ -1,12 +1,13 @@
 import type { TestDef, TestResult, TestRunResponse } from './test-types.js';
 import { getSmokeTests } from './smoke-tests.js';
 import { getFunctionalTests } from './functional-tests.js';
+import { getWorkspaceTests } from './workspace-tests.js';
 import { FetchActionContext } from './action-context.js';
 
 const DEFAULT_API_BASE = 'https://cxpofzihnl.execute-api.us-west-2.amazonaws.com/prod';
 const DEFAULT_FRONTEND_BASE = 'https://d33wyunpiwy2df.cloudfront.net';
 
-type SuiteFilter = 'smoke' | 'functional' | 'all';
+type SuiteFilter = 'smoke' | 'functional' | 'workspace' | 'all';
 
 export async function runTests(
   suite: SuiteFilter = 'all',
@@ -22,6 +23,13 @@ export async function runTests(
   // Collect smoke tests
   if (suite === 'smoke' || suite === 'all') {
     tests.push(...getSmokeTests(api, frontend));
+  }
+
+  // Collect workspace tests (separate suite — too slow for API Gateway timeout)
+  // Note: 'all' does NOT include workspace tests to avoid API Gateway 29s timeout.
+  // Run workspace tests explicitly with suite='workspace'.
+  if (suite === 'workspace') {
+    tests.push(...getWorkspaceTests(api));
   }
 
   // Collect functional tests (needs a dedicated project)

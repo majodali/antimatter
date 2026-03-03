@@ -14,7 +14,7 @@ import { EfsWorkspaceEnvironment } from '@antimatter/workspace';
 
 const EFS_MOUNT_PATH = process.env.EFS_MOUNT_PATH || '/mnt/projects';
 const PROJECTS_BUCKET = process.env.PROJECTS_BUCKET || '';
-const MAX_EXEC_TIMEOUT_MS = 60_000;
+const MAX_EXEC_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 // Shared S3 client for sync operations
 const s3Client = new S3Client({});
@@ -256,7 +256,7 @@ router.post('/projects/:projectId/exec', async (req, res) => {
     command,
     args = [],
     cwd,
-    timeout = 30_000,
+    timeout = 5 * 60 * 1000,
     syncBefore = true,
     syncAfter = false,
   } = req.body as {

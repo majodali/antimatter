@@ -9,7 +9,7 @@ export function createTestRouter(): Router {
       const { apiBase, frontendBase, suite } = req.body as {
         apiBase?: string;
         frontendBase?: string;
-        suite?: 'smoke' | 'functional' | 'all';
+        suite?: 'smoke' | 'functional' | 'workspace' | 'all';
       };
       const response = await runTests(suite ?? 'all', apiBase, frontendBase);
       res.json(response);

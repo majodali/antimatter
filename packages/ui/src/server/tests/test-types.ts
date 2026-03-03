@@ -1,4 +1,4 @@
-export type Suite = 'smoke' | 'functional';
+export type Suite = 'smoke' | 'functional' | 'workspace';
 
 export interface TestResult {
   name: string;
