@@ -5,6 +5,7 @@ import { useProjectStore } from '@/stores/projectStore';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useChatStore } from '@/stores/chatStore';
+import { useTerminalStore } from '@/stores/terminalStore';
 
 export function Header() {
   const { theme, setTheme } = useTheme();
@@ -16,6 +17,8 @@ export function Header() {
   };
 
   const handleSwitchProject = () => {
+    // Disconnect workspace terminal before clearing state
+    useTerminalStore.getState().disconnect();
     // Clear workspace state when switching projects
     useFileStore.getState().setFiles([]);
     useFileStore.getState().selectFile(null as any);

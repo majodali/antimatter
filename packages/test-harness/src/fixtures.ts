@@ -1,10 +1,9 @@
 import type { FileSystem, WorkspacePath } from '@antimatter/filesystem';
-import type { BuildRule, BuildTarget } from '@antimatter/project-model';
+import type { BuildRule } from '@antimatter/project-model';
 
 export interface ProjectFixture {
   readonly files: ReadonlyMap<string, string>;
-  readonly rules: ReadonlyMap<string, BuildRule>;
-  readonly targets: readonly BuildTarget[];
+  readonly rules: readonly BuildRule[];
 }
 
 /**
@@ -127,42 +126,23 @@ describe('math', () => {
     await fs.writeFile(path as WorkspacePath, content);
   }
 
-  const rules = new Map<string, BuildRule>([
-    [
-      'compile-ts',
-      {
-        id: 'compile-ts',
-        name: 'Compile TypeScript',
-        inputs: ['src/**/*.ts'],
-        outputs: ['dist/**/*.js'],
-        command: 'tsc',
-      },
-    ],
-    [
-      'run-tests',
-      {
-        id: 'run-tests',
-        name: 'Run Tests',
-        inputs: ['src/**/*.ts', 'tests/**/*.spec.ts'],
-        outputs: [],
-        command: 'vitest run',
-      },
-    ],
-  ]);
-
-  const targets: BuildTarget[] = [
+  const rules: BuildRule[] = [
     {
-      id: 'build',
-      ruleId: 'compile-ts',
-      moduleId: 'demo-project',
+      id: 'compile-ts',
+      name: 'Compile TypeScript',
+      inputs: ['src/**/*.ts'],
+      outputs: ['dist/**/*.js'],
+      command: 'tsc',
     },
     {
-      id: 'test',
-      ruleId: 'run-tests',
-      moduleId: 'demo-project',
-      dependsOn: ['build'],
+      id: 'run-tests',
+      name: 'Run Tests',
+      inputs: ['src/**/*.ts', 'tests/**/*.spec.ts'],
+      outputs: [],
+      command: 'vitest run',
+      dependsOn: ['compile-ts'],
     },
   ];
 
-  return { files, rules, targets };
+  return { files, rules };
 }

@@ -1,38 +1,26 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { Hammer, Play, Trash2, Settings, Eye, EyeOff } from 'lucide-react';
+import { useEffect } from 'react';
+import { Hammer, Settings } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { BuildStatusItem } from './BuildStatusItem';
 import { BuildConfigEditor } from './BuildConfigEditor';
 import { useBuildStore } from '@/stores/buildStore';
 import { useProjectStore } from '@/stores/projectStore';
-import {
-  fetchBuildResults,
-  executeBuildStreaming,
-  fetchBuildChanges,
-} from '@/lib/api';
+import { fetchBuildResults } from '@/lib/api';
 import { onBuildUpdate } from '@/lib/ws';
 import { eventLog } from '@/lib/eventLog';
 
 export function BuildPanel() {
   const {
-    targets,
     rules,
     results,
     configMode,
-    watchMode,
     setResults,
     setResult,
-    clearResults,
-    appendOutput,
-    clearOutput,
     setConfigMode,
-    toggleWatchMode,
     loadConfig,
   } = useBuildStore();
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const [isRunning, setIsRunning] = useState(false);
-  const watchIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load config and initial results on mount
   useEffect(() => {
@@ -44,7 +32,7 @@ export function BuildPanel() {
 
     const unsub = onBuildUpdate((payload) => {
       setResult({
-        targetId: payload.targetId,
+        ruleId: payload.ruleId,
         status: payload.status as any,
         startedAt: new Date().toISOString(),
         finishedAt: payload.status !== 'running' ? new Date().toISOString() : (undefined as any),
@@ -55,98 +43,11 @@ export function BuildPanel() {
     return unsub;
   }, [currentProjectId]);
 
-  // Watch mode polling
-  useEffect(() => {
-    if (watchMode && !isRunning) {
-      watchIntervalRef.current = setInterval(async () => {
-        try {
-          const stale = await fetchBuildChanges(currentProjectId ?? undefined);
-          if (stale.length > 0) {
-            handleRunAll();
-          }
-        } catch (err) {
-          eventLog.error('build', 'Watch poll failed', String(err));
-        }
-      }, 5000);
-    }
-
-    return () => {
-      if (watchIntervalRef.current) {
-        clearInterval(watchIntervalRef.current);
-        watchIntervalRef.current = null;
-      }
-    };
-  }, [watchMode, isRunning, currentProjectId]);
-
-  const handleRunAll = useCallback(async () => {
-    if (isRunning) return;
-    setIsRunning(true);
-    clearOutput();
-    eventLog.info('build', 'Build started');
-    try {
-      const targetList = Array.from(targets.values());
-      const ruleList = Array.from(rules.values());
-
-      // Use streaming API
-      await executeBuildStreaming(
-        targetList,
-        ruleList,
-        (event) => {
-          switch (event.type) {
-            case 'target-started':
-              if (event.targetId) {
-                setResult({
-                  targetId: event.targetId,
-                  status: 'running',
-                  startedAt: event.timestamp || new Date().toISOString(),
-                  diagnostics: [],
-                });
-              }
-              break;
-            case 'target-output':
-              if (event.targetId && event.line) {
-                appendOutput(event.targetId, event.line);
-                // Write to terminal if available
-                const term = (window as any).__terminal;
-                if (term) {
-                  term.writeln(event.line);
-                }
-              }
-              break;
-            case 'target-completed':
-              if (event.result) {
-                setResult(event.result);
-              }
-              break;
-            case 'build-complete':
-              if (event.results) {
-                setResults(event.results);
-              }
-              break;
-            case 'build-error':
-              eventLog.error('build', 'Build error', event.error);
-              break;
-          }
-        },
-        currentProjectId ?? undefined,
-      );
-    } catch (err) {
-      eventLog.error('build', 'Build failed', String(err));
-    } finally {
-      eventLog.info('build', 'Build complete');
-      setIsRunning(false);
-    }
-  }, [isRunning, targets, rules, currentProjectId]);
-
-  const handleClear = () => {
-    clearResults();
-  };
-
-  const runningCount = Array.from(results.values()).filter((r) => r.status === 'running').length;
   const successCount = Array.from(results.values()).filter(
     (r) => r.status === 'success' || r.status === 'cached',
   ).length;
   const failureCount = Array.from(results.values()).filter((r) => r.status === 'failure').length;
+  const runningCount = Array.from(results.values()).filter((r) => r.status === 'running').length;
 
   return (
     <div className="h-full flex flex-col bg-card">
@@ -165,43 +66,11 @@ export function BuildPanel() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7"
-            onClick={toggleWatchMode}
-            title={watchMode ? 'Disable watch mode' : 'Enable watch mode'}
-          >
-            {watchMode ? (
-              <EyeOff className="h-3.5 w-3.5 text-primary" />
-            ) : (
-              <Eye className="h-3.5 w-3.5" />
-            )}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
             className={`h-7 w-7 ${configMode ? 'bg-accent' : ''}`}
             onClick={() => setConfigMode(!configMode)}
             title="Configure builds"
           >
             <Settings className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={handleRunAll}
-            disabled={isRunning}
-            title="Run all targets"
-          >
-            <Play className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={handleClear}
-            title="Clear results"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
@@ -226,9 +95,6 @@ export function BuildPanel() {
                   <span className="text-red-600 dark:text-red-500">&#10007;</span>
                   <span className="font-medium">{failureCount}</span>
                 </div>
-                {watchMode && (
-                  <span className="text-xs text-primary ml-auto">Watch active</span>
-                )}
               </div>
             </div>
           )}
@@ -240,9 +106,9 @@ export function BuildPanel() {
                 <Hammer className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
                 <p className="text-sm text-muted-foreground">No build results yet</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {targets.size === 0
-                    ? 'Click the gear icon to configure build targets'
-                    : 'Click the play button to run builds'}
+                  {rules.size === 0
+                    ? 'Click the gear icon to configure build rules'
+                    : 'Builds run automatically when files change'}
                 </p>
               </div>
             ) : (
@@ -260,13 +126,12 @@ export function BuildPanel() {
                     return (priority[a.status] ?? 6) - (priority[b.status] ?? 6);
                   })
                   .map((result) => {
-                    const target = targets.get(result.targetId);
-                    const rule = target && rules.get(target.ruleId);
+                    const rule = rules.get(result.ruleId);
                     return (
                       <BuildStatusItem
-                        key={result.targetId}
+                        key={result.ruleId}
                         result={result}
-                        targetName={rule?.name}
+                        ruleName={rule?.name}
                       />
                     );
                   })}

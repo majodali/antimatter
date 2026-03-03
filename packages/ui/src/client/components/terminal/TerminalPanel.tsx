@@ -91,7 +91,7 @@ export function TerminalPanel() {
         term.writeln('\x1b[1;32m=== Antimatter Terminal ===\x1b[0m');
         term.writeln('');
         if (currentProjectId) {
-          term.writeln('\x1b[36mClick "Start" to launch an interactive workspace terminal.\x1b[0m');
+          term.writeln('\x1b[36mConnecting to workspace...\x1b[0m');
         } else {
           term.writeln('\x1b[36mSelect a project to start a workspace terminal.\x1b[0m');
         }
@@ -285,7 +285,7 @@ export function TerminalPanel() {
                     ? 'Running...'
                     : connectionState === 'starting'
                       ? 'Container starting...'
-                      : 'Type a command (or click Start for interactive terminal)...'
+                      : 'Type a command (workspace auto-connects on project open)...'
                 }
                 className="flex-1 bg-transparent text-xs font-mono outline-none placeholder:text-muted-foreground disabled:opacity-50"
                 autoComplete="off"

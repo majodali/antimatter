@@ -7,11 +7,11 @@
  *
  * Correspondence with deployed tests:
  *   Save/load config       ↔ FT: Save Build Config, Load Build Config
- *   Config persistence      ↔ FT: Config Persists Rule Reference
+ *   Config persistence      ↔ FT: Config Persists Rule Dependencies
  *   Execute build           ↔ FT: Execute Build
  *   Result shape            ↔ FT: Build Result Shape
  *   Diagnostics shape       ↔ FT: Build Diagnostics Shape
- *   Stale target detection  ↔ FT: Stale Target Detection
+ *   Stale rule detection    ↔ FT: Stale Rule Detection
  *   Clear cache             ↔ FT: Clear Build Cache
  *   Clear results           ↔ FT: Clear Build Results
  */
@@ -35,32 +35,35 @@ describe('Functional: Build System', () => {
       outputs: ['dist/**/*.js'],
       command: 'echo compiled',
     };
-    const testTarget = {
-      id: 'target-ft',
-      ruleId: 'rule-ft',
-      moduleId: 'mod-ft',
-    };
 
     it('should save build config', async () => {
-      await harness.saveBuildConfig({ rules: [testRule], targets: [testTarget] });
+      await harness.saveBuildConfig({ rules: [testRule] });
       // Verify file was written
       expect(await harness.fileExists('.antimatter/build.json')).toBe(true);
     });
 
     // ↔ FT: Load Build Config
     it('should load saved build config', async () => {
-      await harness.saveBuildConfig({ rules: [testRule], targets: [testTarget] });
+      await harness.saveBuildConfig({ rules: [testRule] });
       const config = await harness.loadBuildConfig();
       expect(config.rules).toHaveLength(1);
       expect(config.rules[0].name).toBe('compile-test');
     });
 
-    // ↔ FT: Config Persists Rule Reference
-    it('should preserve target-to-rule references', async () => {
-      await harness.saveBuildConfig({ rules: [testRule], targets: [testTarget] });
+    // ↔ FT: Config Persists Rule Dependencies
+    it('should preserve rule dependencies', async () => {
+      const depRule = {
+        id: 'rule-dep',
+        name: 'run-tests',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'vitest run',
+        dependsOn: ['rule-ft'],
+      };
+      await harness.saveBuildConfig({ rules: [testRule, depRule] });
       const config = await harness.loadBuildConfig();
-      expect(config.targets).toHaveLength(1);
-      expect(config.targets[0].ruleId).toBe(testRule.id);
+      expect(config.rules).toHaveLength(2);
+      expect(config.rules[1].dependsOn).toEqual(['rule-ft']);
     });
   });
 
@@ -68,33 +71,33 @@ describe('Functional: Build System', () => {
   describe('build execution', () => {
     it('should execute a build successfully', async () => {
       setupSuccessfulBuild(harness.runner);
-      const results = await harness.executeBuild([harness.fixture.targets[0]]);
-      const buildResult = results.get('build');
+      const results = await harness.executeBuild([harness.fixture.rules[0]]);
+      const buildResult = results.get('compile-ts');
       expect(buildResult).toBeDefined();
       expect(buildResult!.status).toBe('success');
     });
 
     // ↔ FT: Build Result Shape
-    it('should return results with targetId and status', async () => {
+    it('should return results with ruleId and status', async () => {
       setupSuccessfulBuild(harness.runner);
-      const results = await harness.executeBuild([harness.fixture.targets[0]]);
-      const buildResult = results.get('build')!;
+      const results = await harness.executeBuild([harness.fixture.rules[0]]);
+      const buildResult = results.get('compile-ts')!;
       expect(typeof buildResult.status).toBe('string');
       expect(Array.isArray(buildResult.diagnostics)).toBe(true);
     });
 
     it('should track build results for retrieval', async () => {
       setupSuccessfulBuild(harness.runner);
-      await harness.executeBuild([harness.fixture.targets[0]]);
+      await harness.executeBuild([harness.fixture.rules[0]]);
       const stored = harness.getBuildResults();
       expect(stored.length).toBeGreaterThanOrEqual(1);
-      expect(stored[0].targetId).toBe('build');
+      expect(stored[0].ruleId).toBe('compile-ts');
       expect(stored[0].status).toBe('success');
     });
 
     it('should report correct build command execution', async () => {
       setupSuccessfulBuild(harness.runner);
-      await harness.executeBuild([harness.fixture.targets[0]]);
+      await harness.executeBuild([harness.fixture.rules[0]]);
       const commands = harness.runner.getExecutedCommands();
       expect(commands).toHaveLength(1);
       expect(commands[0].command).toBe('tsc');
@@ -106,8 +109,8 @@ describe('Functional: Build System', () => {
     it('should report diagnostics for bad code', async () => {
       setupBuildWithErrors(harness.runner);
       await harness.writeFile('src/index.ts', 'import { foo } from "./math";');
-      const results = await harness.executeBuild([harness.fixture.targets[0]]);
-      const buildResult = results.get('build')!;
+      const results = await harness.executeBuild([harness.fixture.rules[0]]);
+      const buildResult = results.get('compile-ts')!;
       expect(buildResult.status).toBe('failure');
       expect(buildResult.diagnostics.length).toBeGreaterThan(0);
       expect(buildResult.diagnostics[0].file).toBe('src/index.ts');
@@ -116,18 +119,18 @@ describe('Functional: Build System', () => {
     });
   });
 
-  // ↔ FT: Stale Target Detection
+  // ↔ FT: Stale Rule Detection
   describe('stale detection', () => {
-    it('should detect stale targets after file changes', async () => {
+    it('should detect stale rules after file changes', async () => {
       setupSuccessfulBuild(harness.runner);
       // Build to establish cache baseline
-      await harness.executeBuild([harness.fixture.targets[0]]);
+      await harness.executeBuild([harness.fixture.rules[0]]);
       // Modify a source file
       await harness.writeFile('src/new.ts', 'export const x = 1;');
       // Rebuild should execute (not use cache)
       harness.runner.clearHistory();
-      const results = await harness.executeBuild([harness.fixture.targets[0]]);
-      expect(results.get('build')!.status).toBe('success');
+      const results = await harness.executeBuild([harness.fixture.rules[0]]);
+      expect(results.get('compile-ts')!.status).toBe('success');
       expect(harness.runner.getExecutedCommands()).toHaveLength(1);
     });
   });
@@ -136,20 +139,20 @@ describe('Functional: Build System', () => {
   describe('cache behavior', () => {
     it('should use cache for unchanged files', async () => {
       setupSuccessfulBuild(harness.runner);
-      await harness.executeBuild([harness.fixture.targets[0]]);
+      await harness.executeBuild([harness.fixture.rules[0]]);
       harness.runner.clearHistory();
-      const results = await harness.executeBuild([harness.fixture.targets[0]]);
-      expect(results.get('build')!.status).toBe('cached');
+      const results = await harness.executeBuild([harness.fixture.rules[0]]);
+      expect(results.get('compile-ts')!.status).toBe('cached');
       expect(harness.runner.getExecutedCommands()).toHaveLength(0);
     });
 
     it('should rebuild after file change', async () => {
       setupSuccessfulBuild(harness.runner);
-      await harness.executeBuild([harness.fixture.targets[0]]);
+      await harness.executeBuild([harness.fixture.rules[0]]);
       harness.runner.clearHistory();
       await harness.writeFile('src/index.ts', 'export const changed = true;');
-      const results = await harness.executeBuild([harness.fixture.targets[0]]);
-      expect(results.get('build')!.status).toBe('success');
+      const results = await harness.executeBuild([harness.fixture.rules[0]]);
+      expect(results.get('compile-ts')!.status).toBe('success');
       expect(harness.runner.getExecutedCommands()).toHaveLength(1);
     });
   });
@@ -158,7 +161,7 @@ describe('Functional: Build System', () => {
   describe('result management', () => {
     it('should clear build results', async () => {
       setupSuccessfulBuild(harness.runner);
-      await harness.executeBuild([harness.fixture.targets[0]]);
+      await harness.executeBuild([harness.fixture.rules[0]]);
       expect(harness.getBuildResults().length).toBeGreaterThan(0);
       harness.clearBuildResults();
       expect(harness.getBuildResults()).toHaveLength(0);

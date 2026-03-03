@@ -113,7 +113,7 @@ function subscribe(type: WsEventType, callback: Listener): () => void {
   };
 }
 
-export function onBuildUpdate(callback: (payload: { targetId: string; status: string }) => void) {
+export function onBuildUpdate(callback: (payload: { ruleId: string; status: string }) => void) {
   return subscribe('build-update', callback as Listener);
 }
 

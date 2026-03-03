@@ -2,7 +2,6 @@ import type {
   Identifier,
   Timestamp,
   BuildRule,
-  BuildTarget,
   Hash,
 } from '@antimatter/project-model';
 import type { FileSystem } from '@antimatter/filesystem';
@@ -14,7 +13,7 @@ import type { ToolRunner } from '@antimatter/tool-integration';
 export class BuildExecutionError extends Error {
   constructor(
     message: string,
-    public readonly targetId: Identifier,
+    public readonly ruleId: Identifier,
     public readonly reason:
       | 'dependency-failed'
       | 'execution-failed'
@@ -51,11 +50,9 @@ export interface BuildContext {
   readonly fs: FileSystem;
   /** Tool runner for executing commands */
   readonly runner: ToolRunner;
-  /** Map of build rules by ID */
-  readonly rules: ReadonlyMap<Identifier, BuildRule>;
   /** Optional cache directory (defaults to .antimatter-cache) */
   readonly cacheDir?: string;
-  /** Maximum number of parallel target executions (default: 4) */
+  /** Maximum number of parallel rule executions (default: 4) */
   readonly maxConcurrency?: number;
   /** Progress callback for streaming build events */
   readonly onProgress?: (event: BuildProgressEvent) => void;
@@ -63,19 +60,19 @@ export interface BuildContext {
 
 /** Events emitted during build execution for streaming progress. */
 export type BuildProgressEvent =
-  | { readonly type: 'target-started'; readonly targetId: Identifier; readonly timestamp: string }
-  | { readonly type: 'target-output'; readonly targetId: Identifier; readonly line: string }
-  | { readonly type: 'target-completed'; readonly targetId: Identifier; readonly result: import('@antimatter/project-model').BuildResult }
+  | { readonly type: 'rule-started'; readonly ruleId: Identifier; readonly timestamp: string }
+  | { readonly type: 'rule-output'; readonly ruleId: Identifier; readonly line: string }
+  | { readonly type: 'rule-completed'; readonly ruleId: Identifier; readonly result: import('@antimatter/project-model').BuildResult }
 
 /**
- * Execution plan with topologically sorted targets.
+ * Execution plan with topologically sorted rules.
  * @internal
  */
 export interface ExecutionPlan {
-  /** Targets in execution order (dependencies first) */
-  readonly targets: readonly BuildTarget[];
-  /** Targets grouped by wave — all targets in a wave can run in parallel */
-  readonly levels: readonly (readonly BuildTarget[])[];
+  /** Rules in execution order (dependencies first) */
+  readonly rules: readonly BuildRule[];
+  /** Rules grouped by wave — all rules in a wave can run in parallel */
+  readonly levels: readonly (readonly BuildRule[])[];
 }
 
 /**
@@ -83,8 +80,8 @@ export interface ExecutionPlan {
  * @internal
  */
 export interface CacheEntry {
-  /** Target ID this cache belongs to */
-  readonly targetId: Identifier;
+  /** Rule ID this cache belongs to */
+  readonly ruleId: Identifier;
   /** Input file hashes: path -> hash */
   readonly inputHashes: ReadonlyMap<string, Hash>;
   /** Output file hashes: path -> hash */

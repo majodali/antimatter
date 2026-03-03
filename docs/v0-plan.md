@@ -333,3 +333,44 @@ All of these are V1+ features, built inside V0.
 6. **Agent model.** Claude Opus for all tasks, or Sonnet for lightweight tasks with Opus for complex ones?
 7. **Monorepo tooling.** Turborepo vs. Nx vs. simple scripts? Need to evaluate against the CDK + Lambda packaging workflow.
 8. **Local development.** How do we develop before V0 is self-hosting? SAM local? LocalStack? Direct deploy to a dev stage?
+
+---
+
+## Backlog
+
+Features planned but not yet scheduled.
+
+### Comprehensive Git Support
+
+Currently: projects can be cloned from a Git URL (`POST /api/projects/import/git`) via `isomorphic-git`, but the `.git` directory is discarded after import so no further Git operations are possible.
+
+**Goal:** Full Git workflow within the IDE — clone, pull, push, branch, commit, diff, merge — so projects stay connected to their upstream repositories.
+
+**Scope:**
+
+1. **Preserve `.git` state** — Keep the `.git` directory in workspace storage (EFS or container) so Git operations work after initial clone. May require storing Git state separately from S3 project files.
+
+2. **Core Git operations**
+   - `git pull` / `git fetch` — Update project from upstream
+   - `git push` — Push local changes to remote
+   - `git commit` — Commit staged changes with message
+   - `git branch` / `git checkout` — Branch management
+   - `git status` / `git diff` — Show working tree state
+   - `git merge` — Merge branches (with conflict UI)
+   - `git log` — Commit history viewer
+
+3. **Authentication** — Support GitHub/GitLab authentication (SSH keys or personal access tokens stored securely, e.g. SSM Parameter Store or Secrets Manager). Needed for private repos and push access.
+
+4. **Diff viewer** — Side-by-side or inline diff view in the editor for uncommitted changes and PR reviews.
+
+5. **Branch UI** — Branch selector in the IDE chrome, visual branch/merge history.
+
+6. **GitHub integration** — PR creation, issue linking, webhook-triggered syncs (repo push → project update).
+
+7. **Conflict resolution** — Three-way merge UI when pulls or merges encounter conflicts.
+
+**Implementation considerations:**
+- `isomorphic-git` (already a dependency) handles most operations in pure JS but lacks some advanced features (interactive rebase, submodules)
+- For full Git support in workspace containers, native `git` is already installed in the container image
+- Git state needs to survive container restarts — either persist `.git` on EFS, sync to S3, or treat the container as ephemeral and re-clone on start
+- Large repos: shallow clones + sparse checkout may be needed to keep container startup fast

@@ -1,48 +1,26 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MockBuildExecutor } from '../mock-build-executor.js';
-import type { BuildRule, BuildTarget, BuildResult } from '@antimatter/project-model';
-import type { BuildContext } from '../types.js';
-import { MemoryFileSystem } from '@antimatter/filesystem';
-import { MockRunner } from '@antimatter/tool-integration';
+import type { BuildRule, BuildResult } from '@antimatter/project-model';
 
 describe('MockBuildExecutor', () => {
-  let context: BuildContext;
   let mockExecutor: MockBuildExecutor;
 
   beforeEach(() => {
-    const rules = new Map<string, BuildRule>([
-      [
-        'compile',
-        {
-          id: 'compile',
-          name: 'Compile',
-          inputs: ['src/**/*.ts'],
-          outputs: ['dist/**/*.js'],
-          command: 'tsc',
-        },
-      ],
-    ]);
-
-    context = {
-      workspaceRoot: '/',
-      fs: new MemoryFileSystem(),
-      runner: new MockRunner(),
-      rules,
-    };
-
-    mockExecutor = new MockBuildExecutor(context);
+    mockExecutor = new MockBuildExecutor();
   });
 
   describe('registerMock and executeBatch', () => {
-    it('should return mocked result for registered target', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+    it('should return mocked result for registered rule', async () => {
+      const rule: BuildRule = {
+        id: 'compile-app',
+        name: 'Compile App',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
       };
 
       const mockResult: BuildResult = {
-        targetId: 'build-app',
+        ruleId: 'compile-app',
         status: 'success',
         diagnostics: [],
         startedAt: '2024-01-01T00:00:00Z',
@@ -50,43 +28,49 @@ describe('MockBuildExecutor', () => {
         durationMs: 1000,
       };
 
-      mockExecutor.registerMock('build-app', mockResult);
+      mockExecutor.registerMock('compile-app', mockResult);
 
-      const results = await mockExecutor.executeBatch([target]);
+      const results = await mockExecutor.executeBatch([rule]);
 
-      expect(results.get('build-app')).toEqual(mockResult);
+      expect(results.get('compile-app')).toEqual(mockResult);
     });
 
-    it('should return default success result for non-mocked target', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+    it('should return default success result for non-mocked rule', async () => {
+      const rule: BuildRule = {
+        id: 'compile-app',
+        name: 'Compile App',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
       };
 
-      const results = await mockExecutor.executeBatch([target]);
+      const results = await mockExecutor.executeBatch([rule]);
 
-      expect(results.get('build-app')).toBeDefined();
-      expect(results.get('build-app')?.status).toBe('success');
-      expect(results.get('build-app')?.targetId).toBe('build-app');
+      expect(results.get('compile-app')).toBeDefined();
+      expect(results.get('compile-app')?.status).toBe('success');
+      expect(results.get('compile-app')?.ruleId).toBe('compile-app');
     });
 
-    it('should handle multiple targets with mixed mocks', async () => {
-      const targets: BuildTarget[] = [
+    it('should handle multiple rules with mixed mocks', async () => {
+      const rules: BuildRule[] = [
         {
-          id: 'build-lib',
-          ruleId: 'compile',
-          moduleId: 'lib',
+          id: 'compile-lib',
+          name: 'Compile Lib',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
         },
         {
-          id: 'build-app',
-          ruleId: 'compile',
-          moduleId: 'app',
+          id: 'compile-app',
+          name: 'Compile App',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
         },
       ];
 
       const mockResult: BuildResult = {
-        targetId: 'build-app',
+        ruleId: 'compile-app',
         status: 'failure',
         diagnostics: [
           {
@@ -102,73 +86,87 @@ describe('MockBuildExecutor', () => {
         durationMs: 1000,
       };
 
-      mockExecutor.registerMock('build-app', mockResult);
+      mockExecutor.registerMock('compile-app', mockResult);
 
-      const results = await mockExecutor.executeBatch(targets);
+      const results = await mockExecutor.executeBatch(rules);
 
-      expect(results.get('build-lib')?.status).toBe('success');
-      expect(results.get('build-app')?.status).toBe('failure');
-      expect(results.get('build-app')?.diagnostics).toHaveLength(1);
+      expect(results.get('compile-lib')?.status).toBe('success');
+      expect(results.get('compile-app')?.status).toBe('failure');
+      expect(results.get('compile-app')?.diagnostics).toHaveLength(1);
     });
   });
 
   describe('dependency resolution', () => {
-    it('should execute targets in dependency order', async () => {
-      const targets: BuildTarget[] = [
+    it('should execute rules in dependency order', async () => {
+      const rules: BuildRule[] = [
         {
-          id: 'build-app',
-          ruleId: 'compile',
-          moduleId: 'app',
-          dependsOn: ['build-lib'],
+          id: 'compile-app',
+          name: 'Compile App',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
+          dependsOn: ['compile-lib'],
         },
         {
-          id: 'build-lib',
-          ruleId: 'compile',
-          moduleId: 'lib',
+          id: 'compile-lib',
+          name: 'Compile Lib',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
         },
       ];
 
-      await mockExecutor.executeBatch(targets);
+      await mockExecutor.executeBatch(rules);
 
-      const executed = mockExecutor.getExecutedTargets();
-      expect(executed).toEqual(['build-lib', 'build-app']);
+      const executed = mockExecutor.getExecutedRules();
+      expect(executed).toEqual(['compile-lib', 'compile-app']);
     });
 
     it('should handle complex dependency graph', async () => {
-      const targets: BuildTarget[] = [
+      const rules: BuildRule[] = [
         {
           id: 'E',
-          ruleId: 'compile',
-          moduleId: 'e',
+          name: 'Rule E',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
           dependsOn: ['C', 'D'],
         },
         {
           id: 'C',
-          ruleId: 'compile',
-          moduleId: 'c',
+          name: 'Rule C',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
           dependsOn: ['A'],
         },
         {
           id: 'D',
-          ruleId: 'compile',
-          moduleId: 'd',
+          name: 'Rule D',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
           dependsOn: ['B'],
         },
         {
           id: 'A',
-          ruleId: 'compile',
-          moduleId: 'a',
+          name: 'Rule A',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
         },
         {
           id: 'B',
-          ruleId: 'compile',
-          moduleId: 'b',
+          name: 'Rule B',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
         },
       ];
 
-      await mockExecutor.executeBatch(targets);
+      await mockExecutor.executeBatch(rules);
 
-      const executed = mockExecutor.getExecutedTargets();
+      const executed = mockExecutor.getExecutedRules();
 
       // A and B should come first
       expect(['A', 'B']).toContain(executed[0]);
@@ -181,74 +179,86 @@ describe('MockBuildExecutor', () => {
 
   describe('execution history', () => {
     it('should track execution history', async () => {
-      const targets: BuildTarget[] = [
+      const rules: BuildRule[] = [
         {
-          id: 'build-lib',
-          ruleId: 'compile',
-          moduleId: 'lib',
+          id: 'compile-lib',
+          name: 'Compile Lib',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
         },
         {
-          id: 'build-app',
-          ruleId: 'compile',
-          moduleId: 'app',
+          id: 'compile-app',
+          name: 'Compile App',
+          inputs: ['src/**/*.ts'],
+          outputs: [],
+          command: 'tsc',
         },
       ];
 
-      expect(mockExecutor.getExecutedTargets()).toHaveLength(0);
+      expect(mockExecutor.getExecutedRules()).toHaveLength(0);
 
-      await mockExecutor.executeBatch(targets);
+      await mockExecutor.executeBatch(rules);
 
-      const executed = mockExecutor.getExecutedTargets();
+      const executed = mockExecutor.getExecutedRules();
       expect(executed).toHaveLength(2);
-      expect(executed).toContain('build-lib');
-      expect(executed).toContain('build-app');
+      expect(executed).toContain('compile-lib');
+      expect(executed).toContain('compile-app');
     });
 
     it('should accumulate history across multiple executions', async () => {
-      const target1: BuildTarget = {
-        id: 'build-lib',
-        ruleId: 'compile',
-        moduleId: 'lib',
+      const rule1: BuildRule = {
+        id: 'compile-lib',
+        name: 'Compile Lib',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
       };
 
-      const target2: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule2: BuildRule = {
+        id: 'compile-app',
+        name: 'Compile App',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
       };
 
-      await mockExecutor.executeBatch([target1]);
-      await mockExecutor.executeBatch([target2]);
+      await mockExecutor.executeBatch([rule1]);
+      await mockExecutor.executeBatch([rule2]);
 
-      const executed = mockExecutor.getExecutedTargets();
-      expect(executed).toEqual(['build-lib', 'build-app']);
+      const executed = mockExecutor.getExecutedRules();
+      expect(executed).toEqual(['compile-lib', 'compile-app']);
     });
 
     it('should clear history when requested', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile-app',
+        name: 'Compile App',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
       };
 
-      await mockExecutor.executeBatch([target]);
-      expect(mockExecutor.getExecutedTargets()).toHaveLength(1);
+      await mockExecutor.executeBatch([rule]);
+      expect(mockExecutor.getExecutedRules()).toHaveLength(1);
 
       mockExecutor.clearHistory();
-      expect(mockExecutor.getExecutedTargets()).toHaveLength(0);
+      expect(mockExecutor.getExecutedRules()).toHaveLength(0);
     });
   });
 
   describe('mock management', () => {
     it('should clear mocks when requested', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile-app',
+        name: 'Compile App',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
       };
 
       const mockResult: BuildResult = {
-        targetId: 'build-app',
+        ruleId: 'compile-app',
         status: 'failure',
         diagnostics: [],
         startedAt: '2024-01-01T00:00:00Z',
@@ -256,26 +266,28 @@ describe('MockBuildExecutor', () => {
         durationMs: 1000,
       };
 
-      mockExecutor.registerMock('build-app', mockResult);
+      mockExecutor.registerMock('compile-app', mockResult);
 
-      let results = await mockExecutor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('failure');
+      let results = await mockExecutor.executeBatch([rule]);
+      expect(results.get('compile-app')?.status).toBe('failure');
 
       mockExecutor.clearMocks();
 
-      results = await mockExecutor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('success'); // Default
+      results = await mockExecutor.executeBatch([rule]);
+      expect(results.get('compile-app')?.status).toBe('success'); // Default
     });
 
     it('should reset both history and mocks', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile-app',
+        name: 'Compile App',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
       };
 
       const mockResult: BuildResult = {
-        targetId: 'build-app',
+        ruleId: 'compile-app',
         status: 'failure',
         diagnostics: [],
         startedAt: '2024-01-01T00:00:00Z',
@@ -283,30 +295,32 @@ describe('MockBuildExecutor', () => {
         durationMs: 1000,
       };
 
-      mockExecutor.registerMock('build-app', mockResult);
-      await mockExecutor.executeBatch([target]);
+      mockExecutor.registerMock('compile-app', mockResult);
+      await mockExecutor.executeBatch([rule]);
 
-      expect(mockExecutor.getExecutedTargets()).toHaveLength(1);
+      expect(mockExecutor.getExecutedRules()).toHaveLength(1);
 
       mockExecutor.reset();
 
-      expect(mockExecutor.getExecutedTargets()).toHaveLength(0);
+      expect(mockExecutor.getExecutedRules()).toHaveLength(0);
 
-      const results = await mockExecutor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('success'); // Default
+      const results = await mockExecutor.executeBatch([rule]);
+      expect(results.get('compile-app')?.status).toBe('success'); // Default
     });
   });
 
   describe('status variants', () => {
     it('should support cached status', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile-app',
+        name: 'Compile App',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
       };
 
       const mockResult: BuildResult = {
-        targetId: 'build-app',
+        ruleId: 'compile-app',
         status: 'cached',
         diagnostics: [],
         startedAt: '2024-01-01T00:00:00Z',
@@ -314,21 +328,23 @@ describe('MockBuildExecutor', () => {
         durationMs: 0,
       };
 
-      mockExecutor.registerMock('build-app', mockResult);
+      mockExecutor.registerMock('compile-app', mockResult);
 
-      const results = await mockExecutor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('cached');
+      const results = await mockExecutor.executeBatch([rule]);
+      expect(results.get('compile-app')?.status).toBe('cached');
     });
 
     it('should support skipped status', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile-app',
+        name: 'Compile App',
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
       };
 
       const mockResult: BuildResult = {
-        targetId: 'build-app',
+        ruleId: 'compile-app',
         status: 'skipped',
         diagnostics: [],
         startedAt: '2024-01-01T00:00:00Z',
@@ -336,10 +352,10 @@ describe('MockBuildExecutor', () => {
         durationMs: 0,
       };
 
-      mockExecutor.registerMock('build-app', mockResult);
+      mockExecutor.registerMock('compile-app', mockResult);
 
-      const results = await mockExecutor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('skipped');
+      const results = await mockExecutor.executeBatch([rule]);
+      expect(results.get('compile-app')?.status).toBe('skipped');
     });
   });
 });

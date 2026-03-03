@@ -8,9 +8,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as efs from 'aws-cdk-lib/aws-efs';
-import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -95,10 +93,10 @@ export class AntimatterStack extends cdk.Stack {
     });
 
     // ==========================================
-    // Network - VPC for Lambda + EFS + Fargate
+    // Network - VPC for Lambda + EFS + EC2
     // ==========================================
 
-    // VPC with private subnets for Lambda, EFS, and Fargate tasks.
+    // VPC with private subnets for Lambda, EFS, and EC2 workspace instances.
     // NAT Gateway required for internet access (S3, npm registry, etc.).
     // Cost: ~$32/month for NAT Gateway. Acceptable for dev.
     this.vpc = new ec2.Vpc(this, 'Vpc', {
@@ -211,54 +209,34 @@ export class AntimatterStack extends cdk.Stack {
     apiFunction.addEnvironment('COMMAND_FUNCTION_URL', commandFunctionUrl.url);
 
     // ==========================================
-    // Workspace Containers - ECS Fargate + ALB
+    // Workspace Instances - EC2 + ALB
     // ==========================================
-    // Per-project Fargate containers provide a full POSIX workspace
-    // with interactive bash (via WebSocket + PTY), pnpm, nx, git.
-    // CloudFront proxies /ws/* to the ALB for secure WebSocket (wss://).
+    // Per-project EC2 instances provide a full workspace with Docker,
+    // git, cdk, interactive bash (WebSocket + PTY), and all project APIs.
+    // CloudFront proxies /workspace/* and /ws/* to the ALB.
 
-    // ECS Cluster
-    const cluster = new ecs.Cluster(this, 'WorkspaceCluster', {
-      vpc: this.vpc,
-      containerInsights: false,
+    // IAM Role + Instance Profile for workspace EC2 instances.
+    // AdministratorAccess is needed for cdk deploy — scope down later.
+    const workspaceRole = new iam.Role(this, 'WorkspaceRole', {
+      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AdministratorAccess'),
+      ],
+      description: 'IAM role for EC2 workspace instances',
     });
 
-    // Fargate task definition — workspace container
-    const workspaceTaskDef = new ecs.FargateTaskDefinition(this, 'WorkspaceTaskDef', {
-      memoryLimitMiB: 4096,
-      cpu: 2048,
-      ephemeralStorageGiB: 50,
-      runtimePlatform: {
-        cpuArchitecture: ecs.CpuArchitecture.X86_64,
-        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
-      },
+    const instanceProfile = new iam.InstanceProfile(this, 'WorkspaceInstanceProfile', {
+      role: workspaceRole,
     });
 
-    // Grant workspace tasks read/write access to the data bucket
-    dataBucket.grantReadWrite(workspaceTaskDef.taskRole);
-
-    // Container definition — built from container/ directory
-    workspaceTaskDef.addContainer('workspace', {
-      image: ecs.ContainerImage.fromAsset(path.join(__dirname, '../../container')),
-      logging: ecs.LogDrivers.awsLogs({
-        streamPrefix: 'workspace',
-        logRetention: logs.RetentionDays.ONE_WEEK,
-      }),
-      environment: {
-        PROJECTS_BUCKET: dataBucket.bucketName,
-        AWS_REGION: this.region,
-      },
-      portMappings: [{ containerPort: 8080, protocol: ecs.Protocol.TCP }],
-    });
-
-    // Security group for workspace containers
+    // Security group for workspace EC2 instances
     const workspaceSg = new ec2.SecurityGroup(this, 'WorkspaceSg', {
       vpc: this.vpc,
-      description: 'Security group for Fargate workspace containers',
+      description: 'Security group for EC2 workspace instances',
       allowAllOutbound: true,
     });
 
-    // ALB for WebSocket routing
+    // ALB for workspace routing (HTTP APIs + WebSocket)
     const workspaceAlb = new elbv2.ApplicationLoadBalancer(this, 'WorkspaceAlb', {
       vpc: this.vpc,
       internetFacing: true,
@@ -267,18 +245,36 @@ export class AntimatterStack extends cdk.Stack {
 
     // HTTP listener — default action is 404.
     // Per-project target groups and path-based routing rules are created
-    // dynamically by workspace-container-service when containers start.
+    // dynamically by workspace-ec2-service when instances start.
     const workspaceListener = workspaceAlb.addListener('WorkspaceListener', {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
       defaultAction: elbv2.ListenerAction.fixedResponse(404, {
         contentType: 'text/plain',
-        messageBody: 'No workspace container for this path',
+        messageBody: 'No workspace instance for this path',
       }),
     });
 
-    // Allow ALB to reach workspace containers (both ingress on container SG and egress on ALB SG)
-    workspaceAlb.connections.allowTo(workspaceSg, ec2.Port.tcp(8080), 'Allow ALB to reach workspace containers');
+    // Allow ALB to reach workspace instances on port 8080
+    workspaceAlb.connections.allowTo(workspaceSg, ec2.Port.tcp(8080), 'Allow ALB to reach workspace instances');
+
+    // EC2 Launch Template — base config for workspace instances.
+    // User-data is provided at RunInstances time by workspace-ec2-service
+    // with project-specific configuration embedded.
+    const launchTemplate = new ec2.LaunchTemplate(this, 'WorkspaceLaunchTemplate', {
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.LARGE),
+      machineImage: ec2.MachineImage.latestAmazonLinux2023(),
+      role: workspaceRole,
+      securityGroup: workspaceSg,
+      blockDevices: [{
+        deviceName: '/dev/xvda',
+        volume: ec2.BlockDeviceVolume.ebs(30, {
+          volumeType: ec2.EbsDeviceVolumeType.GP3,
+          encrypted: true,
+        }),
+      }],
+      requireImdsv2: true,
+    });
 
     // CloudFront behavior for /ws/* → ALB (WebSocket proxy)
     const wsOrigin = new origins.HttpOrigin(workspaceAlb.loadBalancerDnsName, {
@@ -295,29 +291,39 @@ export class AntimatterStack extends cdk.Stack {
       allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
     });
 
-    // Grant API Lambda permission to manage ECS tasks + ALB targets
+    // CloudFront behavior for /workspace/* → ALB (project-scoped APIs on EC2)
+    distribution.addBehavior('/workspace/*', wsOrigin, {
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+    });
+
+    // Grant API Lambda permission to manage EC2 instances + EBS volumes
     apiFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: [
-        'ecs:RunTask',
-        'ecs:StopTask',
-        'ecs:DescribeTasks',
-        'ecs:ListTasks',
+        'ec2:RunInstances',
+        'ec2:StartInstances',
+        'ec2:StopInstances',
+        'ec2:TerminateInstances',
+        'ec2:DescribeInstances',
+        'ec2:DescribeInstanceStatus',
+        'ec2:DescribeVolumes',
+        'ec2:CreateVolume',
+        'ec2:AttachVolume',
+        'ec2:DetachVolume',
+        'ec2:DeleteVolume',
+        'ec2:CreateTags',
+        'ec2:DescribeTags',
+        'ec2:DescribeSubnets',
       ],
       resources: ['*'],
-      conditions: {
-        ArnEquals: {
-          'ecs:cluster': cluster.clusterArn,
-        },
-      },
     }));
 
-    // Allow API Lambda to pass the task role and execution role to ECS
+    // Allow API Lambda to pass the workspace role to EC2 instances
     apiFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ['iam:PassRole'],
-      resources: [
-        workspaceTaskDef.taskRole.roleArn,
-        workspaceTaskDef.executionRole!.roleArn,
-      ],
+      resources: [workspaceRole.roleArn],
     }));
 
     // Allow API Lambda to manage dynamic ALB target groups and listener rules.
@@ -341,8 +347,8 @@ export class AntimatterStack extends cdk.Stack {
     }));
 
     // Pass workspace configuration to API Lambda
-    apiFunction.addEnvironment('ECS_CLUSTER_ARN', cluster.clusterArn);
-    apiFunction.addEnvironment('WORKSPACE_TASK_DEF_ARN', workspaceTaskDef.taskDefinitionArn);
+    apiFunction.addEnvironment('WORKSPACE_LAUNCH_TEMPLATE_ID', launchTemplate.launchTemplateId!);
+    apiFunction.addEnvironment('WORKSPACE_INSTANCE_PROFILE_ARN', instanceProfile.instanceProfileArn);
     apiFunction.addEnvironment('WORKSPACE_SUBNET_IDS', this.vpc.privateSubnets.map(s => s.subnetId).join(','));
     apiFunction.addEnvironment('WORKSPACE_SG_ID', workspaceSg.securityGroupId);
     apiFunction.addEnvironment('ALB_LISTENER_ARN', workspaceListener.listenerArn);
@@ -525,9 +531,9 @@ export class AntimatterStack extends cdk.Stack {
       description: 'Command Lambda function ARN',
     });
 
-    new cdk.CfnOutput(this, 'WorkspaceClusterArn', {
-      value: cluster.clusterArn,
-      description: 'ECS cluster ARN for workspace containers',
+    new cdk.CfnOutput(this, 'WorkspaceLaunchTemplateId', {
+      value: launchTemplate.launchTemplateId!,
+      description: 'EC2 launch template ID for workspace instances',
     });
 
     new cdk.CfnOutput(this, 'WorkspaceAlbDns', {

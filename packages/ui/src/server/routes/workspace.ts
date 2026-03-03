@@ -1,20 +1,20 @@
 /**
- * Workspace Routes — start, stop, and query Fargate workspace containers.
+ * Workspace Routes — start, stop, and query EC2 workspace instances.
  *
  * These routes are called by the frontend to manage the per-project
- * interactive terminal containers.
+ * EC2 instances that run the full workspace (terminal, file APIs, build, agent).
  */
 
 import { Router } from 'express';
-import { WorkspaceContainerService } from '../services/workspace-container-service.js';
-import type { WorkspaceContainerServiceConfig } from '../services/workspace-container-service.js';
+import { WorkspaceEc2Service } from '../services/workspace-ec2-service.js';
+import type { WorkspaceEc2ServiceConfig } from '../services/workspace-ec2-service.js';
 
-export function createWorkspaceRouter(config: WorkspaceContainerServiceConfig): Router {
+export function createWorkspaceRouter(config: WorkspaceEc2ServiceConfig): Router {
   const router = Router({ mergeParams: true });
-  const service = new WorkspaceContainerService(config);
+  const service = new WorkspaceEc2Service(config);
 
   /**
-   * POST /start — Start or return an existing workspace container.
+   * POST /start — Start or return an existing workspace instance.
    * Returns connection info including sessionToken for WebSocket auth.
    */
   router.post('/start', async (req, res) => {
@@ -36,7 +36,7 @@ export function createWorkspaceRouter(config: WorkspaceContainerServiceConfig): 
   });
 
   /**
-   * GET /status — Get the current status of a project's workspace container.
+   * GET /status — Get the current status of a project's workspace instance.
    * Used for polling during startup.
    */
   router.get('/status', async (req, res) => {
@@ -62,7 +62,7 @@ export function createWorkspaceRouter(config: WorkspaceContainerServiceConfig): 
   });
 
   /**
-   * POST /stop — Stop a project's workspace container.
+   * POST /stop — Stop a project's workspace instance.
    */
   router.post('/stop', async (req, res) => {
     try {

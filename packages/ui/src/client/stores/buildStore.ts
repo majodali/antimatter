@@ -1,36 +1,30 @@
 import { create } from 'zustand';
-import type { BuildResult, BuildTarget, BuildRule, Diagnostic } from '@antimatter/project-model';
+import type { BuildResult, BuildRule, Diagnostic } from '@antimatter/project-model';
 import { fetchBuildConfig, saveBuildConfig as saveBuildConfigApi } from '@/lib/api';
 import { eventLog } from '@/lib/eventLog';
 
 interface BuildState {
   // Build configuration
-  targets: Map<string, BuildTarget>;
   rules: Map<string, BuildRule>;
 
   // Build results
   results: Map<string, BuildResult>;
 
-  // Build output (streaming logs per target)
+  // Build output (streaming logs per rule)
   buildOutput: Map<string, string[]>;
 
-  // Watch mode
-  watchMode: boolean;
-
   // UI state
-  expandedTargets: Set<string>;
+  expandedRules: Set<string>;
   configMode: boolean;
 
   // Actions
-  setTargets: (targets: BuildTarget[]) => void;
   setRules: (rules: BuildRule[]) => void;
   setResult: (result: BuildResult) => void;
   setResults: (results: BuildResult[]) => void;
   clearResults: () => void;
-  toggleExpanded: (targetId: string) => void;
-  appendOutput: (targetId: string, line: string) => void;
+  toggleExpanded: (ruleId: string) => void;
+  appendOutput: (ruleId: string, line: string) => void;
   clearOutput: () => void;
-  toggleWatchMode: () => void;
   setConfigMode: (mode: boolean) => void;
 
   // Config management
@@ -39,27 +33,17 @@ interface BuildState {
   addRule: (rule: BuildRule) => void;
   removeRule: (ruleId: string) => void;
   updateRule: (ruleId: string, rule: BuildRule) => void;
-  addTarget: (target: BuildTarget) => void;
-  removeTarget: (targetId: string) => void;
-  updateTarget: (targetId: string, target: BuildTarget) => void;
 
   // Selectors
   getDiagnosticsForFile: (filePath: string) => Diagnostic[];
 }
 
 export const useBuildStore = create<BuildState>((set, get) => ({
-  targets: new Map(),
   rules: new Map(),
   results: new Map(),
   buildOutput: new Map(),
-  watchMode: false,
-  expandedTargets: new Set(),
+  expandedRules: new Set(),
   configMode: false,
-
-  setTargets: (targets) =>
-    set({
-      targets: new Map(targets.map((t) => [t.id, t])),
-    }),
 
   setRules: (rules) =>
     set({
@@ -68,43 +52,41 @@ export const useBuildStore = create<BuildState>((set, get) => ({
 
   setResult: (result) =>
     set((state) => ({
-      results: new Map(state.results).set(result.targetId, result),
+      results: new Map(state.results).set(result.ruleId, result),
     })),
 
   setResults: (results) =>
     set({
-      results: new Map(results.map((r) => [r.targetId, r])),
+      results: new Map(results.map((r) => [r.ruleId, r])),
     }),
 
   clearResults: () =>
     set({
       results: new Map(),
       buildOutput: new Map(),
-      expandedTargets: new Set(),
+      expandedRules: new Set(),
     }),
 
-  toggleExpanded: (targetId) =>
+  toggleExpanded: (ruleId) =>
     set((state) => {
-      const expanded = new Set(state.expandedTargets);
-      if (expanded.has(targetId)) {
-        expanded.delete(targetId);
+      const expanded = new Set(state.expandedRules);
+      if (expanded.has(ruleId)) {
+        expanded.delete(ruleId);
       } else {
-        expanded.add(targetId);
+        expanded.add(ruleId);
       }
-      return { expandedTargets: expanded };
+      return { expandedRules: expanded };
     }),
 
-  appendOutput: (targetId, line) =>
+  appendOutput: (ruleId, line) =>
     set((state) => {
       const output = new Map(state.buildOutput);
-      const existing = output.get(targetId) || [];
-      output.set(targetId, [...existing, line]);
+      const existing = output.get(ruleId) || [];
+      output.set(ruleId, [...existing, line]);
       return { buildOutput: output };
     }),
 
   clearOutput: () => set({ buildOutput: new Map() }),
-
-  toggleWatchMode: () => set((state) => ({ watchMode: !state.watchMode })),
 
   setConfigMode: (mode) => set({ configMode: mode }),
 
@@ -113,7 +95,6 @@ export const useBuildStore = create<BuildState>((set, get) => ({
       const config = await fetchBuildConfig(projectId);
       set({
         rules: new Map(config.rules.map((r) => [r.id, r])),
-        targets: new Map(config.targets.map((t) => [t.id, t])),
       });
     } catch (err) {
       eventLog.error('build', 'Failed to load build config', String(err));
@@ -126,7 +107,6 @@ export const useBuildStore = create<BuildState>((set, get) => ({
       await saveBuildConfigApi(
         {
           rules: Array.from(state.rules.values()),
-          targets: Array.from(state.targets.values()),
         },
         projectId,
       );
@@ -148,30 +128,13 @@ export const useBuildStore = create<BuildState>((set, get) => ({
     }),
 
   updateRule: (ruleId, rule) =>
-    set((state) => ({
-      rules: new Map(state.rules).set(ruleId, rule),
-    })),
-
-  addTarget: (target) =>
-    set((state) => ({
-      targets: new Map(state.targets).set(target.id, target),
-    })),
-
-  removeTarget: (targetId) =>
     set((state) => {
-      const targets = new Map(state.targets);
-      targets.delete(targetId);
-      return { targets };
-    }),
-
-  updateTarget: (targetId, target) =>
-    set((state) => {
-      const targets = new Map(state.targets);
-      if (target.id !== targetId) {
-        targets.delete(targetId);
+      const rules = new Map(state.rules);
+      if (rule.id !== ruleId) {
+        rules.delete(ruleId);
       }
-      targets.set(target.id, target);
-      return { targets };
+      rules.set(rule.id, rule);
+      return { rules };
     }),
 
   getDiagnosticsForFile: (filePath: string) => {

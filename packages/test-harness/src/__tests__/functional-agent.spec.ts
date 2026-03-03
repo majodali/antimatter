@@ -137,8 +137,7 @@ describe('Functional: Agent Integration', () => {
       const buildTool = createRunBuildTool({
         fs: harness.fs,
         runner: harness.runner,
-        rules: harness.fixture.rules,
-        targets: [harness.fixture.targets[0]],
+        rules: [harness.fixture.rules[0]],
         workspaceRoot: '/',
       });
       const result = await buildTool.execute({});
@@ -152,8 +151,7 @@ describe('Functional: Agent Integration', () => {
       const buildTool = createRunBuildTool({
         fs: harness.fs,
         runner: harness.runner,
-        rules: harness.fixture.rules,
-        targets: [harness.fixture.targets[0]],
+        rules: [harness.fixture.rules[0]],
         workspaceRoot: '/',
       });
       const result = await buildTool.execute({});
@@ -218,8 +216,7 @@ describe('Functional: Agent Integration', () => {
       const buildTool = createRunBuildTool({
         fs: harness.fs,
         runner: harness.runner,
-        rules: harness.fixture.rules,
-        targets: [harness.fixture.targets[0]],
+        rules: [harness.fixture.rules[0]],
         workspaceRoot: '/',
       });
       const toolMap = new Map([['runBuild', buildTool]]);

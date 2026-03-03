@@ -1,7 +1,6 @@
 import type {
   Identifier,
   BuildRule,
-  BuildTarget,
   Hash,
 } from '@antimatter/project-model';
 import type {
@@ -17,7 +16,7 @@ import * as path from 'node:path';
 /**
  * Manages build cache using input file hashes.
  *
- * Cache is stored in `.antimatter-cache/{targetId}.json` and contains:
+ * Cache is stored in `.antimatter-cache/{ruleId}.json` and contains:
  * - Input file hashes (to detect changes)
  * - Output file hashes (for verification)
  * - Timestamp of when cache was created
@@ -31,10 +30,10 @@ export class CacheManager {
   ) {}
 
   /**
-   * Get cache file path for a target.
+   * Get cache file path for a rule.
    */
-  private getCachePath(targetId: Identifier): WorkspacePath {
-    const joined = path.join(this.cacheDir, `${targetId}.json`);
+  private getCachePath(ruleId: Identifier): WorkspacePath {
+    const joined = path.join(this.cacheDir, `${ruleId}.json`);
     // Normalize to forward slashes for WorkspacePath
     return joined.replace(/\\/g, '/') as WorkspacePath;
   }
@@ -43,8 +42,8 @@ export class CacheManager {
    * Load cache entry from disk.
    * @returns Cache entry or undefined if not found or invalid
    */
-  async loadCache(targetId: Identifier): Promise<CacheEntry | undefined> {
-    const cachePath = this.getCachePath(targetId);
+  async loadCache(ruleId: Identifier): Promise<CacheEntry | undefined> {
+    const cachePath = this.getCachePath(ruleId);
 
     try {
       const fileContent = await this.fs.readFile(cachePath);
@@ -60,7 +59,7 @@ export class CacheManager {
       ) as ReadonlyMap<string, Hash>;
 
       return {
-        targetId: data.targetId,
+        ruleId: data.ruleId ?? data.targetId, // backward compat
         inputHashes,
         outputHashes,
         timestamp: data.timestamp,
@@ -75,7 +74,7 @@ export class CacheManager {
    * Save cache entry to disk.
    */
   private async saveEntry(entry: CacheEntry): Promise<void> {
-    const cachePath = this.getCachePath(entry.targetId);
+    const cachePath = this.getCachePath(entry.ruleId);
 
     try {
       // Ensure cache directory exists
@@ -84,7 +83,7 @@ export class CacheManager {
 
       // Convert Maps to arrays for JSON serialization
       const data = {
-        targetId: entry.targetId,
+        ruleId: entry.ruleId,
         inputHashes: Array.from(entry.inputHashes.entries()),
         outputHashes: Array.from(entry.outputHashes.entries()),
         timestamp: entry.timestamp,
@@ -93,14 +92,14 @@ export class CacheManager {
       await this.fs.writeFile(cachePath, JSON.stringify(data, null, 2));
     } catch (error) {
       throw new CacheError(
-        `Failed to write cache for target '${entry.targetId}': ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to write cache for rule '${entry.ruleId}': ${error instanceof Error ? error.message : String(error)}`,
         'write-failed',
       );
     }
   }
 
   /**
-   * Check if cache is valid for a target.
+   * Check if cache is valid for a rule.
    *
    * Cache is valid if:
    * 1. Cache entry exists
@@ -108,18 +107,16 @@ export class CacheManager {
    * 3. All input file hashes match
    * 4. No new input files have been added
    *
-   * @param target - Build target to check
-   * @param rule - Build rule for the target
+   * @param rule - Build rule to check
    * @param workspaceRoot - Workspace root directory
    * @returns true if cache is valid, false otherwise
    */
   async isCacheValid(
-    target: BuildTarget,
     rule: BuildRule,
     workspaceRoot: string,
   ): Promise<boolean> {
     // Load existing cache
-    const cachedEntry = await this.loadCache(target.id);
+    const cachedEntry = await this.loadCache(rule.id);
     if (!cachedEntry) {
       return false;
     }
@@ -158,12 +155,10 @@ export class CacheManager {
   /**
    * Save cache after successful build.
    *
-   * @param target - Build target that was built
-   * @param rule - Build rule for the target
+   * @param rule - Build rule that was built
    * @param workspaceRoot - Workspace root directory
    */
   async saveCache(
-    target: BuildTarget,
     rule: BuildRule,
     workspaceRoot: string,
   ): Promise<void> {
@@ -196,7 +191,7 @@ export class CacheManager {
 
     // Create cache entry
     const entry: CacheEntry = {
-      targetId: target.id,
+      ruleId: rule.id,
       inputHashes,
       outputHashes,
       timestamp: new Date().toISOString(),
@@ -206,28 +201,25 @@ export class CacheManager {
   }
 
   /**
-   * Return target IDs whose cache is stale (inputs changed since last build).
+   * Return rule IDs whose cache is stale (inputs changed since last build).
    */
-  async getStaleTargets(
-    targets: readonly BuildTarget[],
-    rules: ReadonlyMap<Identifier, BuildRule>,
+  async getStaleRules(
+    rules: readonly BuildRule[],
     workspaceRoot: string,
   ): Promise<Identifier[]> {
     const stale: Identifier[] = [];
-    for (const target of targets) {
-      const rule = rules.get(target.ruleId);
-      if (!rule) continue;
-      const valid = await this.isCacheValid(target, rule, workspaceRoot);
-      if (!valid) stale.push(target.id);
+    for (const rule of rules) {
+      const valid = await this.isCacheValid(rule, workspaceRoot);
+      if (!valid) stale.push(rule.id);
     }
     return stale;
   }
 
   /**
-   * Clear cache for a specific target.
+   * Clear cache for a specific rule.
    */
-  async clearCache(targetId: Identifier): Promise<void> {
-    const cachePath = this.getCachePath(targetId);
+  async clearCache(ruleId: Identifier): Promise<void> {
+    const cachePath = this.getCachePath(ruleId);
 
     try {
       await this.fs.deleteFile(cachePath);
@@ -238,7 +230,7 @@ export class CacheManager {
         !error.message.includes('ENOENT')
       ) {
         throw new CacheError(
-          `Failed to clear cache for target '${targetId}': ${error.message}`,
+          `Failed to clear cache for rule '${ruleId}': ${error.message}`,
           'write-failed',
         );
       }

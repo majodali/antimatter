@@ -10,19 +10,22 @@
   "exclude": ["src/**/*.spec.ts"],
   "references": [
     {
+      "path": "../workspace"
+    },
+    {
       "path": "../tool-integration/tsconfig.lib.json"
+    },
+    {
+      "path": "../project-model/tsconfig.lib.json"
+    },
+    {
+      "path": "../filesystem/tsconfig.lib.json"
     },
     {
       "path": "../build-system/tsconfig.lib.json"
     },
     {
       "path": "../agent-framework/tsconfig.lib.json"
-    },
-    {
-      "path": "../filesystem/tsconfig.lib.json"
-    },
-    {
-      "path": "../project-model/tsconfig.lib.json"
     }
   ]
 }

@@ -13,23 +13,13 @@ export interface BuildRule {
   readonly command: string;
   /** Optional dependencies on other rules (by id). */
   readonly dependsOn?: readonly Identifier[];
-}
-
-/** A concrete target that can be executed (bound rule + config). */
-export interface BuildTarget {
-  readonly id: Identifier;
-  readonly ruleId: Identifier;
-  /** Module this target belongs to. */
-  readonly moduleId: Identifier;
   /** Extra environment variables passed to the command. */
   readonly env?: Readonly<Record<string, string>>;
-  /** Optional dependencies on other targets (by id). */
-  readonly dependsOn?: readonly Identifier[];
 }
 
-/** The outcome of running a single build target. */
+/** The outcome of running a single build rule. */
 export interface BuildResult {
-  readonly targetId: Identifier;
+  readonly ruleId: Identifier;
   readonly status: BuildStatus;
   readonly startedAt: Timestamp;
   readonly finishedAt?: Timestamp;

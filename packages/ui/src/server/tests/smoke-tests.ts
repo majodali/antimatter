@@ -1,7 +1,22 @@
 import type { TestDef } from './test-types.js';
 
+/**
+ * Smoke tests for the Lambda bootloader.
+ *
+ * After the EC2 workspace migration, Lambda only serves:
+ *   - Health check, config
+ *   - Project CRUD (S3 metadata)
+ *   - Project-scoped file operations (S3 fallback for browsing without a workspace)
+ *   - Workspace EC2 lifecycle (start/stop/status)
+ *   - Command Lambda (EFS-based exec — still useful for quick ops)
+ *   - Test runner
+ *   - Frontend SPA
+ *
+ * Build, agent, deploy, and environment routes now live on the EC2 workspace server.
+ */
 export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] {
   return [
+    // ---- Lambda core ----
     {
       name: 'Health Check',
       suite: 'smoke',
@@ -14,140 +29,17 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
       },
     },
     {
-      name: 'File Tree',
+      name: 'Config Endpoint',
       suite: 'smoke',
       run: async () => {
-        const res = await fetch(`${apiBase}/api/files/tree`);
+        const res = await fetch(`${apiBase}/api/config`);
         const body = await res.json();
-        if (res.status === 200 && Array.isArray(body.tree))
-          return { pass: true, detail: `${body.tree.length} nodes` };
+        if (res.status === 200 && 'wsBaseUrl' in body)
+          return { pass: true, detail: `wsBaseUrl=${body.wsBaseUrl ? 'set' : 'null'}` };
         return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
       },
     },
-    {
-      name: 'Write File',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/files/write`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: '_test.txt', content: 'hello' }),
-        });
-        const body = await res.json();
-        if (res.status === 200 && body.success === true)
-          return { pass: true, detail: JSON.stringify(body) };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'Read File',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/files/read?path=_test.txt`);
-        const body = await res.json();
-        if (res.status === 200 && body.content === 'hello')
-          return { pass: true, detail: `content="${body.content}"` };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'File Exists',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/files/exists?path=_test.txt`);
-        const body = await res.json();
-        if (res.status === 200 && body.exists === true)
-          return { pass: true, detail: JSON.stringify(body) };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'List Directory',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/files/list`);
-        const body = await res.json();
-        const hasTestFile = Array.isArray(body.entries) && body.entries.some((e: any) => (typeof e === 'string' ? e : e.name) === '_test.txt');
-        if (res.status === 200 && hasTestFile)
-          return { pass: true, detail: `${body.entries.length} entries` };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'Delete File',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/files/delete?path=_test.txt`, {
-          method: 'DELETE',
-        });
-        const body = await res.json();
-        if (res.status === 200 && body.success === true)
-          return { pass: true, detail: JSON.stringify(body) };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'File Deleted',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/files/exists?path=_test.txt`);
-        const body = await res.json();
-        if (res.status === 200 && body.exists === false)
-          return { pass: true, detail: JSON.stringify(body) };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'Build Results',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/build/results`);
-        const body = await res.json();
-        if (res.status === 200 && Array.isArray(body.results))
-          return { pass: true, detail: `${body.results.length} results` };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'Agent Chat',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/agent/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: 'ping' }),
-        });
-        const body = await res.json();
-        if (res.status === 200 && typeof body.response === 'string')
-          return { pass: true, detail: `response="${body.response}"` };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'Agent History',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/agent/history`);
-        const body = await res.json();
-        if (res.status === 200 && Array.isArray(body.history))
-          return { pass: true, detail: `${body.history.length} messages` };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'Clear History',
-      suite: 'smoke',
-      run: async () => {
-        const res = await fetch(`${apiBase}/api/agent/history`, {
-          method: 'DELETE',
-        });
-        const body = await res.json();
-        if (res.status === 200 && body.success === true)
-          return { pass: true, detail: JSON.stringify(body) };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    // ---- Project API tests ----
+    // ---- Project CRUD ----
     {
       name: 'Create Project',
       suite: 'smoke',
@@ -177,6 +69,7 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
         return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
       },
     },
+    // ---- Project-scoped file operations (S3 fallback) ----
     {
       name: 'Project Write File',
       suite: 'smoke',
@@ -236,7 +129,7 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
         return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
       },
     },
-    // ---- Command Lambda tests ----
+    // ---- Command Lambda (EFS-based execution) ----
     {
       name: 'Command Health',
       suite: 'smoke',
@@ -285,12 +178,10 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
         return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
       },
     },
-    // ---- Project sync + exec tests ----
     {
       name: 'Command Project Sync + Exec',
       suite: 'smoke',
       run: async (ctx) => {
-        // Create a test project and write a file via API Lambda (S3)
         const createRes = await fetch(`${apiBase}/api/projects`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -305,7 +196,6 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
           body: JSON.stringify({ path: 'hello.txt', content: 'sync-test-value' }),
         });
 
-        // Execute a command via Command Lambda that reads the file (auto-syncs from S3)
         const execRes = await fetch(`${apiBase}/api/commands/projects/${projectId}/exec`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -325,12 +215,10 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
         const projectId = ctx.syncProjectId;
         if (!projectId) return { pass: false, detail: 'No project from previous test' };
 
-        // Execute a command that creates a new file on EFS, with syncAfter=true
         const execRes = await fetch(`${apiBase}/api/commands/projects/${projectId}/exec`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            // No need for sh -c — LocalWorkspaceEnvironment.execute() wraps in a shell
             command: 'echo created-on-efs > efs-file.txt',
             syncAfter: true,
           }),
@@ -339,11 +227,9 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
         if (execRes.status !== 200 || execBody.exitCode !== 0)
           return { pass: false, detail: `exec failed: ${JSON.stringify(execBody)}` };
 
-        // Read the file back via API Lambda (S3) to verify sync-back worked
         const readRes = await fetch(`${apiBase}/api/projects/${projectId}/files/read?path=efs-file.txt`);
         const readBody = await readRes.json();
 
-        // Clean up the test project
         await fetch(`${apiBase}/api/projects/${projectId}`, { method: 'DELETE' });
 
         if (readRes.status === 200 && readBody.content?.trim() === 'created-on-efs')
@@ -351,186 +237,29 @@ export function getSmokeTests(apiBase: string, frontendBase: string): TestDef[] 
         return { pass: false, detail: `read-back: ${readRes.status}: ${JSON.stringify(readBody)}` };
       },
     },
-    // ---- Build execution via Command Lambda ----
+    // ---- Workspace EC2 lifecycle ----
     {
-      name: 'Project Build via Command Lambda',
+      name: 'Workspace Status (no instance)',
       suite: 'smoke',
-      run: async () => {
-        // 1. Create a test project
+      run: async (ctx) => {
+        // Create a throwaway project to check workspace status
         const createRes = await fetch(`${apiBase}/api/projects`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: `_build_test_${Date.now()}` }),
+          body: JSON.stringify({ name: `_ws_test_${Date.now()}` }),
         });
         const { id: projectId } = await createRes.json();
+        ctx.wsProjectId = projectId;
 
-        // 2. Write a source file
-        await fetch(`${apiBase}/api/projects/${projectId}/files/write`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: 'src.txt', content: 'build-output-value' }),
-        });
+        const res = await fetch(`${apiBase}/api/projects/${projectId}/workspace/status`);
+        const body = await res.json();
 
-        // 3. Write a build config that cats the source file
-        const buildConfig = {
-          rules: [{
-            id: 'cat-rule',
-            name: 'Cat Source',
-            inputs: ['src.txt'],
-            outputs: [],
-            command: 'cat src.txt',
-            dependsOn: [],
-          }],
-          targets: [{
-            id: 'cat-target',
-            ruleId: 'cat-rule',
-            moduleId: 'test-mod',
-            dependsOn: [],
-          }],
-        };
-        await fetch(`${apiBase}/api/projects/${projectId}/build/config`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildConfig),
-        });
-
-        // 4. Execute the build — this routes through CommandLambdaEnvironment → Command Lambda
-        const buildRes = await fetch(`${apiBase}/api/projects/${projectId}/build/execute`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        const buildBody = await buildRes.json();
-
-        // 5. Clean up
+        // Clean up
         await fetch(`${apiBase}/api/projects/${projectId}`, { method: 'DELETE' });
 
-        // 6. Verify build result (BuildResult uses `output` which concatenates stdout+stderr)
-        const output = buildBody.results?.[0]?.output?.trim() ?? '';
-        if (
-          buildRes.status === 200 &&
-          buildBody.results?.length >= 1 &&
-          buildBody.results[0].status === 'success' &&
-          output === 'build-output-value'
-        ) {
-          return { pass: true, detail: `Build executed via Command Lambda, output="${output}"` };
-        }
-        return { pass: false, detail: `${buildRes.status}: ${JSON.stringify(buildBody)}` };
-      },
-    },
-    // ---- Deploy Config API ----
-    {
-      name: 'Deploy Config Save',
-      suite: 'smoke',
-      run: async (ctx) => {
-        // Create a project for deploy config testing
-        const createRes = await fetch(`${apiBase}/api/projects`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: `_deploy_smoke_${Date.now()}` }),
-        });
-        const { id: projectId } = await createRes.json();
-        ctx.deployProjectId = projectId;
-
-        const config = {
-          modules: [{ id: 'm1', name: 'Test Module', type: 'lambda', buildCommand: 'echo ok' }],
-          packaging: [{ id: 'p1', moduleId: 'm1', type: 'lambda-zip', config: { type: 'lambda-zip', bundlePath: 'dist/index.js' } }],
-          targets: [{ id: 't1', moduleId: 'm1', packagingId: 'p1', type: 'lambda-update', config: { type: 'lambda-update', functionName: 'test-fn', region: 'us-west-2' } }],
-        };
-        const res = await fetch(`${apiBase}/api/projects/${projectId}/deploy/config`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(config),
-        });
-        const body = await res.json();
-        if (res.status === 200 && body.success === true)
-          return { pass: true, detail: `Saved deploy config for project ${projectId}` };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'Deploy Config Load',
-      suite: 'smoke',
-      run: async (ctx) => {
-        const projectId = ctx.deployProjectId;
-        if (!projectId) return { pass: false, detail: 'No project from previous test' };
-
-        const res = await fetch(`${apiBase}/api/projects/${projectId}/deploy/config`);
-        const body = await res.json();
-
-        // Clean up the test project
-        await fetch(`${apiBase}/api/projects/${projectId}`, { method: 'DELETE' });
-
-        if (
-          res.status === 200 &&
-          Array.isArray(body.modules) && body.modules.length === 1 &&
-          body.modules[0].name === 'Test Module' &&
-          Array.isArray(body.targets) && body.targets.length === 1
-        ) {
-          return { pass: true, detail: `modules=${body.modules.length}, targets=${body.targets.length}` };
-        }
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    // ---- Environment Config API ----
-    {
-      name: 'Environment Config Save',
-      suite: 'smoke',
-      run: async (ctx) => {
-        // Create a project for environment config testing
-        const createRes = await fetch(`${apiBase}/api/projects`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: `_env_smoke_${Date.now()}` }),
-        });
-        const { id: projectId } = await createRes.json();
-        ctx.envProjectId = projectId;
-
-        const config = {
-          pipeline: {
-            id: 'pipe-smoke',
-            name: 'Smoke Pipeline',
-            stages: [
-              { id: 'dev', name: 'Development', order: 1, buildCommand: 'echo dev' },
-              { id: 'prod', name: 'Production', order: 2, buildCommand: 'echo prod' },
-            ],
-          },
-          environments: [],
-          transitions: [],
-        };
-        const res = await fetch(`${apiBase}/api/projects/${projectId}/environments/config`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(config),
-        });
-        const body = await res.json();
-        if (res.status === 200 && body.success === true)
-          return { pass: true, detail: `Saved env config for project ${projectId}` };
-        return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
-      },
-    },
-    {
-      name: 'Environment Config Load',
-      suite: 'smoke',
-      run: async (ctx) => {
-        const projectId = ctx.envProjectId;
-        if (!projectId) return { pass: false, detail: 'No project from previous test' };
-
-        const res = await fetch(`${apiBase}/api/projects/${projectId}/environments/config`);
-        const body = await res.json();
-
-        // Clean up the test project
-        await fetch(`${apiBase}/api/projects/${projectId}`, { method: 'DELETE' });
-
-        if (
-          res.status === 200 &&
-          body.pipeline?.id === 'pipe-smoke' &&
-          body.pipeline?.stages?.length === 2 &&
-          Array.isArray(body.environments) &&
-          Array.isArray(body.transitions)
-        ) {
-          return { pass: true, detail: `pipeline="${body.pipeline.name}", stages=${body.pipeline.stages.length}` };
-        }
+        // Should return 200 with null or a status object
+        if (res.status === 200)
+          return { pass: true, detail: `status=${body.status ?? 'none'}` };
         return { pass: false, detail: `${res.status}: ${JSON.stringify(body)}` };
       },
     },

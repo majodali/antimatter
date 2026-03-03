@@ -1,30 +1,29 @@
 import { Router } from 'express';
 import type { WorkspaceService } from '../services/workspace-service.js';
-import type { BuildTarget, BuildRule } from '@antimatter/project-model';
+import type { BuildRule } from '@antimatter/project-model';
 
-export function createBuildRouter(workspace: WorkspaceService): Router {
+export function createBuildRouter(
+  workspace: WorkspaceService,
+  options?: { onConfigSaved?: (rules: BuildRule[]) => void },
+): Router {
   const router = Router();
 
-  // Execute build targets (supports SSE streaming)
+  // Execute build rules (supports SSE streaming)
   router.post('/execute', async (req, res) => {
     try {
-      let { targets, rules } = req.body as {
-        targets?: BuildTarget[];
+      let { rules } = req.body as {
         rules?: BuildRule[];
       };
 
-      // If no targets/rules provided, load from stored config
-      if (!targets || !rules || targets.length === 0) {
+      // If no rules provided, load from stored config
+      if (!rules || rules.length === 0) {
         const config = await workspace.loadBuildConfig();
-        targets = targets && targets.length > 0 ? targets : config.targets;
-        rules = rules && rules.length > 0 ? rules : config.rules;
+        rules = config.rules;
       }
 
-      if (!targets || !rules || targets.length === 0) {
-        return res.status(400).json({ error: 'No targets configured. Add build targets via the config editor or provide them in the request body.' });
+      if (!rules || rules.length === 0) {
+        return res.status(400).json({ error: 'No rules configured. Add build rules via the config editor or provide them in the request body.' });
       }
-
-      const rulesMap = new Map(rules.map((r) => [r.id, r]));
 
       // Check if client wants SSE streaming
       const wantsSSE = req.headers.accept === 'text/event-stream';
@@ -41,7 +40,7 @@ export function createBuildRouter(workspace: WorkspaceService): Router {
         };
 
         try {
-          const resultMap = await workspace.executeBuild(targets, rulesMap, onProgress);
+          const resultMap = await workspace.executeBuild(rules, onProgress);
           const results = Array.from(resultMap.values());
           res.write(`data: ${JSON.stringify({ type: 'build-complete', results })}\n\n`);
         } catch (error) {
@@ -49,7 +48,7 @@ export function createBuildRouter(workspace: WorkspaceService): Router {
         }
         res.end();
       } else {
-        const resultMap = await workspace.executeBuild(targets, rulesMap);
+        const resultMap = await workspace.executeBuild(rules);
         const results = Array.from(resultMap.values());
         res.json({ results });
       }
@@ -64,10 +63,10 @@ export function createBuildRouter(workspace: WorkspaceService): Router {
   // Get build results
   router.get('/results', async (req, res) => {
     try {
-      const targetId = req.query.targetId as string | undefined;
+      const ruleId = req.query.ruleId as string | undefined;
 
-      if (targetId) {
-        const result = workspace.getBuildResult(targetId);
+      if (ruleId) {
+        const result = workspace.getBuildResult(ruleId);
         if (!result) {
           return res.status(404).json({ error: 'Build result not found' });
         }
@@ -100,8 +99,8 @@ export function createBuildRouter(workspace: WorkspaceService): Router {
   // Clear build cache
   router.delete('/cache', async (req, res) => {
     try {
-      const targetId = req.query.targetId as string | undefined;
-      await workspace.clearBuildCache(targetId);
+      const ruleId = req.query.ruleId as string | undefined;
+      await workspace.clearBuildCache(ruleId);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({
@@ -127,11 +126,12 @@ export function createBuildRouter(workspace: WorkspaceService): Router {
   // Save build config
   router.put('/config', async (req, res) => {
     try {
-      const { rules, targets } = req.body as { rules: BuildRule[]; targets: BuildTarget[] };
-      if (!rules || !targets) {
-        return res.status(400).json({ error: 'Rules and targets are required' });
+      const { rules } = req.body as { rules: BuildRule[] };
+      if (!rules) {
+        return res.status(400).json({ error: 'Rules are required' });
       }
-      await workspace.saveBuildConfig({ rules, targets });
+      await workspace.saveBuildConfig({ rules });
+      options?.onConfigSaved?.(rules);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({
@@ -141,16 +141,15 @@ export function createBuildRouter(workspace: WorkspaceService): Router {
     }
   });
 
-  // Get stale targets (for watch mode)
+  // Get stale rules (for watch mode)
   router.get('/changes', async (req, res) => {
     try {
       const config = await workspace.loadBuildConfig();
-      if (config.targets.length === 0 || config.rules.length === 0) {
-        return res.json({ staleTargetIds: [] });
+      if (config.rules.length === 0) {
+        return res.json({ staleRuleIds: [] });
       }
-      const rulesMap = new Map(config.rules.map((r) => [r.id, r]));
-      const staleTargetIds = await workspace.getStaleTargets(config.targets, rulesMap);
-      res.json({ staleTargetIds });
+      const staleRuleIds = await workspace.getStaleRules(config.rules);
+      res.json({ staleRuleIds });
     } catch (error) {
       res.status(500).json({
         error: 'Failed to check for changes',

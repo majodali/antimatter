@@ -19,7 +19,7 @@ import {
   createCustomTool,
 } from '@antimatter/agent-framework';
 import type { AgentResult, AgentTool, StreamCallbacks, CustomToolDefinition } from '@antimatter/agent-framework';
-import type { BuildRule, BuildTarget, BuildResult, Identifier } from '@antimatter/project-model';
+import type { BuildRule, BuildResult, Identifier } from '@antimatter/project-model';
 
 export interface WorkspaceServiceOptions {
   /** Unified workspace environment (new). When provided, fs and runner are derived from it. */
@@ -149,20 +149,18 @@ When asked to fix code, explain code, or refactor code, read the relevant files 
   // --- Build operations ---
 
   async executeBuild(
-    targets: readonly BuildTarget[],
-    rules: ReadonlyMap<Identifier, BuildRule>,
+    rules: readonly BuildRule[],
     onProgress?: (event: BuildProgressEvent) => void,
   ): Promise<ReadonlyMap<Identifier, BuildResult>> {
     const context: BuildContext = {
       workspaceRoot: this.workspaceRoot,
       fs: this.fs,
       runner: this.runner,
-      rules,
       onProgress,
     };
 
     const executor = new BuildExecutor(context);
-    const results = await executor.executeBatch(targets);
+    const results = await executor.executeBatch(rules);
 
     // Store results
     for (const [id, result] of results) {
@@ -172,37 +170,36 @@ When asked to fix code, explain code, or refactor code, read the relevant files 
     return results;
   }
 
-  async clearBuildCache(targetId?: string): Promise<void> {
+  async clearBuildCache(ruleId?: string): Promise<void> {
     const cacheManager = new CacheManager(this.fs);
-    if (targetId) {
-      await cacheManager.clearCache(targetId);
+    if (ruleId) {
+      await cacheManager.clearCache(ruleId);
     } else {
-      // Clear cache for all known targets
+      // Clear cache for all known rules
       for (const id of this.buildResults.keys()) {
         await cacheManager.clearCache(id);
       }
     }
   }
 
-  async getStaleTargets(
-    targets: readonly BuildTarget[],
-    rules: ReadonlyMap<Identifier, BuildRule>,
+  async getStaleRules(
+    rules: readonly BuildRule[],
   ): Promise<Identifier[]> {
     const cacheManager = new CacheManager(this.fs);
-    return cacheManager.getStaleTargets(targets, rules, this.workspaceRoot);
+    return cacheManager.getStaleRules(rules, this.workspaceRoot);
   }
 
-  async loadBuildConfig(): Promise<{ rules: BuildRule[]; targets: BuildTarget[] }> {
+  async loadBuildConfig(): Promise<{ rules: BuildRule[] }> {
     const configPath = '.antimatter/build.json';
     try {
       const content = await this.fs.readTextFile(configPath as any);
       return JSON.parse(content);
     } catch {
-      return { rules: [], targets: [] };
+      return { rules: [] };
     }
   }
 
-  async saveBuildConfig(config: { rules: BuildRule[]; targets: BuildTarget[] }): Promise<void> {
+  async saveBuildConfig(config: { rules: BuildRule[] }): Promise<void> {
     const configPath = '.antimatter/build.json';
     try {
       await this.fs.mkdir('.antimatter' as any);
@@ -210,8 +207,8 @@ When asked to fix code, explain code, or refactor code, read the relevant files 
     await this.fs.writeFile(configPath as any, JSON.stringify(config, null, 2));
   }
 
-  getBuildResult(targetId: string): BuildResult | undefined {
-    return this.buildResults.get(targetId);
+  getBuildResult(ruleId: string): BuildResult | undefined {
+    return this.buildResults.get(ruleId);
   }
 
   getAllBuildResults(): BuildResult[] {
@@ -332,16 +329,12 @@ When asked to fix code, explain code, or refactor code, read the relevant files 
       parameters: [],
       execute: async () => {
         const config = await this.loadBuildConfig();
-        if (config.targets.length === 0) {
-          return JSON.stringify({ error: 'No build targets configured' });
+        if (config.rules.length === 0) {
+          return JSON.stringify({ error: 'No build rules configured' });
         }
-        const rulesMap = new Map<Identifier, BuildRule>();
-        for (const rule of config.rules) {
-          rulesMap.set(rule.id, rule);
-        }
-        const results = await this.executeBuild(config.targets, rulesMap);
+        const results = await this.executeBuild(config.rules);
         const summary = Array.from(results.entries()).map(([id, result]) => ({
-          targetId: id,
+          ruleId: id,
           status: result.status,
           durationMs: result.durationMs,
           diagnostics: result.diagnostics ?? [],
@@ -354,14 +347,14 @@ When asked to fix code, explain code, or refactor code, read the relevant files 
   private createAgentGetDiagnosticsTool(): AgentTool {
     return {
       name: 'getBuildDiagnostics',
-      description: 'Get diagnostics from the last build. Optionally filter by target ID.',
+      description: 'Get diagnostics from the last build. Optionally filter by rule ID.',
       parameters: [
-        { name: 'targetId', type: 'string' as const, description: 'Target ID to filter diagnostics', required: false },
+        { name: 'ruleId', type: 'string' as const, description: 'Rule ID to filter diagnostics', required: false },
       ],
       execute: async (params) => {
-        const targetId = params.targetId as string | undefined;
-        if (targetId) {
-          const result = this.getBuildResult(targetId);
+        const ruleId = params.ruleId as string | undefined;
+        if (ruleId) {
+          const result = this.getBuildResult(ruleId);
           return JSON.stringify({ diagnostics: result?.diagnostics ?? [] });
         }
         const allDiags = this.getAllBuildResults().flatMap((r) => r.diagnostics ?? []);

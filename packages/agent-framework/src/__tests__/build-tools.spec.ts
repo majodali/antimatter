@@ -2,14 +2,13 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { MemoryFileSystem } from '@antimatter/filesystem';
 import type { WorkspacePath } from '@antimatter/filesystem';
 import { MockRunner } from '@antimatter/tool-integration';
-import type { BuildRule, BuildTarget } from '@antimatter/project-model';
+import type { BuildRule } from '@antimatter/project-model';
 import { createRunBuildTool } from '../tools/build-tools.js';
 
 describe('Build Tools', () => {
   let fs: MemoryFileSystem;
   let runner: MockRunner;
-  let rules: Map<string, BuildRule>;
-  let targets: BuildTarget[];
+  let rules: BuildRule[];
 
   beforeEach(async () => {
     fs = new MemoryFileSystem();
@@ -17,21 +16,14 @@ describe('Build Tools', () => {
 
     await fs.writeFile('src/index.ts' as WorkspacePath, 'export const x = 1;');
 
-    rules = new Map([
-      [
-        'compile-ts',
-        {
-          id: 'compile-ts',
-          name: 'Compile TypeScript',
-          inputs: ['src/**/*.ts'],
-          outputs: ['dist/**/*.js'],
-          command: 'tsc',
-        },
-      ],
-    ]);
-
-    targets = [
-      { id: 'build', ruleId: 'compile-ts', moduleId: 'app' },
+    rules = [
+      {
+        id: 'compile-ts',
+        name: 'Compile TypeScript',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
+      },
     ];
   });
 
@@ -47,7 +39,6 @@ describe('Build Tools', () => {
         fs,
         runner,
         rules,
-        targets,
         workspaceRoot: '/',
       });
 
@@ -55,7 +46,7 @@ describe('Build Tools', () => {
       const parsed = JSON.parse(result);
 
       expect(parsed.results).toHaveLength(1);
-      expect(parsed.results[0].targetId).toBe('build');
+      expect(parsed.results[0].ruleId).toBe('compile-ts');
       expect(parsed.results[0].status).toBe('success');
       expect(parsed.results[0].diagnostics).toHaveLength(0);
     });
@@ -71,7 +62,6 @@ describe('Build Tools', () => {
         fs,
         runner,
         rules,
-        targets,
         workspaceRoot: '/',
       });
 

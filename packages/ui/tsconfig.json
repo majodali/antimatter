@@ -32,19 +32,22 @@
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "references": [
     {
+      "path": "../workspace"
+    },
+    {
       "path": "../tool-integration"
+    },
+    {
+      "path": "../project-model"
+    },
+    {
+      "path": "../filesystem"
     },
     {
       "path": "../build-system"
     },
     {
       "path": "../agent-framework"
-    },
-    {
-      "path": "../filesystem"
-    },
-    {
-      "path": "../project-model"
     }
   ]
 }

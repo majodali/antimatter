@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { BuildExecutor } from '../build-executor.js';
-import type { BuildRule, BuildTarget } from '@antimatter/project-model';
+import type { BuildRule } from '@antimatter/project-model';
 import type { BuildContext } from '../types.js';
 import { MemoryFileSystem } from '@antimatter/filesystem';
 import { MockRunner } from '@antimatter/tool-integration';
@@ -16,24 +16,10 @@ describe('BuildExecutor', () => {
     fs = new MemoryFileSystem();
     runner = new MockRunner();
 
-    const rules = new Map<string, BuildRule>([
-      [
-        'compile',
-        {
-          id: 'compile',
-          name: 'Compile',
-          inputs: ['src/**/*.ts'],
-          outputs: ['dist/**/*.js'],
-          command: 'tsc',
-        },
-      ],
-    ]);
-
     context = {
       workspaceRoot: '/',
       fs,
       runner,
-      rules,
     };
 
     executor = new BuildExecutor(context);
@@ -41,10 +27,12 @@ describe('BuildExecutor', () => {
 
   describe('single target execution', () => {
     it('should execute single target successfully', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'export const x = 1;');
@@ -58,19 +46,21 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
+      const results = await executor.executeBatch([rule]);
 
       expect(results.size).toBe(1);
-      expect(results.get('build-app')?.status).toBe('success');
-      expect(results.get('build-app')?.diagnostics).toHaveLength(0);
-      expect(results.get('build-app')?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(results.get('compile')?.status).toBe('success');
+      expect(results.get('compile')?.diagnostics).toHaveLength(0);
+      expect(results.get('compile')?.durationMs).toBeGreaterThanOrEqual(0);
     });
 
     it('should handle build failure', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'invalid code');
@@ -84,17 +74,19 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
+      const results = await executor.executeBatch([rule]);
 
-      expect(results.get('build-app')?.status).toBe('failure');
-      expect(results.get('build-app')?.diagnostics.length).toBeGreaterThan(0);
+      expect(results.get('compile')?.status).toBe('failure');
+      expect(results.get('compile')?.diagnostics.length).toBeGreaterThan(0);
     });
 
     it('should track timing correctly', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'export const x = 1;');
@@ -108,8 +100,8 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      const result = results.get('build-app')!;
+      const results = await executor.executeBatch([rule]);
+      const result = results.get('compile')!;
 
       expect(result.startedAt).toBeDefined();
       expect(result.finishedAt).toBeDefined();
@@ -123,10 +115,12 @@ describe('BuildExecutor', () => {
 
   describe('caching', () => {
     it('should use cache when inputs are unchanged', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'export const x = 1;');
@@ -141,23 +135,25 @@ describe('BuildExecutor', () => {
       );
 
       // First build - should execute
-      let results = await executor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('success');
+      let results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('success');
       expect(runner.getExecutedCommands()).toHaveLength(1);
 
       runner.clearHistory();
 
       // Second build - should use cache
-      results = await executor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('cached');
+      results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('cached');
       expect(runner.getExecutedCommands()).toHaveLength(0); // No execution
     });
 
     it('should invalidate cache when input file changes', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'export const x = 1;');
@@ -172,23 +168,25 @@ describe('BuildExecutor', () => {
       );
 
       // First build
-      await executor.executeBatch([target]);
+      await executor.executeBatch([rule]);
       runner.clearHistory();
 
       // Change input file
       await fs.writeFile('src/index.ts' as WorkspacePath, 'export const x = 2;');
 
       // Second build - should re-execute
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('success');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('success');
       expect(runner.getExecutedCommands()).toHaveLength(1);
     });
 
     it('should not cache failed builds', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'invalid code');
@@ -203,31 +201,35 @@ describe('BuildExecutor', () => {
       );
 
       // First build - should fail
-      let results = await executor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('failure');
+      let results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('failure');
 
       runner.clearHistory();
 
       // Second build - should re-execute (not cached)
-      results = await executor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('failure');
+      results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('failure');
       expect(runner.getExecutedCommands()).toHaveLength(1);
     });
   });
 
   describe('dependency handling', () => {
     it('should execute dependencies before dependents', async () => {
-      const targets: BuildTarget[] = [
+      const rules: BuildRule[] = [
         {
-          id: 'build-app',
-          ruleId: 'compile',
-          moduleId: 'app',
-          dependsOn: ['build-lib'],
+          id: 'compile-app',
+          name: 'Compile App',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
+          dependsOn: ['compile-lib'],
         },
         {
-          id: 'build-lib',
-          ruleId: 'compile',
-          moduleId: 'lib',
+          id: 'compile-lib',
+          name: 'Compile Lib',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
         },
       ];
 
@@ -242,10 +244,10 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch(targets);
+      const results = await executor.executeBatch(rules);
 
-      expect(results.get('build-lib')?.status).toBe('success');
-      expect(results.get('build-app')?.status).toBe('success');
+      expect(results.get('compile-lib')?.status).toBe('success');
+      expect(results.get('compile-app')?.status).toBe('success');
 
       const history = runner.getExecutedCommands();
       const libIndex = history.findIndex((r) => r.command === 'tsc');
@@ -257,17 +259,21 @@ describe('BuildExecutor', () => {
     });
 
     it('should skip dependent targets when dependency fails', async () => {
-      const targets: BuildTarget[] = [
+      const rules: BuildRule[] = [
         {
-          id: 'build-app',
-          ruleId: 'compile',
-          moduleId: 'app',
-          dependsOn: ['build-lib'],
+          id: 'compile-app',
+          name: 'Compile App',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
+          dependsOn: ['compile-lib'],
         },
         {
-          id: 'build-lib',
-          ruleId: 'compile',
-          moduleId: 'lib',
+          id: 'compile-lib',
+          name: 'Compile Lib',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
         },
       ];
 
@@ -283,50 +289,42 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch(targets);
+      const results = await executor.executeBatch(rules);
 
-      expect(results.get('build-lib')?.status).toBe('failure');
-      expect(results.get('build-app')?.status).toBe('skipped');
+      expect(results.get('compile-lib')?.status).toBe('failure');
+      expect(results.get('compile-app')?.status).toBe('skipped');
 
       // Only lib should have been executed
       expect(runner.getExecutedCommands()).toHaveLength(1);
     });
 
     it('should skip all transitive dependents', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src/**/*.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
-      const targets: BuildTarget[] = [
+      const rules: BuildRule[] = [
         {
           id: 'A',
-          ruleId: 'compile',
-          moduleId: 'a',
+          name: 'Rule A',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
         },
         {
           id: 'B',
-          ruleId: 'compile',
-          moduleId: 'b',
+          name: 'Rule B',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
           dependsOn: ['A'],
         },
         {
           id: 'C',
-          ruleId: 'compile',
-          moduleId: 'c',
+          name: 'Rule C',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
           dependsOn: ['B'],
         },
       ];
 
-      context.rules = rules;
       executor = new BuildExecutor(context);
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
@@ -341,7 +339,7 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch(targets);
+      const results = await executor.executeBatch(rules);
 
       expect(results.get('A')?.status).toBe('failure');
       expect(results.get('B')?.status).toBe('skipped');
@@ -351,10 +349,12 @@ describe('BuildExecutor', () => {
 
   describe('diagnostic extraction', () => {
     it('should extract diagnostics from build output', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'invalid code');
@@ -368,8 +368,8 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      const result = results.get('build-app')!;
+      const results = await executor.executeBatch([rule]);
+      const result = results.get('compile')!;
 
       expect(result.status).toBe('failure');
       expect(result.diagnostics).toHaveLength(1);
@@ -380,10 +380,12 @@ describe('BuildExecutor', () => {
     });
 
     it('should combine stdout and stderr for diagnostic parsing', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
@@ -397,8 +399,8 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      const result = results.get('build-app')!;
+      const results = await executor.executeBatch([rule]);
+      const result = results.get('compile')!;
 
       expect(result.diagnostics).toHaveLength(2);
       expect(result.diagnostics.some((d) => d.severity === 'warning')).toBe(true);
@@ -408,10 +410,12 @@ describe('BuildExecutor', () => {
 
   describe('error handling', () => {
     it('should handle tool execution errors gracefully', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
@@ -423,8 +427,8 @@ describe('BuildExecutor', () => {
       const failContext: BuildContext = { ...context, runner: failingRunner as any };
       const failExecutor = new BuildExecutor(failContext);
 
-      const results = await failExecutor.executeBatch([target]);
-      const result = results.get('build-app')!;
+      const results = await failExecutor.executeBatch([rule]);
+      const result = results.get('compile')!;
 
       expect(result.status).toBe('failure');
       expect(result.diagnostics).toHaveLength(1);
@@ -434,10 +438,12 @@ describe('BuildExecutor', () => {
 
   describe('environment variables', () => {
     it('should pass environment variables to tool runner', async () => {
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
         env: {
           NODE_ENV: 'production',
         },
@@ -454,23 +460,27 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build-app')?.status).toBe('success');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('success');
     });
   });
 
   describe('multiple independent targets', () => {
     it('should execute multiple independent targets', async () => {
-      const targets: BuildTarget[] = [
+      const rules: BuildRule[] = [
         {
-          id: 'build-app1',
-          ruleId: 'compile',
-          moduleId: 'app1',
+          id: 'compile-app1',
+          name: 'Compile App1',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
         },
         {
-          id: 'build-app2',
-          ruleId: 'compile',
-          moduleId: 'app2',
+          id: 'compile-app2',
+          name: 'Compile App2',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
         },
       ];
 
@@ -485,10 +495,10 @@ describe('BuildExecutor', () => {
         },
       );
 
-      const results = await executor.executeBatch(targets);
+      const results = await executor.executeBatch(rules);
 
-      expect(results.get('build-app1')?.status).toBe('success');
-      expect(results.get('build-app2')?.status).toBe('success');
+      expect(results.get('compile-app1')?.status).toBe('success');
+      expect(results.get('compile-app2')?.status).toBe('success');
       expect(runner.getExecutedCommands()).toHaveLength(2);
     });
   });

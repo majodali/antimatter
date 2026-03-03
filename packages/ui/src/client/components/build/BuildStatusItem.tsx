@@ -6,19 +6,19 @@ import type { WorkspacePath } from '@antimatter/filesystem';
 
 interface BuildStatusItemProps {
   result: BuildResult;
-  targetName?: string;
+  ruleName?: string;
 }
 
-export function BuildStatusItem({ result, targetName }: BuildStatusItemProps) {
-  const { expandedTargets, toggleExpanded } = useBuildStore();
-  const isExpanded = expandedTargets.has(result.targetId);
+export function BuildStatusItem({ result, ruleName }: BuildStatusItemProps) {
+  const { expandedRules, toggleExpanded } = useBuildStore();
+  const isExpanded = expandedRules.has(result.ruleId);
   const hasDiagnostics = result.diagnostics.length > 0;
 
   const statusConfig = getStatusConfig(result.status);
 
   const handleToggle = () => {
     if (hasDiagnostics) {
-      toggleExpanded(result.targetId);
+      toggleExpanded(result.ruleId);
     }
   };
 
@@ -43,9 +43,9 @@ export function BuildStatusItem({ result, targetName }: BuildStatusItemProps) {
         {/* Status icon */}
         <statusConfig.icon className={`h-4 w-4 ${statusConfig.className}`} />
 
-        {/* Target name */}
+        {/* Rule name */}
         <span className="text-sm font-medium flex-1">
-          {targetName || result.targetId}
+          {ruleName || result.ruleId}
         </span>
 
         {/* Duration */}

@@ -1,9 +1,11 @@
 /**
- * Terminal Store — manages WebSocket connection to Fargate workspace
- * containers for interactive terminal sessions.
+ * Terminal Store — manages WebSocket connection to EC2 workspace
+ * instances for interactive terminal sessions.
  *
  * State machine: disconnected → starting → connecting → connected → (error)
- * The store handles container startup, WebSocket lifecycle, and auto-reconnect.
+ * The store handles instance startup, WebSocket lifecycle, and auto-reconnect.
+ * When the workspace reaches RUNNING, activates workspace-aware API routing
+ * so all project-scoped calls go through the EC2 instance.
  */
 
 import { create } from 'zustand';
@@ -12,12 +14,14 @@ import {
   getWorkspaceStatus,
   stopWorkspace,
   getWorkspaceWsUrl,
+  setActiveWorkspace,
   executeProjectCommand,
 } from '@/lib/api';
+import { useBuildStore } from './buildStore';
 
 export type ConnectionState =
   | 'disconnected'
-  | 'starting'    // Fargate task launching
+  | 'starting'    // EC2 instance launching
   | 'connecting'  // WebSocket connecting
   | 'connected'   // Interactive terminal ready
   | 'error';
@@ -27,9 +31,9 @@ interface TerminalStore {
   connectionState: ConnectionState;
   errorMessage: string | null;
 
-  // Container info (from API)
+  // Instance info (from API)
   sessionToken: string | null;
-  taskArn: string | null;
+  instanceId: string | null;
   projectId: string | null;
 
   // WebSocket
@@ -72,12 +76,32 @@ const MAX_RECONNECT_DELAY = 30000;
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+// WebSocket keepalive — CloudFront closes idle WebSocket connections after 60s.
+// Send a ping every 30s to keep the connection alive.
+let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+function startKeepalive(ws: WebSocket) {
+  stopKeepalive();
+  keepaliveTimer = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping' }));
+    }
+  }, 30000);
+}
+
+function stopKeepalive() {
+  if (keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  }
+}
+
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
   // State
   connectionState: 'disconnected',
   errorMessage: null,
   sessionToken: null,
-  taskArn: null,
+  instanceId: null,
   projectId: null,
   ws: null,
 
@@ -114,23 +138,23 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       errorMessage: null,
       projectId,
       sessionToken: null,
-      taskArn: null,
+      instanceId: null,
       ws: null,
     });
 
-    writeln('\x1b[36mStarting workspace container...\x1b[0m');
+    writeln('\x1b[36mStarting workspace instance...\x1b[0m');
 
     try {
-      // Start the container (or get existing)
+      // Start the instance (or get existing)
       const info = await startWorkspace(projectId);
-      set({ sessionToken: info.sessionToken, taskArn: info.taskArn });
+      set({ sessionToken: info.sessionToken, instanceId: info.instanceId });
 
       // Poll until RUNNING
       if (info.status !== 'RUNNING') {
-        writeln(`\x1b[36mContainer status: ${info.status}, waiting...\x1b[0m`);
+        writeln(`\x1b[36mInstance status: ${info.status}, waiting...\x1b[0m`);
 
         let attempts = 0;
-        const maxAttempts = 120; // 2 minutes at 1s intervals
+        const maxAttempts = 180; // 3 minutes at 1s intervals (EC2 takes longer than Fargate)
         let status = info.status;
 
         while (status !== 'RUNNING' && attempts < maxAttempts) {
@@ -147,7 +171,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
             }
 
             if (attempts % 5 === 0) {
-              writeln(`\x1b[36mContainer status: ${status} (${attempts}s)\x1b[0m`);
+              writeln(`\x1b[36mInstance status: ${status} (${attempts}s)\x1b[0m`);
             }
           } catch {
             // Ignore transient errors during polling
@@ -155,11 +179,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         }
 
         if (status !== 'RUNNING') {
-          throw new Error(`Container failed to start (last status: ${status})`);
+          throw new Error(`Instance failed to start (last status: ${status})`);
         }
       }
 
-      writeln('\x1b[32mContainer running, connecting terminal...\x1b[0m');
+      // Activate workspace-aware API routing — all project-scoped
+      // calls now go through the EC2 instance instead of Lambda
+      setActiveWorkspace(projectId);
+
+      writeln('\x1b[32mInstance running, connecting terminal...\x1b[0m');
       set({ connectionState: 'connecting' });
 
       // Connect WebSocket
@@ -177,6 +205,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         set({ connectionState: 'connected', ws, errorMessage: null });
         writeln('\x1b[32mTerminal connected.\x1b[0m');
         writeln('');
+
+        // Start keepalive pings to prevent CloudFront 60s idle timeout
+        startKeepalive(ws);
 
         // Send a resize event with current terminal dimensions
         const term = (window as any).__terminal;
@@ -211,6 +242,36 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               }
               break;
 
+            // Build events from EC2 BuildWatcher → forward to buildStore
+            case 'build-started':
+              useBuildStore.getState().clearResults();
+              break;
+            case 'rule-started':
+              if (msg.ruleId) {
+                useBuildStore.getState().setResult({
+                  ruleId: msg.ruleId,
+                  status: 'running',
+                  startedAt: msg.timestamp || new Date().toISOString(),
+                  diagnostics: [],
+                });
+              }
+              break;
+            case 'rule-output':
+              if (msg.ruleId && msg.line) {
+                useBuildStore.getState().appendOutput(msg.ruleId, msg.line);
+              }
+              break;
+            case 'rule-completed':
+              if (msg.result) {
+                useBuildStore.getState().setResult(msg.result);
+              }
+              break;
+            case 'build-complete':
+              if (msg.results) {
+                useBuildStore.getState().setResults(msg.results);
+              }
+              break;
+
             default:
               // Unknown message type — ignore
               break;
@@ -222,6 +283,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       };
 
       ws.onclose = (event) => {
+        stopKeepalive();
         const state = get();
         set({ ws: null });
 
@@ -264,7 +326,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   /**
    * Disconnect from the current workspace.
-   * Does NOT stop the container — it will auto-shutdown after idle timeout.
+   * Does NOT stop the instance — it will auto-shutdown after idle timeout.
    */
   disconnect: () => {
     const { ws } = get();
@@ -272,11 +334,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    stopKeepalive();
     reconnectAttempt = 0;
 
     if (ws) {
       ws.close(1000, 'User disconnected');
     }
+
+    // Deactivate workspace routing — falls back to Lambda
+    setActiveWorkspace(null);
 
     set({
       connectionState: 'disconnected',
@@ -306,32 +372,36 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   /**
-   * Stop the workspace container for a project.
+   * Stop the workspace instance for a project.
    */
   stopContainer: async (projectId: string) => {
     const state = get();
     if (state.ws) {
-      state.ws.close(1000, 'Stopping container');
+      state.ws.close(1000, 'Stopping instance');
     }
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    stopKeepalive();
+
+    // Deactivate workspace routing
+    setActiveWorkspace(null);
 
     set({
       connectionState: 'disconnected',
       ws: null,
       errorMessage: null,
       sessionToken: null,
-      taskArn: null,
+      instanceId: null,
     });
 
     try {
       await stopWorkspace(projectId);
-      writeln('\x1b[33mWorkspace container stopped.\x1b[0m');
+      writeln('\x1b[33mWorkspace instance stopped.\x1b[0m');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      writeln(`\x1b[31mFailed to stop container: ${msg}\x1b[0m`);
+      writeln(`\x1b[31mFailed to stop instance: ${msg}\x1b[0m`);
     }
   },
 

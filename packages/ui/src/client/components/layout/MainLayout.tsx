@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import {
   PanelGroup,
   Panel,
@@ -8,8 +9,21 @@ import { Sidebar } from './Sidebar';
 import { EditorPanel } from '../editor/EditorPanel';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { Separator } from '../ui/separator';
+import { useProjectStore } from '@/stores/projectStore';
+import { useTerminalStore } from '@/stores/terminalStore';
 
 export function MainLayout() {
+  const currentProjectId = useProjectStore((s) => s.currentProjectId);
+
+  // Auto-connect to workspace when project opens
+  useEffect(() => {
+    if (!currentProjectId) return;
+    const { connectionState, projectId, connect } = useTerminalStore.getState();
+    if (connectionState === 'disconnected' || connectionState === 'error' || projectId !== currentProjectId) {
+      connect(currentProjectId);
+    }
+  }, [currentProjectId]);
+
   return (
     <div className="h-screen flex flex-col bg-background">
       <Header />

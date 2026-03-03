@@ -20,6 +20,9 @@
     },
     {
       "path": "./packages/test-harness"
+    },
+    {
+      "path": "./packages/workspace"
     }
   ]
 }

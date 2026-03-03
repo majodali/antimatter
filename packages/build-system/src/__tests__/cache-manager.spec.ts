@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { CacheManager } from '../cache-manager.js';
 import { CacheError } from '../types.js';
 import { MemoryFileSystem } from '@antimatter/filesystem';
-import type { BuildRule, BuildTarget } from '@antimatter/project-model';
+import type { BuildRule } from '@antimatter/project-model';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
 describe('CacheManager', () => {
@@ -24,20 +24,14 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'export const x = 1;');
       await fs.writeFile('dist/index.js' as WorkspacePath, 'exports.x = 1;');
 
-      await cacheManager.saveCache(target, rule, '/');
+      await cacheManager.saveCache(rule, '/');
 
-      const loaded = await cacheManager.loadCache(target.id);
+      const loaded = await cacheManager.loadCache(rule.id);
       expect(loaded).toBeDefined();
-      expect(loaded?.targetId).toBe('build-app');
+      expect(loaded?.ruleId).toBe('compile');
       expect(loaded?.inputHashes.size).toBe(1);
       expect(loaded?.outputHashes.size).toBe(1);
       expect(loaded?.timestamp).toBeDefined();
@@ -57,19 +51,13 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content1');
       await fs.writeFile('src/utils.ts' as WorkspacePath, 'content2');
       await fs.writeFile('src/lib/helpers.ts' as WorkspacePath, 'content3');
 
-      await cacheManager.saveCache(target, rule, '/');
+      await cacheManager.saveCache(rule, '/');
 
-      const loaded = await cacheManager.loadCache(target.id);
+      const loaded = await cacheManager.loadCache(rule.id);
       expect(loaded?.inputHashes.size).toBe(3);
       expect(loaded?.inputHashes.has('src/index.ts')).toBe(true);
       expect(loaded?.inputHashes.has('src/utils.ts')).toBe(true);
@@ -87,15 +75,9 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
 
-      const valid = await cacheManager.isCacheValid(target, rule, '/');
+      const valid = await cacheManager.isCacheValid(rule, '/');
       expect(valid).toBe(false);
     });
 
@@ -108,16 +90,10 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
-      await cacheManager.saveCache(target, rule, '/');
+      await cacheManager.saveCache(rule, '/');
 
-      const valid = await cacheManager.isCacheValid(target, rule, '/');
+      const valid = await cacheManager.isCacheValid(rule, '/');
       expect(valid).toBe(true);
     });
 
@@ -130,19 +106,13 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'original content');
-      await cacheManager.saveCache(target, rule, '/');
+      await cacheManager.saveCache(rule, '/');
 
       // Change file content
       await fs.writeFile('src/index.ts' as WorkspacePath, 'modified content');
 
-      const valid = await cacheManager.isCacheValid(target, rule, '/');
+      const valid = await cacheManager.isCacheValid(rule, '/');
       expect(valid).toBe(false);
     });
 
@@ -155,19 +125,13 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
-      await cacheManager.saveCache(target, rule, '/');
+      await cacheManager.saveCache(rule, '/');
 
       // Add new file
       await fs.writeFile('src/utils.ts' as WorkspacePath, 'new file');
 
-      const valid = await cacheManager.isCacheValid(target, rule, '/');
+      const valid = await cacheManager.isCacheValid(rule, '/');
       expect(valid).toBe(false);
     });
 
@@ -180,20 +144,14 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content1');
       await fs.writeFile('src/utils.ts' as WorkspacePath, 'content2');
-      await cacheManager.saveCache(target, rule, '/');
+      await cacheManager.saveCache(rule, '/');
 
       // Remove file
       await fs.deleteFile('src/utils.ts' as WorkspacePath);
 
-      const valid = await cacheManager.isCacheValid(target, rule, '/');
+      const valid = await cacheManager.isCacheValid(rule, '/');
       expect(valid).toBe(false);
     });
 
@@ -206,15 +164,9 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
+      await cacheManager.saveCache(rule, '/');
 
-      await cacheManager.saveCache(target, rule, '/');
-
-      const valid = await cacheManager.isCacheValid(target, rule, '/');
+      const valid = await cacheManager.isCacheValid(rule, '/');
       expect(valid).toBe(true);
     });
   });
@@ -229,21 +181,15 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
-      await cacheManager.saveCache(target, rule, '/');
+      await cacheManager.saveCache(rule, '/');
 
-      let loaded = await cacheManager.loadCache(target.id);
+      let loaded = await cacheManager.loadCache(rule.id);
       expect(loaded).toBeDefined();
 
-      await cacheManager.clearCache(target.id);
+      await cacheManager.clearCache(rule.id);
 
-      loaded = await cacheManager.loadCache(target.id);
+      loaded = await cacheManager.loadCache(rule.id);
       expect(loaded).toBeUndefined();
     });
 
@@ -266,17 +212,11 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
-      await customCacheManager.saveCache(target, rule, '/');
+      await customCacheManager.saveCache(rule, '/');
 
       // Verify cache was saved to custom directory
-      const exists = await fs.exists('custom-cache/build-app.json' as WorkspacePath);
+      const exists = await fs.exists('custom-cache/compile.json' as WorkspacePath);
       expect(exists).toBe(true);
     });
   });
@@ -300,7 +240,7 @@ describe('CacheManager', () => {
       await fs.writeFile(
         '.antimatter-cache/incomplete.json' as WorkspacePath,
         JSON.stringify({
-          targetId: 'incomplete',
+          ruleId: 'incomplete',
           inputHashes: [],
           outputHashes: [],
         }),
@@ -321,18 +261,12 @@ describe('CacheManager', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build-app',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       // Write files in subdirectory
       await fs.writeFile('project/src/index.ts' as WorkspacePath, 'content');
 
-      await cacheManager.saveCache(target, rule, '/project');
+      await cacheManager.saveCache(rule, '/project');
 
-      const loaded = await cacheManager.loadCache(target.id);
+      const loaded = await cacheManager.loadCache(rule.id);
       expect(loaded?.inputHashes.has('project/src/index.ts')).toBe(true);
     });
   });

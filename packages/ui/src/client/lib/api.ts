@@ -1,5 +1,5 @@
 import type { WorkspacePath } from '@antimatter/filesystem';
-import type { BuildResult, BuildTarget, BuildRule } from '@antimatter/project-model';
+import type { BuildResult, BuildRule } from '@antimatter/project-model';
 import { eventLog } from './eventLog';
 
 export interface FileNode {
@@ -76,10 +76,30 @@ export function readBrowserFile(file: File): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace-aware API routing
+// ---------------------------------------------------------------------------
+// When a workspace EC2 instance is active for a project, project-scoped
+// API calls are routed through /workspace/{projectId}/api/* (EC2 via ALB)
+// instead of /api/projects/{projectId}/* (Lambda via API Gateway).
+
+let activeWorkspaceProjectId: string | null = null;
+
+export function setActiveWorkspace(projectId: string | null) {
+  activeWorkspaceProjectId = projectId;
+}
+
+export function getActiveWorkspace(): string | null {
+  return activeWorkspaceProjectId;
+}
+
+// ---------------------------------------------------------------------------
 // File API — project-scoped when projectId is provided
 // ---------------------------------------------------------------------------
 
 function fileBase(projectId?: string): string {
+  if (projectId && activeWorkspaceProjectId === projectId) {
+    return `/workspace/${projectId}/api/files`;
+  }
   return projectId ? `/api/projects/${projectId}/files` : '/api/files';
 }
 
@@ -118,6 +138,9 @@ export async function createFolder(path: string, projectId?: string): Promise<vo
 // ---------------------------------------------------------------------------
 
 function agentBase(projectId?: string): string {
+  if (projectId && activeWorkspaceProjectId === projectId) {
+    return `/workspace/${projectId}/api/agent`;
+  }
   return projectId ? `/api/projects/${projectId}/agent` : '/api/agent';
 }
 
@@ -199,25 +222,27 @@ export async function sendChatMessageStreaming(
 // ---------------------------------------------------------------------------
 
 function buildBase(projectId?: string): string {
+  if (projectId && activeWorkspaceProjectId === projectId) {
+    return `/workspace/${projectId}/api/build`;
+  }
   return projectId ? `/api/projects/${projectId}/build` : '/api/build';
 }
 
 export async function executeBuild(
-  targets: BuildTarget[],
   rules: BuildRule[],
   projectId?: string,
 ): Promise<BuildResult[]> {
   const { results } = await apiFetch<{ results: BuildResult[] }>(`${buildBase(projectId)}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ targets, rules }),
+    body: JSON.stringify({ rules }),
   });
   return results;
 }
 
 export interface BuildProgressEvent {
-  type: 'target-started' | 'target-output' | 'target-completed' | 'build-complete' | 'build-error';
-  targetId?: string;
+  type: 'rule-started' | 'rule-output' | 'rule-completed' | 'build-complete' | 'build-error';
+  ruleId?: string;
   timestamp?: string;
   line?: string;
   result?: BuildResult;
@@ -226,7 +251,6 @@ export interface BuildProgressEvent {
 }
 
 export async function executeBuildStreaming(
-  targets: BuildTarget[],
   rules: BuildRule[],
   onEvent: (event: BuildProgressEvent) => void,
   projectId?: string,
@@ -237,7 +261,7 @@ export async function executeBuildStreaming(
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
     },
-    body: JSON.stringify({ targets, rules }),
+    body: JSON.stringify({ rules }),
   });
 
   if (!res.ok) {
@@ -277,7 +301,6 @@ export async function fetchBuildResults(projectId?: string): Promise<BuildResult
 
 export interface BuildConfig {
   rules: BuildRule[];
-  targets: BuildTarget[];
 }
 
 export async function fetchBuildConfig(projectId?: string): Promise<BuildConfig> {
@@ -292,16 +315,11 @@ export async function saveBuildConfig(config: BuildConfig, projectId?: string): 
   });
 }
 
-export async function clearBuildCache(targetId?: string, projectId?: string): Promise<void> {
-  const query = targetId ? `?targetId=${encodeURIComponent(targetId)}` : '';
+export async function clearBuildCache(ruleId?: string, projectId?: string): Promise<void> {
+  const query = ruleId ? `?ruleId=${encodeURIComponent(ruleId)}` : '';
   await apiFetch<{ success: boolean }>(`${buildBase(projectId)}/cache${query}`, {
     method: 'DELETE',
   });
-}
-
-export async function fetchBuildChanges(projectId?: string): Promise<string[]> {
-  const { staleTargetIds } = await apiFetch<{ staleTargetIds: string[] }>(`${buildBase(projectId)}/changes`);
-  return staleTargetIds;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +327,9 @@ export async function fetchBuildChanges(projectId?: string): Promise<string[]> {
 // ---------------------------------------------------------------------------
 
 function deployBase(projectId?: string): string {
+  if (projectId && activeWorkspaceProjectId === projectId) {
+    return `/workspace/${projectId}/api/deploy`;
+  }
   return projectId ? `/api/projects/${projectId}/deploy` : '/api/deploy';
 }
 
@@ -464,28 +485,29 @@ export async function executeProjectCommand(
 }
 
 // ---------------------------------------------------------------------------
-// Workspace Container API — manages Fargate workspace lifecycle
+// Workspace Instance API — manages EC2 workspace lifecycle
 // ---------------------------------------------------------------------------
 
-export interface WorkspaceContainerInfo {
+export interface WorkspaceInstanceInfo {
   projectId: string;
-  taskArn: string;
-  status: 'PROVISIONING' | 'PENDING' | 'RUNNING' | 'DEPROVISIONING' | 'STOPPED' | 'UNKNOWN';
+  instanceId: string;
+  status: 'PENDING' | 'RUNNING' | 'STOPPING' | 'STOPPED' | 'TERMINATED' | 'UNKNOWN';
   privateIp?: string;
   port: number;
   sessionToken: string;
   startedAt?: string;
+  volumeId?: string;
 }
 
-export async function startWorkspace(projectId: string): Promise<WorkspaceContainerInfo> {
-  return apiFetch<WorkspaceContainerInfo>(
+export async function startWorkspace(projectId: string): Promise<WorkspaceInstanceInfo> {
+  return apiFetch<WorkspaceInstanceInfo>(
     `/api/projects/${encodeURIComponent(projectId)}/workspace/start`,
     { method: 'POST' },
   );
 }
 
-export async function getWorkspaceStatus(projectId: string): Promise<WorkspaceContainerInfo> {
-  return apiFetch<WorkspaceContainerInfo>(
+export async function getWorkspaceStatus(projectId: string): Promise<WorkspaceInstanceInfo> {
+  return apiFetch<WorkspaceInstanceInfo>(
     `/api/projects/${encodeURIComponent(projectId)}/workspace/status`,
   );
 }
@@ -502,7 +524,7 @@ export async function stopWorkspace(projectId: string): Promise<void> {
  * Uses the CloudFront distribution which proxies /ws/* to the ALB.
  */
 export async function getWorkspaceWsUrl(projectId: string, sessionToken: string): Promise<string> {
-  // WebSocket goes through CloudFront /ws/* → ALB → container
+  // WebSocket goes through CloudFront /ws/* → ALB → EC2 instance
   // Using relative URL so it automatically uses the CloudFront host
   return `/ws/terminal/${encodeURIComponent(projectId)}?token=${encodeURIComponent(sessionToken)}`;
 }

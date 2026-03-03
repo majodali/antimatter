@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { BuildExecutor } from '../build-executor.js';
 import { CacheManager } from '../cache-manager.js';
 import { DependencyResolver } from '../dependency-resolver.js';
-import type { BuildRule, BuildTarget } from '@antimatter/project-model';
+import type { BuildRule } from '@antimatter/project-model';
 import type { BuildContext } from '../types.js';
 import { BuildExecutionError, CacheError } from '../types.js';
 import { MemoryFileSystem } from '@antimatter/filesystem';
@@ -18,14 +18,12 @@ describe('Edge Cases', () => {
     runner = new MockRunner();
   });
 
-  describe('empty target list', () => {
-    it('should handle empty target list', async () => {
-      const rules = new Map<string, BuildRule>();
+  describe('empty rule list', () => {
+    it('should handle empty rule list', async () => {
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
@@ -35,34 +33,22 @@ describe('Edge Cases', () => {
     });
   });
 
-  describe('targets with no inputs', () => {
-    it('should handle target with empty input list', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'generate',
-          {
-            id: 'generate',
-            name: 'Generate',
-            inputs: [],
-            outputs: ['dist/generated.js'],
-            command: 'generate',
-          },
-        ],
-      ]);
-
+  describe('rules with no inputs', () => {
+    it('should handle rule with empty input list', async () => {
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
 
-      const target: BuildTarget = {
-        id: 'build',
-        ruleId: 'generate',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'generate',
+        name: 'Generate',
+        inputs: [],
+        outputs: ['dist/generated.js'],
+        command: 'generate',
       };
 
       runner.registerMock(
@@ -74,37 +60,25 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build')?.status).toBe('success');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('generate')?.status).toBe('success');
     });
 
-    it('should cache target with no inputs', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'generate',
-          {
-            id: 'generate',
-            name: 'Generate',
-            inputs: [],
-            outputs: ['dist/generated.js'],
-            command: 'generate',
-          },
-        ],
-      ]);
-
+    it('should cache rule with no inputs', async () => {
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
 
-      const target: BuildTarget = {
-        id: 'build',
-        ruleId: 'generate',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'generate',
+        name: 'Generate',
+        inputs: [],
+        outputs: ['dist/generated.js'],
+        command: 'generate',
       };
 
       runner.registerMock(
@@ -117,75 +91,55 @@ describe('Edge Cases', () => {
       );
 
       // First build
-      await executor.executeBatch([target]);
+      await executor.executeBatch([rule]);
       runner.clearHistory();
 
       // Second build - should be cached
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build')?.status).toBe('cached');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('generate')?.status).toBe('cached');
     });
   });
 
   describe('circular dependency errors', () => {
     it('should throw error for circular dependency', () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src/**/*.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
-      const targets: BuildTarget[] = [
+      const rules: BuildRule[] = [
         {
           id: 'A',
-          ruleId: 'compile',
-          moduleId: 'a',
+          name: 'Rule A',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
           dependsOn: ['B'],
         },
         {
           id: 'B',
-          ruleId: 'compile',
-          moduleId: 'b',
+          name: 'Rule B',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
           dependsOn: ['A'],
         },
       ];
 
-      const resolver = new DependencyResolver(targets, rules);
+      const resolver = new DependencyResolver(rules);
       expect(() => resolver.resolve()).toThrow(BuildExecutionError);
-      const resolver2 = new DependencyResolver(targets, rules);
+      const resolver2 = new DependencyResolver(rules);
       expect(() => resolver2.resolve()).toThrow(/circular dependency/i);
     });
 
     it('should include proper error reason for circular dependency', () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src/**/*.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
-      const targets: BuildTarget[] = [
+      const rules: BuildRule[] = [
         {
           id: 'A',
-          ruleId: 'compile',
-          moduleId: 'a',
+          name: 'Rule A',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
           dependsOn: ['A'],
         },
       ];
 
-      const resolver = new DependencyResolver(targets, rules);
+      const resolver = new DependencyResolver(rules);
       try {
         resolver.resolve();
         expect.fail('Should have thrown error');
@@ -217,46 +171,28 @@ describe('Edge Cases', () => {
         command: 'tsc',
       };
 
-      const target: BuildTarget = {
-        id: 'build',
-        ruleId: 'compile',
-        moduleId: 'app',
-      };
-
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
 
       // Should treat corrupted cache as invalid
-      const valid = await cacheManager.isCacheValid(target, rule, '/');
+      const valid = await cacheManager.isCacheValid(rule, '/');
       expect(valid).toBe(false);
     });
 
     it('should rebuild when cache is corrupted', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src/**/*.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
 
-      const target: BuildTarget = {
-        id: 'build',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
@@ -277,67 +213,46 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build')?.status).toBe('success');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('success');
       expect(runner.getExecutedCommands()).toHaveLength(1);
     });
   });
 
   describe('missing rules', () => {
-    it('should throw error for missing build rule', () => {
-      const rules = new Map<string, BuildRule>();
-
-      const targets: BuildTarget[] = [
+    it('should throw error for missing dependency rule', () => {
+      const rules: BuildRule[] = [
         {
           id: 'build',
-          ruleId: 'missing-rule',
-          moduleId: 'app',
+          name: 'Build',
+          inputs: ['src/**/*.ts'],
+          outputs: ['dist/**/*.js'],
+          command: 'tsc',
+          dependsOn: ['missing-rule'],
         },
       ];
 
-      expect(() => new DependencyResolver(targets, rules)).toThrow(
+      expect(() => new DependencyResolver(rules)).toThrow(
         BuildExecutionError,
-      );
-      expect(() => new DependencyResolver(targets, rules)).toThrow(
-        /no build rule found/i,
       );
     });
   });
 
   describe('very deep dependency chains', () => {
     it('should handle deep dependency chains', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src/**/*.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
-      // Create chain of 20 targets: A -> B -> C -> ... -> T
-      const targets: BuildTarget[] = [];
-      const letters = 'ABCDEFGHIJKLMNOPQRST'.split('');
-
-      for (let i = 0; i < letters.length; i++) {
-        const dependsOn = i > 0 ? [letters[i - 1]] : undefined;
-        targets.push({
-          id: letters[i],
-          ruleId: 'compile',
-          moduleId: letters[i].toLowerCase(),
-          dependsOn,
-        });
-      }
+      const rules: BuildRule[] = Array.from({ length: 20 }, (_, i) => ({
+        id: `level-${i}`,
+        name: `Level ${i}`,
+        inputs: ['src/**/*.ts'],
+        outputs: [],
+        command: 'tsc',
+        dependsOn: i > 0 ? [`level-${i - 1}`] : [],
+      }));
 
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
@@ -353,15 +268,15 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch(targets);
+      const results = await executor.executeBatch(rules);
 
       // All should succeed
       expect(results.size).toBe(20);
-      for (const letter of letters) {
-        expect(results.get(letter)?.status).toBe('success');
+      for (let i = 0; i < 20; i++) {
+        expect(results.get(`level-${i}`)?.status).toBe('success');
       }
 
-      // Should execute in order A, B, C, ..., T
+      // Should execute in order level-0, level-1, ..., level-19
       const history = runner.getExecutedCommands();
       expect(history).toHaveLength(20);
     });
@@ -369,32 +284,20 @@ describe('Edge Cases', () => {
 
   describe('special characters in paths', () => {
     it('should handle paths with spaces', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src with spaces/**/*.ts'],
-            outputs: ['dist with spaces/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
 
-      const target: BuildTarget = {
-        id: 'build',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src with spaces/**/*.ts'],
+        outputs: ['dist with spaces/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src with spaces/index.ts' as WorkspacePath, 'content');
@@ -408,37 +311,25 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build')?.status).toBe('success');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('success');
     });
 
     it('should handle paths with hyphens and underscores', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src-main/**/*.ts', 'src_test/**/*.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
 
-      const target: BuildTarget = {
-        id: 'build',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src-main/**/*.ts', 'src_test/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src-main/index.ts' as WorkspacePath, 'content');
@@ -453,37 +344,25 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build')?.status).toBe('success');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('success');
     });
 
     it('should handle paths with dots', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['.config/**/*.ts', 'src/**/*.config.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
 
-      const target: BuildTarget = {
-        id: 'build',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['.config/**/*.ts', 'src/**/*.config.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('.config/webpack.config.ts' as WorkspacePath, 'content');
@@ -498,44 +377,32 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build')?.status).toBe('success');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('success');
     });
   });
 
   describe('unicode in file names', () => {
     it('should handle unicode characters in file names', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src/**/*.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
 
-      const target: BuildTarget = {
-        id: 'build',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
-      await fs.writeFile('src/fichier-français.ts' as WorkspacePath, 'content');
-      await fs.writeFile('src/файл.ts' as WorkspacePath, 'content');
-      await fs.writeFile('src/文件.ts' as WorkspacePath, 'content');
+      await fs.writeFile('src/fichier-fran\u00e7ais.ts' as WorkspacePath, 'content');
+      await fs.writeFile('src/\u0444\u0430\u0439\u043b.ts' as WorkspacePath, 'content');
+      await fs.writeFile('src/\u6587\u4ef6.ts' as WorkspacePath, 'content');
 
       runner.registerMock(
         'tsc',
@@ -546,39 +413,27 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build')?.status).toBe('success');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('success');
     });
   });
 
-  describe('target with no outputs', () => {
-    it('should handle target with empty output list', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'lint',
-          {
-            id: 'lint',
-            name: 'Lint',
-            inputs: ['src/**/*.ts'],
-            outputs: [], // Linting produces no output files
-            command: 'eslint',
-          },
-        ],
-      ]);
-
+  describe('rule with no outputs', () => {
+    it('should handle rule with empty output list', async () => {
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
 
-      const target: BuildTarget = {
+      const rule: BuildRule = {
         id: 'lint',
-        ruleId: 'lint',
-        moduleId: 'app',
+        name: 'Lint',
+        inputs: ['src/**/*.ts'],
+        outputs: [], // Linting produces no output files
+        command: 'eslint',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
@@ -592,40 +447,25 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
+      const results = await executor.executeBatch([rule]);
       expect(results.get('lint')?.status).toBe('success');
     });
   });
 
-  describe('extremely large number of targets', () => {
-    it('should handle 100 independent targets', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src/**/*.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
-      const targets: BuildTarget[] = [];
-      for (let i = 0; i < 100; i++) {
-        targets.push({
-          id: `build-${i}`,
-          ruleId: 'compile',
-          moduleId: `app-${i}`,
-        });
-      }
+  describe('extremely large number of rules', () => {
+    it('should handle 100 independent rules', async () => {
+      const rules: BuildRule[] = Array.from({ length: 100 }, (_, i) => ({
+        id: `build-${i}`,
+        name: `Build ${i}`,
+        inputs: ['src/**/*.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
+      }));
 
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
@@ -641,7 +481,7 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch(targets);
+      const results = await executor.executeBatch(rules);
 
       expect(results.size).toBe(100);
       for (let i = 0; i < 100; i++) {
@@ -652,32 +492,20 @@ describe('Edge Cases', () => {
 
   describe('negation patterns in globs', () => {
     it('should handle negation patterns correctly', async () => {
-      const rules = new Map<string, BuildRule>([
-        [
-          'compile',
-          {
-            id: 'compile',
-            name: 'Compile',
-            inputs: ['src/**/*.ts', '!src/**/*.spec.ts'],
-            outputs: ['dist/**/*.js'],
-            command: 'tsc',
-          },
-        ],
-      ]);
-
       const context: BuildContext = {
         workspaceRoot: '/',
         fs,
         runner,
-        rules,
       };
 
       const executor = new BuildExecutor(context);
 
-      const target: BuildTarget = {
-        id: 'build',
-        ruleId: 'compile',
-        moduleId: 'app',
+      const rule: BuildRule = {
+        id: 'compile',
+        name: 'Compile',
+        inputs: ['src/**/*.ts', '!src/**/*.spec.ts'],
+        outputs: ['dist/**/*.js'],
+        command: 'tsc',
       };
 
       await fs.writeFile('src/index.ts' as WorkspacePath, 'content');
@@ -693,12 +521,12 @@ describe('Edge Cases', () => {
         },
       );
 
-      const results = await executor.executeBatch([target]);
-      expect(results.get('build')?.status).toBe('success');
+      const results = await executor.executeBatch([rule]);
+      expect(results.get('compile')?.status).toBe('success');
 
       // Verify cache includes only non-test files
       const cacheManager = new CacheManager(fs);
-      const cache = await cacheManager.loadCache('build');
+      const cache = await cacheManager.loadCache('compile');
       expect(cache?.inputHashes.size).toBe(2); // index.ts and utils.ts, not test.spec.ts
     });
   });

@@ -1,7 +1,6 @@
 // Re-export types from @antimatter/project-model
 export type {
   BuildRule,
-  BuildTarget,
   BuildResult,
   BuildStatus,
 } from '@antimatter/project-model';
@@ -15,13 +14,15 @@ export { BuildExecutor } from './build-executor.js';
 export { CacheManager } from './cache-manager.js';
 export { DependencyResolver } from './dependency-resolver.js';
 export { MockBuildExecutor } from './mock-build-executor.js';
+export { BuildWatcher } from './build-watcher.js';
+export type { BuildWatcherOptions } from './build-watcher.js';
 
 // Export utility functions
 export { parseDiagnostics } from './diagnostic-parser.js';
 export { expandGlobs, matchesAnyGlob, globToRegex } from './glob-matcher.js';
 
 // Import types for convenience function
-import type { Identifier, BuildRule, BuildTarget, BuildResult } from '@antimatter/project-model';
+import type { Identifier, BuildRule, BuildResult } from '@antimatter/project-model';
 import type { FileSystem } from '@antimatter/filesystem';
 import type { ToolRunner } from '@antimatter/tool-integration';
 import { BuildExecutor } from './build-executor.js';
@@ -29,10 +30,10 @@ import { BuildExecutor } from './build-executor.js';
 /**
  * Convenience function to execute a build.
  *
- * Creates a BuildExecutor instance and executes the specified targets.
+ * Creates a BuildExecutor instance and executes the specified rules.
  *
  * @param options - Build execution options
- * @returns Map of target ID to build result
+ * @returns Map of rule ID to build result
  *
  * @example
  * ```typescript
@@ -41,14 +42,13 @@ import { BuildExecutor } from './build-executor.js';
  * import { MockRunner } from '@antimatter/tool-integration';
  *
  * const results = await executeBuild({
- *   targets: [{ id: 'build', ruleId: 'compile', moduleId: 'app' }],
- *   rules: new Map([['compile', {
+ *   rules: [{
  *     id: 'compile',
  *     name: 'Compile',
  *     inputs: ['src/**\/*.ts'],
  *     outputs: ['dist/**\/*.js'],
  *     command: 'tsc',
- *   }]]),
+ *   }],
  *   workspaceRoot: '/',
  *   fs: new MemoryFileSystem(),
  *   runner: new MockRunner(),
@@ -56,10 +56,8 @@ import { BuildExecutor } from './build-executor.js';
  * ```
  */
 export async function executeBuild(options: {
-  /** Build targets to execute */
-  readonly targets: readonly BuildTarget[];
-  /** Map of build rules by ID */
-  readonly rules: ReadonlyMap<Identifier, BuildRule>;
+  /** Build rules to execute */
+  readonly rules: readonly BuildRule[];
   /** Workspace root directory */
   readonly workspaceRoot: string;
   /** File system abstraction */
@@ -73,9 +71,8 @@ export async function executeBuild(options: {
     workspaceRoot: options.workspaceRoot,
     fs: options.fs,
     runner: options.runner,
-    rules: options.rules,
     cacheDir: options.cacheDir,
   });
 
-  return executor.executeBatch(options.targets);
+  return executor.executeBatch(options.rules);
 }

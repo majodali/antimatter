@@ -38,7 +38,14 @@ export function createCustomTool(
         command = command.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), String(value));
       }
 
-      const result = await runner.run(command, {
+      const result = await runner.run({
+        tool: {
+          id: `custom-${def.name}`,
+          name: def.name,
+          command,
+          parameters: [],
+        },
+        parameters: {},
         cwd: workspaceRoot,
         timeout: 30000,
       });

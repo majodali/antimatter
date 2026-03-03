@@ -1,67 +1,67 @@
 import type {
   Identifier,
-  BuildTarget,
+  BuildRule,
   BuildResult,
 } from '@antimatter/project-model';
-import type { BuildContext } from './types.js';
 import { DependencyResolver } from './dependency-resolver.js';
 
 /**
  * Mock implementation of BuildExecutor for testing.
  *
- * Allows registering expected results for specific targets without
+ * Allows registering expected results for specific rules without
  * actually executing builds. Still performs dependency resolution
  * to test that logic.
  *
  * Usage:
  * ```typescript
- * const mock = new MockBuildExecutor(context);
- * mock.registerMock('build-app', {
- *   targetId: 'build-app',
+ * const mock = new MockBuildExecutor();
+ * mock.registerMock('compile-ts', {
+ *   ruleId: 'compile-ts',
  *   status: 'success',
  *   ...
  * });
- * const results = await mock.executeBatch([target]);
+ * const results = await mock.executeBatch([rule]);
  * ```
  */
 export class MockBuildExecutor {
   private readonly mocks = new Map<Identifier, BuildResult>();
   private readonly executionHistory: Identifier[] = [];
 
-  constructor(private readonly context: BuildContext) {}
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  constructor() {}
 
   /**
-   * Register a mock result for a specific target.
+   * Register a mock result for a specific rule.
    */
-  registerMock(targetId: Identifier, result: BuildResult): void {
-    this.mocks.set(targetId, result);
+  registerMock(ruleId: Identifier, result: BuildResult): void {
+    this.mocks.set(ruleId, result);
   }
 
   /**
-   * Execute batch of targets, returning mocked results.
+   * Execute batch of rules, returning mocked results.
    *
    * Still performs dependency resolution to verify that logic works.
    */
   async executeBatch(
-    targets: readonly BuildTarget[],
+    rules: readonly BuildRule[],
   ): Promise<ReadonlyMap<Identifier, BuildResult>> {
     // Resolve dependencies to get execution order
-    const resolver = new DependencyResolver(targets, this.context.rules);
+    const resolver = new DependencyResolver(rules);
     const plan = resolver.resolve();
 
     const results = new Map<Identifier, BuildResult>();
 
-    for (const target of plan.targets) {
-      this.executionHistory.push(target.id);
+    for (const rule of plan.rules) {
+      this.executionHistory.push(rule.id);
 
-      // Check if target has a mock result
-      const mockResult = this.mocks.get(target.id);
+      // Check if rule has a mock result
+      const mockResult = this.mocks.get(rule.id);
       if (mockResult) {
-        results.set(target.id, mockResult);
+        results.set(rule.id, mockResult);
       } else {
         // Default to success if no mock registered
-        results.set(target.id, {
-          targetId: target.id,
+        results.set(rule.id, {
+          ruleId: rule.id,
           status: 'success',
           diagnostics: [],
           startedAt: new Date().toISOString(),
@@ -75,9 +75,9 @@ export class MockBuildExecutor {
   }
 
   /**
-   * Get list of targets that were executed (in order).
+   * Get list of rules that were executed (in order).
    */
-  getExecutedTargets(): readonly Identifier[] {
+  getExecutedRules(): readonly Identifier[] {
     return [...this.executionHistory];
   }
 

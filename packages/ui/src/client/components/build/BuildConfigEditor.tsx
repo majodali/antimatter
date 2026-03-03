@@ -4,10 +4,10 @@ import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { useBuildStore } from '@/stores/buildStore';
 import { useProjectStore } from '@/stores/projectStore';
-import type { BuildRule, BuildTarget } from '@antimatter/project-model';
+import type { BuildRule } from '@antimatter/project-model';
 
 export function BuildConfigEditor() {
-  const { rules, targets, addRule, removeRule, updateRule, addTarget, removeTarget, updateTarget, saveConfig } =
+  const { rules, addRule, removeRule, updateRule, saveConfig } =
     useBuildStore();
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const [saving, setSaving] = useState(false);
@@ -26,12 +26,6 @@ export function BuildConfigEditor() {
     addRule({ id, name: '', inputs: [], outputs: [], command: '' });
   };
 
-  const handleAddTarget = () => {
-    const id = `target-${Date.now()}`;
-    const firstRuleId = Array.from(rules.keys())[0] || '';
-    addTarget({ id, ruleId: firstRuleId, moduleId: '' });
-  };
-
   return (
     <ScrollArea className="flex-1">
       <div className="p-3 space-y-4">
@@ -48,37 +42,13 @@ export function BuildConfigEditor() {
               <RuleEditor
                 key={rule.id}
                 rule={rule}
+                allRules={rules}
                 onUpdate={(updated) => updateRule(rule.id, updated)}
                 onRemove={() => removeRule(rule.id)}
               />
             ))}
             {rules.size === 0 && (
               <p className="text-xs text-muted-foreground italic">No rules defined. Click + to add one.</p>
-            )}
-          </div>
-        </div>
-
-        {/* Targets Section */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="text-xs font-semibold uppercase text-muted-foreground">Build Targets</h4>
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleAddTarget} title="Add target">
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-          <div className="space-y-2">
-            {Array.from(targets.entries()).map(([mapKey, target]) => (
-              <TargetEditor
-                key={mapKey}
-                target={target}
-                rules={rules}
-                allTargets={targets}
-                onUpdate={(updated) => updateTarget(mapKey, updated)}
-                onRemove={() => removeTarget(mapKey)}
-              />
-            ))}
-            {targets.size === 0 && (
-              <p className="text-xs text-muted-foreground italic">No targets defined. Click + to add one.</p>
             )}
           </div>
         </div>
@@ -95,13 +65,17 @@ export function BuildConfigEditor() {
 
 function RuleEditor({
   rule,
+  allRules,
   onUpdate,
   onRemove,
 }: {
   rule: BuildRule;
+  allRules: Map<string, BuildRule>;
   onUpdate: (r: BuildRule) => void;
   onRemove: () => void;
 }) {
+  const otherRules = Array.from(allRules.values()).filter((r) => r.id !== rule.id);
+
   return (
     <div className="border border-border rounded p-2 space-y-1.5 bg-accent/20">
       <div className="flex items-center justify-between">
@@ -118,7 +92,7 @@ function RuleEditor({
       />
       <input
         className="w-full text-xs bg-background border border-border rounded px-2 py-1 font-mono"
-        placeholder="Command (e.g. tsc)"
+        placeholder="Command (e.g. npx tsc --noEmit)"
         value={rule.command}
         onChange={(e) => onUpdate({ ...rule, command: e.target.value })}
       />
@@ -150,95 +124,30 @@ function RuleEditor({
           })
         }
       />
-    </div>
-  );
-}
-
-function TargetEditor({
-  target,
-  rules,
-  allTargets,
-  onUpdate,
-  onRemove,
-}: {
-  target: BuildTarget;
-  rules: Map<string, BuildRule>;
-  allTargets: Map<string, BuildTarget>;
-  onUpdate: (t: BuildTarget) => void;
-  onRemove: () => void;
-}) {
-  const [localId, setLocalId] = useState(target.id);
-  useEffect(() => { setLocalId(target.id); }, [target.id]);
-
-  const otherTargets = Array.from(allTargets.values()).filter((t) => t.id !== target.id);
-
-  const commitId = () => {
-    const trimmed = localId.trim();
-    if (trimmed && trimmed !== target.id) {
-      onUpdate({ ...target, id: trimmed });
-    } else {
-      setLocalId(target.id);
-    }
-  };
-
-  return (
-    <div className="border border-border rounded p-2 space-y-1.5 bg-accent/20">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-mono text-muted-foreground">{target.id}</span>
-        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={onRemove}>
-          <Trash2 className="h-3 w-3 text-destructive" />
-        </Button>
-      </div>
-      <input
-        className="w-full text-xs bg-background border border-border rounded px-2 py-1"
-        placeholder="Target ID"
-        value={localId}
-        onChange={(e) => setLocalId(e.target.value)}
-        onBlur={commitId}
-        onKeyDown={(e) => { if (e.key === 'Enter') commitId(); }}
-      />
-      <select
-        className="w-full text-xs bg-background border border-border rounded px-2 py-1"
-        value={target.ruleId}
-        onChange={(e) => onUpdate({ ...target, ruleId: e.target.value })}
-      >
-        <option value="">Select rule...</option>
-        {Array.from(rules.values()).map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.name || r.id}
-          </option>
-        ))}
-      </select>
-      <input
-        className="w-full text-xs bg-background border border-border rounded px-2 py-1"
-        placeholder="Module ID"
-        value={target.moduleId}
-        onChange={(e) => onUpdate({ ...target, moduleId: e.target.value })}
-      />
-      {otherTargets.length > 0 && (
+      {otherRules.length > 0 && (
         <div>
           <label className="text-xs text-muted-foreground">Depends on:</label>
           <div className="flex flex-wrap gap-1 mt-1">
-            {otherTargets.map((t) => {
-              const isSelected = (target.dependsOn || []).includes(t.id);
+            {otherRules.map((r) => {
+              const isSelected = (rule.dependsOn || []).includes(r.id);
               return (
                 <button
-                  key={t.id}
+                  key={r.id}
                   className={`text-xs px-2 py-0.5 rounded border ${
                     isSelected
                       ? 'bg-primary text-primary-foreground border-primary'
                       : 'bg-background border-border text-muted-foreground hover:border-primary/50'
                   }`}
                   onClick={() => {
-                    const deps = [...(target.dependsOn || [])];
+                    const deps = [...(rule.dependsOn || [])];
                     if (isSelected) {
-                      onUpdate({ ...target, dependsOn: deps.filter((d) => d !== t.id) });
+                      onUpdate({ ...rule, dependsOn: deps.filter((d) => d !== r.id) });
                     } else {
-                      onUpdate({ ...target, dependsOn: [...deps, t.id] });
+                      onUpdate({ ...rule, dependsOn: [...deps, r.id] });
                     }
                   }}
                 >
-                  {t.id}
+                  {r.name || r.id}
                 </button>
               );
             })}

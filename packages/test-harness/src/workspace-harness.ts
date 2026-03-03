@@ -1,5 +1,5 @@
 import { MemoryFileSystem } from '@antimatter/filesystem';
-import type { FileSystem, WorkspacePath, FileEntry } from '@antimatter/filesystem';
+import type { WorkspacePath, FileEntry } from '@antimatter/filesystem';
 import { MockRunner } from '@antimatter/tool-integration';
 import { BuildExecutor, CacheManager } from '@antimatter/build-system';
 import type { BuildContext } from '@antimatter/build-system';
@@ -9,7 +9,7 @@ import {
   MockProvider,
 } from '@antimatter/agent-framework';
 import type { AgentTool, AgentResult } from '@antimatter/agent-framework';
-import type { BuildRule, BuildTarget, BuildResult, Identifier } from '@antimatter/project-model';
+import type { BuildRule, BuildResult, Identifier } from '@antimatter/project-model';
 import { createTypeScriptProjectFixture, type ProjectFixture } from './fixtures.js';
 
 const BUILD_CONFIG_PATH = '.antimatter/build.json' as WorkspacePath;
@@ -39,13 +39,13 @@ export interface WorkspaceHarness {
   getFileTree(path?: string): Promise<FileEntry[]>;
 
   // --- Build operations (↔ ActionContext build methods) ---
-  saveBuildConfig(config: { rules: any[]; targets: any[] }): Promise<void>;
-  loadBuildConfig(): Promise<{ rules: any[]; targets: any[] }>;
-  executeBuild(targets?: readonly BuildTarget[]): Promise<ReadonlyMap<Identifier, BuildResult>>;
+  saveBuildConfig(config: { rules: any[] }): Promise<void>;
+  loadBuildConfig(): Promise<{ rules: any[] }>;
+  executeBuild(rules?: readonly BuildRule[]): Promise<ReadonlyMap<Identifier, BuildResult>>;
   getBuildResults(): any[];
   clearBuildResults(): void;
-  clearBuildCache(targetId?: string): Promise<void>;
-  getStaleTargets(): Promise<string[]>;
+  clearBuildCache(ruleId?: string): Promise<void>;
+  getStaleRules(): Promise<string[]>;
 
   // --- Agent operations (↔ ActionContext agent methods) ---
   sendChat(message: string): Promise<AgentResult>;
@@ -98,19 +98,15 @@ export async function createWorkspaceHarness(
     workspaceRoot: '/',
     fs,
     runner,
-    rules: fixture.rules,
   });
 
   const executeBuild = async (
-    targets?: readonly BuildTarget[],
+    rules?: readonly BuildRule[],
   ): Promise<ReadonlyMap<Identifier, BuildResult>> => {
     const executor = new BuildExecutor(buildContext());
-    const results = await executor.executeBatch(targets ?? fixture.targets);
+    const results = await executor.executeBatch(rules ?? fixture.rules);
     // Store results as array for getBuildResults()
-    const newResults = Array.from(results.entries()).map(([targetId, result]) => ({
-      targetId,
-      ...result,
-    }));
+    const newResults = Array.from(results.values());
     buildResults = [...buildResults, ...newResults];
     return results;
   };
@@ -129,10 +125,10 @@ export async function createWorkspaceHarness(
     deleteFile: (path: string) => fs.deleteFile(path as WorkspacePath),
     fileExists: (path: string) => fs.exists(path as WorkspacePath),
     mkdir: (path: string) => fs.mkdir(path as WorkspacePath),
-    getFileTree: (path?: string) => fs.readDirectory((path ?? '') as WorkspacePath),
+    getFileTree: async (path?: string) => [...await fs.readDirectory((path ?? '') as WorkspacePath)],
 
     // --- Build operations ---
-    saveBuildConfig: async (config: { rules: any[]; targets: any[] }) => {
+    saveBuildConfig: async (config: { rules: any[] }) => {
       await fs.writeFile(BUILD_CONFIG_PATH, JSON.stringify(config, null, 2));
     },
     loadBuildConfig: async () => {
@@ -142,20 +138,20 @@ export async function createWorkspaceHarness(
     executeBuild,
     getBuildResults: () => buildResults,
     clearBuildResults: () => { buildResults = []; },
-    clearBuildCache: async (targetId?: string) => {
+    clearBuildCache: async (ruleId?: string) => {
       const cache = new CacheManager(fs, '/');
-      if (targetId) {
-        cache.clearCache(targetId);
+      if (ruleId) {
+        cache.clearCache(ruleId);
       } else {
-        // Clear cache for all known targets
-        for (const target of fixture.targets) {
-          cache.clearCache(target.id);
+        // Clear cache for all known rules
+        for (const rule of fixture.rules) {
+          cache.clearCache(rule.id);
         }
       }
     },
-    getStaleTargets: async () => {
+    getStaleRules: async () => {
       const cache = new CacheManager(fs, '/');
-      return cache.getStaleTargets(fixture.targets, fixture.rules, '/');
+      return cache.getStaleRules(fixture.rules, '/');
     },
 
     // --- Agent operations ---

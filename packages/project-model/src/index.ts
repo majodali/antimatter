@@ -15,7 +15,6 @@ export type {
 
 export type {
   BuildRule,
-  BuildTarget,
   BuildResult,
   BuildStatus,
 } from './build.js';

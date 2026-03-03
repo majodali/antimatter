@@ -1,20 +1,14 @@
 import serverlessExpress from '@codegenie/serverless-express';
 import express from 'express';
 import { S3Client } from '@aws-sdk/client-s3';
-import { LambdaClient, UpdateFunctionCodeCommand, GetFunctionConfigurationCommand } from '@aws-sdk/client-lambda';
-import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
-import { S3WorkspaceEnvironment, CommandLambdaEnvironment, AwsLambdaInvoker } from '@antimatter/workspace';
+import { S3WorkspaceEnvironment } from '@antimatter/workspace';
 import { WorkspaceService } from './services/workspace-service.js';
 import { createFileRouter } from './routes/filesystem.js';
 import { createBuildRouter } from './routes/build.js';
-import { createAgentRouter } from './routes/agent.js';
-import { createDeployRouter } from './routes/deploy.js';
-import { createEnvironmentRouter } from './routes/environments.js';
 import { createProjectRouter } from './routes/projects.js';
 import { createTestRouter } from './routes/tests.js';
 import { createWorkspaceRouter } from './routes/workspace.js';
-import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
-import type { WorkspaceContainerServiceConfig } from './services/workspace-container-service.js';
+import type { WorkspaceEc2ServiceConfig } from './services/workspace-ec2-service.js';
 
 const app = express();
 
@@ -48,26 +42,13 @@ app.use((req, res, next) => {
 // S3 client singleton + bucket name from environment
 const s3Client = new S3Client({});
 const projectsBucket = process.env.PROJECTS_BUCKET ?? '';
-const commandFunctionName = process.env.COMMAND_FUNCTION_NAME ?? '';
-
-// Lambda invoker for Command Lambda (lazy-initialized, only when needed)
-let lambdaInvoker: AwsLambdaInvoker | undefined;
-
-// Legacy shared workspace service (for non-project-scoped routes)
-const workspace = new WorkspaceService({
-  workspaceRoot: '/tmp',
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-});
 
 // API Routes — serverless-express uses event.pathParameters.proxy which strips
 // the API Gateway resource prefix (/api), so we mount at both /api/* (for when
 // the full path is preserved) and /* (for when it's stripped).
 const apiRouter = express.Router();
 
-// Legacy (non-project-scoped) routes
-apiRouter.use('/files', createFileRouter(workspace));
-apiRouter.use('/build', createBuildRouter(workspace));
-apiRouter.use('/agent', createAgentRouter(workspace));
+// Health check
 apiRouter.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
@@ -75,8 +56,7 @@ apiRouter.get('/health', (_req, res) => {
 // Config endpoint — serves runtime URLs to the frontend
 apiRouter.get('/config', (_req, res) => {
   res.json({
-    commandUrl: process.env.COMMAND_FUNCTION_URL || null,
-    // WebSocket base URL for workspace containers — CloudFront proxies /ws/* to ALB
+    commandUrl: null, // Legacy — commands now run on EC2 workspace instances
     wsBaseUrl: process.env.WORKSPACE_ALB_DNS
       ? `wss://${process.env.WORKSPACE_ALB_DNS}`
       : null,
@@ -89,113 +69,36 @@ apiRouter.use('/projects', createProjectRouter(s3Client, projectsBucket));
 // Test runner
 apiRouter.use('/tests', createTestRouter());
 
-// Helper: create a per-request WorkspaceService for a project.
-// When COMMAND_FUNCTION_NAME is set (deployed with Command Lambda),
-// uses CommandLambdaEnvironment so build/test/lint execution is routed
-// to the Command Lambda (which has VPC + EFS). Otherwise falls back to
-// S3WorkspaceEnvironment (file browsing only, no command execution).
-function createProjectWorkspace(projectId: string): WorkspaceService {
-  const env = commandFunctionName
-    ? new CommandLambdaEnvironment({
-        projectId,
-        s3Client,
-        bucket: projectsBucket,
-        prefix: `projects/${projectId}/files/`,
-        lambdaInvoker: (lambdaInvoker ??= new AwsLambdaInvoker()),
-        functionName: commandFunctionName,
-      })
-    : new S3WorkspaceEnvironment({
-        s3Client,
-        bucket: projectsBucket,
-        prefix: `projects/${projectId}/files/`,
-      });
-  return new WorkspaceService({
-    env,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-  });
-}
-
-// Project-scoped routes — create a per-request WorkspaceService backed by S3
+// Project-scoped file routes — S3 fallback for browsing files when no workspace is running.
+// When a workspace EC2 instance is active, the frontend routes through /workspace/* instead.
 apiRouter.use('/projects/:projectId/files', (req, res, next) => {
-  createFileRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
-});
-
-apiRouter.use('/projects/:projectId/build', (req, res, next) => {
-  createBuildRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
-});
-
-apiRouter.use('/projects/:projectId/agent', (req, res, next) => {
-  createAgentRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
-});
-
-// --- Deployment route (project-scoped) ---
-// Lazy-initialized AWS SDK clients for deployment operations
-let deployLambdaClient: DeployLambdaClient | undefined;
-let deployCloudfrontClient: DeployCloudfrontClient | undefined;
-
-function getDeployLambdaClient(): DeployLambdaClient {
-  if (!deployLambdaClient) {
-    const client = new LambdaClient({});
-    deployLambdaClient = {
-      async updateFunctionCode(params) {
-        const res = await client.send(new UpdateFunctionCodeCommand({
-          FunctionName: params.FunctionName,
-          ZipFile: params.ZipFile,
-        }));
-        return { FunctionName: res.FunctionName, LastUpdateStatus: res.LastUpdateStatus };
-      },
-      async getFunctionConfiguration(params) {
-        const res = await client.send(new GetFunctionConfigurationCommand({
-          FunctionName: params.FunctionName,
-        }));
-        return { LastUpdateStatus: res.LastUpdateStatus, State: res.State };
-      },
-    };
-  }
-  return deployLambdaClient;
-}
-
-function getDeployCloudfrontClient(): DeployCloudfrontClient {
-  if (!deployCloudfrontClient) {
-    const client = new CloudFrontClient({});
-    deployCloudfrontClient = {
-      async createInvalidation(params) {
-        const res = await client.send(new CreateInvalidationCommand({
-          DistributionId: params.DistributionId,
-          InvalidationBatch: params.InvalidationBatch,
-        }));
-        return { Invalidation: { Id: res.Invalidation?.Id } };
-      },
-    };
-  }
-  return deployCloudfrontClient;
-}
-
-apiRouter.use('/projects/:projectId/deploy', (req, res, next) => {
-  const projectId = req.params.projectId;
-  createDeployRouter(
-    createProjectWorkspace(projectId),
+  const env = new S3WorkspaceEnvironment({
     s3Client,
-    {
-      bucket: projectsBucket,
-      prefix: `projects/${projectId}/files/`,
-      lambdaClient: getDeployLambdaClient(),
-      cloudfrontClient: getDeployCloudfrontClient(),
-    },
-  )(req, res, next);
+    bucket: projectsBucket,
+    prefix: `projects/${req.params.projectId}/files/`,
+  });
+  const ws = new WorkspaceService({ env, anthropicApiKey: process.env.ANTHROPIC_API_KEY });
+  createFileRouter(ws)(req, res, next);
 });
 
-// --- Environment routes (project-scoped) ---
-apiRouter.use('/projects/:projectId/environments', (req, res, next) => {
-  createEnvironmentRouter(createProjectWorkspace(req.params.projectId))(req, res, next);
+// Project-scoped build routes — config GET/PUT works via S3; execute routes will
+// fail gracefully since S3WorkspaceEnvironment doesn't support command execution.
+apiRouter.use('/projects/:projectId/build', (req, res, next) => {
+  const env = new S3WorkspaceEnvironment({
+    s3Client,
+    bucket: projectsBucket,
+    prefix: `projects/${req.params.projectId}/files/`,
+  });
+  const ws = new WorkspaceService({ env, anthropicApiKey: process.env.ANTHROPIC_API_KEY });
+  createBuildRouter(ws)(req, res, next);
 });
 
-// --- Workspace container routes (project-scoped) ---
-// Manages Fargate container lifecycle for interactive terminal sessions.
-const workspaceConfig: WorkspaceContainerServiceConfig | null = process.env.ECS_CLUSTER_ARN
+// --- Workspace EC2 instance routes (project-scoped) ---
+// Manages EC2 instance lifecycle for workspace sessions.
+const workspaceConfig: WorkspaceEc2ServiceConfig | null = process.env.WORKSPACE_LAUNCH_TEMPLATE_ID
   ? {
-      clusterArn: process.env.ECS_CLUSTER_ARN,
-      taskDefArn: process.env.WORKSPACE_TASK_DEF_ARN ?? '',
+      launchTemplateId: process.env.WORKSPACE_LAUNCH_TEMPLATE_ID,
+      instanceProfileArn: process.env.WORKSPACE_INSTANCE_PROFILE_ARN ?? '',
       subnetIds: (process.env.WORKSPACE_SUBNET_IDS ?? '').split(',').filter(Boolean),
       securityGroupId: process.env.WORKSPACE_SG_ID ?? '',
       listenerArn: process.env.ALB_LISTENER_ARN ?? '',
