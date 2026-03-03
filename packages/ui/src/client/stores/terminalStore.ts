@@ -18,6 +18,8 @@ import {
   executeProjectCommand,
 } from '@/lib/api';
 import { useBuildStore } from './buildStore';
+import { useFileStore } from './fileStore';
+import { useEditorStore } from './editorStore';
 
 export type ConnectionState =
   | 'disconnected'
@@ -269,6 +271,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
             case 'build-complete':
               if (msg.results) {
                 useBuildStore.getState().setResults(msg.results);
+              }
+              break;
+
+            // File change events from workspace FileChangeNotifier
+            case 'file-changes':
+              if (msg.changes) {
+                useFileStore.getState().handleExternalChanges(msg.changes);
+                useEditorStore.getState().handleExternalChanges(msg.changes);
               }
               break;
 

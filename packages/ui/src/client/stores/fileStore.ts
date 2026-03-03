@@ -2,6 +2,15 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { WorkspacePath } from '@antimatter/filesystem';
 import { createProjectStorage, serializeSet, deserializeSet } from '@/lib/storePersist';
+import { fetchFileTree } from '@/lib/api';
+import { useProjectStore } from './projectStore';
+
+export interface FileChange {
+  type: 'create' | 'modify' | 'delete';
+  path: string;
+}
+
+let treeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 interface FileNode {
   name: string;
@@ -21,6 +30,8 @@ interface FileStore {
   toggleFolder: (path: WorkspacePath) => void;
   expandFolder: (path: WorkspacePath) => void;
   collapseFolder: (path: WorkspacePath) => void;
+  /** Handle file change notifications from workspace server */
+  handleExternalChanges: (changes: FileChange[]) => void;
 }
 
 export const useFileStore = create<FileStore>()(
@@ -56,6 +67,25 @@ export const useFileStore = create<FileStore>()(
           newExpanded.delete(path);
           return { expandedFolders: newExpanded };
         }),
+
+      handleExternalChanges: (changes) => {
+        // Any create/delete means tree structure changed → debounced refresh
+        const hasStructuralChange = changes.some(c => c.type === 'create' || c.type === 'delete');
+        if (hasStructuralChange) {
+          // Debounce at 500ms to coalesce bulk ops (git checkout, etc.)
+          if (treeRefreshTimer) clearTimeout(treeRefreshTimer);
+          treeRefreshTimer = setTimeout(async () => {
+            treeRefreshTimer = null;
+            try {
+              const projectId = useProjectStore.getState().currentProjectId;
+              const tree = await fetchFileTree('/', projectId ?? undefined);
+              set({ files: tree });
+            } catch {
+              // Ignore — tree will be stale but user can manually refresh
+            }
+          }, 500);
+        }
+      },
     }),
     {
       name: 'antimatter-files',

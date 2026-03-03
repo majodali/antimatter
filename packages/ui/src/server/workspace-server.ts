@@ -39,7 +39,10 @@ import {
   StopInstancesCommand,
 } from '@aws-sdk/client-ec2';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
-import { LocalWorkspaceEnvironment } from '@antimatter/workspace';
+import { LocalWorkspaceEnvironment, syncToS3 } from '@antimatter/workspace';
+import type { SyncOptions, SyncResult } from '@antimatter/workspace';
+import { watchDebounced } from '@antimatter/filesystem';
+import type { FileSystem, WatchEvent, Watcher, WorkspacePath } from '@antimatter/filesystem';
 import { EventLogger } from './services/event-logger.js';
 import { BuildWatcher } from '@antimatter/build-system';
 import type { BuildRule, BuildResult } from '@antimatter/project-model';
@@ -88,6 +91,98 @@ const eventLogger = new EventLogger({
   eventBusName: process.env.EVENT_BUS_NAME || 'antimatter',
 });
 eventLogger.startPeriodicFlush(10_000);
+
+// ---------------------------------------------------------------------------
+// File Change Notifier — broadcasts filesystem changes to IDE via WebSocket
+// ---------------------------------------------------------------------------
+
+const NOISE_PREFIXES = ['/.git/', '/node_modules/', '/.antimatter-cache/'];
+const NOISE_FILES = ['/.antimatter-sync.json'];
+
+function isNoiseFile(path: string): boolean {
+  return NOISE_PREFIXES.some(p => path.startsWith(p)) || NOISE_FILES.includes(path);
+}
+
+class FileChangeNotifier {
+  private watcher: Watcher | null = null;
+  private onBulkChange: (() => void) | null = null;
+
+  start(
+    fs: FileSystem,
+    broadcast: (msg: object) => void,
+    onBulkChange?: () => void,
+  ): void {
+    this.onBulkChange = onBulkChange ?? null;
+    this.watcher = watchDebounced(
+      fs,
+      '/' as WorkspacePath,
+      (events: readonly WatchEvent[]) => {
+        const filtered = events.filter(e => !isNoiseFile(e.path));
+        if (filtered.length === 0) return;
+
+        broadcast({
+          type: 'file-changes',
+          changes: filtered.map(e => ({ type: e.type, path: e.path })),
+        });
+
+        // Trigger immediate S3 sync for bulk operations (git checkout, etc.)
+        if (filtered.length > 20 && this.onBulkChange) {
+          this.onBulkChange();
+        }
+      },
+      300, // debounce ms
+    );
+  }
+
+  stop(): void {
+    this.watcher?.close();
+    this.watcher = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// S3 Sync Scheduler — periodic workspace → S3 backup
+// ---------------------------------------------------------------------------
+
+class S3SyncScheduler {
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private syncing = false;
+
+  constructor(private readonly syncOptions: SyncOptions) {}
+
+  start(intervalMs = 30_000): void {
+    this.timer = setInterval(() => this.sync(), intervalMs);
+  }
+
+  async sync(): Promise<SyncResult | null> {
+    if (this.syncing) return null;
+    this.syncing = true;
+    try {
+      const result = await syncToS3(this.syncOptions);
+      if (result.uploaded > 0 || result.deleted > 0) {
+        eventLogger.info('system', `S3 sync: ${result.uploaded} uploaded, ${result.deleted} deleted (${result.durationMs}ms)`,
+          { uploaded: result.uploaded, deleted: result.deleted, durationMs: result.durationMs });
+      }
+      return result;
+    } catch (err) {
+      eventLogger.error('system', 'S3 sync failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    // Final sync before shutdown
+    await this.sync();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // PTY Manager — shared pseudo-terminal
@@ -379,6 +474,10 @@ async function selfStop(): Promise<void> {
 
     console.log(`[workspace-server] Stopping instance ${instanceId}...`);
 
+    // Final S3 sync before shutdown
+    fileChangeNotifier.stop();
+    if (s3SyncScheduler) await s3SyncScheduler.shutdown();
+
     await eventLogger.emit('workspace.idle.shutdown', 'workspace', 'info',
       `Stopping instance ${instanceId} due to idle timeout`, { instanceId });
 
@@ -498,6 +597,20 @@ const buildWatcherManager = new BuildWatcherManager(
   projectPath,
   broadcastToClients,
 );
+
+// S3 sync scheduler — periodic workspace → S3 backup
+const s3SyncScheduler = PROJECTS_BUCKET
+  ? new S3SyncScheduler({
+      s3Client: new S3Client({}),
+      bucket: PROJECTS_BUCKET,
+      s3Prefix: `projects/${PROJECT_ID}/files/`,
+      localPath: projectPath,
+      excludePatterns: ['node_modules/', '.git/', '.antimatter-cache/', 'dist/', 'dist-lambda/'],
+    })
+  : null;
+
+// File change notifier — broadcasts filesystem changes to connected IDE clients
+const fileChangeNotifier = new FileChangeNotifier();
 
 // Lazy-initialized deployment clients
 let deployLambdaClient: DeployLambdaClient | undefined;
@@ -766,6 +879,16 @@ async function startup() {
   // Start build watcher (loads config and watches for file changes)
   await buildWatcherManager.start();
 
+  // Start file change notifier — broadcasts to IDE clients
+  fileChangeNotifier.start(
+    env.fileSystem,
+    broadcastToClients,
+    () => s3SyncScheduler?.sync(), // Trigger immediate S3 sync on bulk changes
+  );
+
+  // Start S3 sync scheduler (every 30s)
+  s3SyncScheduler?.start(30_000);
+
   // Start HTTP server
   server.listen(PORT, async () => {
     console.log(`[workspace-server] Listening on port ${PORT}`);
@@ -778,10 +901,12 @@ async function startup() {
   });
 }
 
-// Graceful shutdown — flush events before exit
+// Graceful shutdown — sync files and flush events before exit
 process.on('SIGTERM', async () => {
   console.log('[workspace-server] SIGTERM received — shutting down');
   eventLogger.info('workspace', 'SIGTERM received — shutting down');
+  fileChangeNotifier.stop();
+  if (s3SyncScheduler) await s3SyncScheduler.shutdown();
   await eventLogger.shutdown();
   process.exit(0);
 });

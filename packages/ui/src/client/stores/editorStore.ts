@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { WorkspacePath } from '@antimatter/filesystem';
-import { saveFile as apiSaveFile } from '@/lib/api';
+import { saveFile as apiSaveFile, fetchFileContent } from '@/lib/api';
 import { eventLog } from '@/lib/eventLog';
 import { createProjectStorage, serializeMap, deserializeMap } from '@/lib/storePersist';
+import type { FileChange } from './fileStore';
 
 interface EditorFile {
   path: WorkspacePath;
@@ -11,6 +12,8 @@ interface EditorFile {
   originalContent: string;
   language: string;
   isDirty: boolean;
+  /** Set when the file was modified externally while the editor has unsaved changes */
+  isExternallyModified?: boolean;
 }
 
 interface SaveState {
@@ -31,6 +34,10 @@ interface EditorStore {
   updateFileContent: (path: WorkspacePath, content: string) => void;
   saveFile: (path: WorkspacePath, projectId?: string) => Promise<void>;
   saveActiveFile: (projectId?: string) => Promise<void>;
+  /** Handle file change notifications from workspace server */
+  handleExternalChanges: (changes: FileChange[]) => void;
+  /** Accept external version for a conflicted file */
+  acceptExternalVersion: (path: WorkspacePath) => void;
 }
 
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -156,6 +163,72 @@ export const useEditorStore = create<EditorStore>()(
         const state = get();
         if (!state.activeFile) return;
         await get().saveFile(state.activeFile, projectId);
+      },
+
+      handleExternalChanges: (changes) => {
+        const state = get();
+        for (const change of changes) {
+          const filePath = change.path as WorkspacePath;
+          const openFile = state.openFiles.get(filePath);
+          if (!openFile) continue;
+
+          if (change.type === 'delete') {
+            // File deleted externally → close tab
+            get().closeFile(filePath);
+            eventLog.info('editor', `File closed (deleted externally): ${filePath}`);
+          } else if (change.type === 'modify' || change.type === 'create') {
+            if (!openFile.isDirty) {
+              // Not dirty → silently reload from server
+              fetchFileContent(filePath).then((content) => {
+                set((s) => {
+                  const newOpenFiles = new Map(s.openFiles);
+                  const existing = newOpenFiles.get(filePath);
+                  if (existing && !existing.isDirty) {
+                    newOpenFiles.set(filePath, {
+                      ...existing,
+                      content,
+                      originalContent: content,
+                      isExternallyModified: false,
+                    });
+                  }
+                  return { openFiles: newOpenFiles };
+                });
+              }).catch(() => {
+                // Ignore — file might be temporarily unavailable
+              });
+            } else {
+              // Dirty → mark conflict, let user decide
+              set((s) => {
+                const newOpenFiles = new Map(s.openFiles);
+                const existing = newOpenFiles.get(filePath);
+                if (existing) {
+                  newOpenFiles.set(filePath, { ...existing, isExternallyModified: true });
+                }
+                return { openFiles: newOpenFiles };
+              });
+              eventLog.warn('editor', `External change conflict: ${filePath}`);
+            }
+          }
+        }
+      },
+
+      acceptExternalVersion: (path) => {
+        fetchFileContent(path).then((content) => {
+          set((s) => {
+            const newOpenFiles = new Map(s.openFiles);
+            const existing = newOpenFiles.get(path);
+            if (existing) {
+              newOpenFiles.set(path, {
+                ...existing,
+                content,
+                originalContent: content,
+                isDirty: false,
+                isExternallyModified: false,
+              });
+            }
+            return { openFiles: newOpenFiles };
+          });
+        }).catch(() => {});
       },
     }),
     {

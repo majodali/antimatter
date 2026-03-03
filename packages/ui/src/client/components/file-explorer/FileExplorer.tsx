@@ -7,7 +7,6 @@ import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { fetchFileTree, saveFile, createFolder } from '@/lib/api';
-import { onFileChange } from '@/lib/ws';
 import { eventLog } from '@/lib/eventLog';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
@@ -30,12 +29,10 @@ export function FileExplorer() {
   const [newName, setNewName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Load files on mount and when project changes
+  // File tree auto-refreshes via fileStore.handleExternalChanges (WebSocket notifications)
   useEffect(() => {
     loadFiles();
-    const unsub = onFileChange(() => {
-      loadFiles();
-    });
-    return unsub;
   }, [currentProjectId]);
 
   useEffect(() => {
