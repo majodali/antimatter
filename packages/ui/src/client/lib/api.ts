@@ -705,3 +705,33 @@ export async function fetchGitLog(limit = 20, projectId?: string): Promise<{ has
   const { commits } = await apiFetch<{ commits: { hash: string; message: string }[] }>(`${gitBase(projectId)}/log?limit=${limit}`);
   return commits;
 }
+
+// ---------------------------------------------------------------------------
+// Infrastructure Environment Registry
+// ---------------------------------------------------------------------------
+
+import type { InfraEnvironment, InfraEnvironmentOutputs } from '@antimatter/project-model';
+
+export async function fetchInfraEnvironments(): Promise<InfraEnvironment[]> {
+  const { environments } = await apiFetch<{ environments: InfraEnvironment[] }>('/api/infra-environments');
+  return environments;
+}
+
+export async function registerInfraEnvironment(input: {
+  envId: string;
+  stackName: string;
+  outputs: InfraEnvironmentOutputs;
+  description?: string;
+}): Promise<InfraEnvironment> {
+  return apiFetch<InfraEnvironment>('/api/infra-environments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function terminateInfraEnvironment(envId: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`/api/infra-environments/${envId}/terminate`, {
+    method: 'POST',
+  });
+}

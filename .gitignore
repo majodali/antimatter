@@ -39,8 +39,14 @@ Thumbs.db
 # Build artifacts
 *.tsbuildinfo
 infrastructure/cdk.out/
+infrastructure/cdk-out-deploy/
 infrastructure/deploy.log
 packages/ui/dist-lambda/
+packages/ui/dist-workspace/
+
+# Test output
+smoke-test-output.json
+workspace-test-output.json
 
 # Nx
 .nx/cache

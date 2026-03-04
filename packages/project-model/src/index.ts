@@ -68,3 +68,10 @@ export type {
   StageTransition,
   EnvironmentConfig,
 } from './environment.js';
+
+export type {
+  InfraEnvironmentStatus,
+  InfraEnvironmentOutputs,
+  InfraEnvironment,
+  InfraEnvironmentRegistry,
+} from './infra-environment.js';

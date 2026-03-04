@@ -13,7 +13,10 @@ import { createGitRouter } from './routes/git.js';
 import { createEventsRouter } from './routes/events.js';
 import { EventLogger } from './services/event-logger.js';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
+import { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { WorkspaceEc2ServiceConfig } from './services/workspace-ec2-service.js';
+import { EnvironmentRegistryService } from './services/environment-registry-service.js';
+import { createInfraEnvironmentRouter } from './routes/infra-environments.js';
 
 const app = express();
 
@@ -49,6 +52,7 @@ const s3Client = new S3Client({});
 const projectsBucket = process.env.PROJECTS_BUCKET ?? '';
 const eventBridgeClient = new EventBridgeClient({});
 const eventBusName = process.env.EVENT_BUS_NAME ?? 'antimatter';
+const cfnClient = new CloudFormationClient({});
 
 /** Create a project-scoped EventLogger for Lambda requests */
 function createEventLogger(projectId: string): EventLogger {
@@ -87,6 +91,12 @@ apiRouter.use('/projects', createProjectRouter(s3Client, projectsBucket));
 
 // Test runner
 apiRouter.use('/tests', createTestRouter());
+
+// Deployed environment registry — system-level (not project-scoped)
+const envRegistry = new EnvironmentRegistryService({
+  s3Client, bucket: projectsBucket, cfnClient,
+});
+apiRouter.use('/infra-environments', createInfraEnvironmentRouter(envRegistry));
 
 // Project-scoped file routes — S3 fallback for browsing files when no workspace is running.
 // When a workspace EC2 instance is active, the frontend routes through /workspace/* instead.

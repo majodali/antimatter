@@ -177,6 +177,12 @@ export class AntimatterStack extends cdk.Stack {
     // Pass event bus name to API Lambda
     apiFunction.addEnvironment('EVENT_BUS_NAME', eventBus.eventBusName);
 
+    // Grant API Lambda CloudFormation permissions for environment registry
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudformation:DeleteStack', 'cloudformation:DescribeStacks'],
+      resources: [`arn:aws:cloudformation:${this.region}:${this.account}:stack/AntimatterEnv-*/*`],
+    }));
+
     // ==========================================
     // Command Execution - Lambda with EFS
     // ==========================================
