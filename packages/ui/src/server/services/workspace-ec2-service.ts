@@ -368,13 +368,11 @@ export class WorkspaceEc2Service {
    */
   private generateUserData(projectId: string, sessionToken: string): string {
     const bucket = this.config.projectsBucket;
-    const anthropicKey = process.env.ANTHROPIC_API_KEY ?? '';
 
     // Use heredoc-safe escaping — these values are inserted into a bash script
     const safeProjectId = projectId.replace(/'/g, "'\\''");
     const safeBucket = bucket.replace(/'/g, "'\\''");
     const safeToken = sessionToken.replace(/'/g, "'\\''");
-    const safeKey = anthropicKey.replace(/'/g, "'\\''");
     const eventBusName = process.env.EVENT_BUS_NAME ?? 'antimatter';
 
     return `#!/bin/bash
@@ -411,7 +409,6 @@ cat > /opt/antimatter/config.env << 'ENVEOF'
 PROJECT_ID=${safeProjectId}
 PROJECTS_BUCKET=${safeBucket}
 SESSION_TOKEN=${safeToken}
-ANTHROPIC_API_KEY=${safeKey}
 WORKSPACE_ROOT=/workspace/data
 HOME=/workspace/data
 PORT=8080

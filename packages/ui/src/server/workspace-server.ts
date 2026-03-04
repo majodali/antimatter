@@ -39,6 +39,7 @@ import {
   StopInstancesCommand,
 } from '@aws-sdk/client-ec2';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
+import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { LocalWorkspaceEnvironment, syncToS3 } from '@antimatter/workspace';
 import type { SyncOptions, SyncResult } from '@antimatter/workspace';
 import { watchDebounced } from '@antimatter/filesystem';
@@ -568,14 +569,16 @@ async function initialSyncFromS3(projectPath: string): Promise<void> {
 const projectPath = join(WORKSPACE_ROOT, PROJECT_ID);
 const s3Client = new S3Client({});
 
-// Create workspace environment and service
+// Create workspace environment
 const env = new LocalWorkspaceEnvironment({
   rootPath: projectPath,
   id: PROJECT_ID,
   label: PROJECT_ID,
 });
 
-const workspace = new WorkspaceService({
+// WorkspaceService is created lazily after SSM secrets are fetched.
+// Until then, use the env var as initial key.
+let workspace = new WorkspaceService({
   env,
   anthropicApiKey: ANTHROPIC_API_KEY,
 });
@@ -860,6 +863,99 @@ wss.on('connection', (ws: WebSocket) => {
 });
 
 // ---------------------------------------------------------------------------
+// SSM Secrets
+// ---------------------------------------------------------------------------
+
+const ssmClient = new SSMClient({});
+
+async function getSSMSecret(name: string): Promise<string> {
+  try {
+    const result = await ssmClient.send(
+      new GetParameterCommand({
+        Name: `/antimatter/secrets/${name}`,
+        WithDecryption: true,
+      }),
+    );
+    return result.Parameter?.Value ?? '';
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Git Auto-Init
+// ---------------------------------------------------------------------------
+
+async function initializeGit(): Promise<void> {
+  console.log('[workspace-server] Initializing git repository...');
+
+  try {
+    // Fetch GitHub PAT from SSM (fall back to env var)
+    const githubPat = (await getSSMSecret('github-pat')) || process.env.GITHUB_PAT || '';
+
+    // Read project metadata from S3 for git config
+    let gitConfig: { repository?: string; defaultBranch?: string; userName?: string; userEmail?: string } = {};
+    if (PROJECTS_BUCKET) {
+      try {
+        const metaRes = await s3Client.send(
+          new GetObjectCommand({
+            Bucket: PROJECTS_BUCKET,
+            Key: `projects/${PROJECT_ID}/meta.json`,
+          }),
+        );
+        const body = await metaRes.Body?.transformToString('utf-8');
+        if (body) {
+          const meta = JSON.parse(body);
+          gitConfig = meta.git ?? {};
+        }
+      } catch (err) {
+        console.warn('[workspace-server] Could not read project meta for git config:', err);
+      }
+    }
+
+    // git init (idempotent — no-op if .git already exists from EBS)
+    await env.execute({ command: 'git init', cwd: '.', timeout: 5000 });
+
+    // Set branch name
+    const branch = gitConfig.defaultBranch || 'main';
+    await env.execute({ command: `git checkout -B ${branch}`, cwd: '.', timeout: 5000 });
+
+    // Set user identity
+    if (gitConfig.userName) {
+      await env.execute({ command: `git config user.name "${gitConfig.userName}"`, cwd: '.', timeout: 5000 });
+    }
+    if (gitConfig.userEmail) {
+      await env.execute({ command: `git config user.email "${gitConfig.userEmail}"`, cwd: '.', timeout: 5000 });
+    }
+
+    // Set remote origin
+    if (gitConfig.repository) {
+      let remoteUrl = gitConfig.repository;
+      // Inject PAT into HTTPS URL for auth
+      if (githubPat && remoteUrl.startsWith('https://')) {
+        remoteUrl = remoteUrl.replace('https://', `https://x-access-token:${githubPat}@`);
+      }
+
+      // Remove existing origin (may not exist — ignore error)
+      await env.execute({ command: 'git remote remove origin', cwd: '.', timeout: 5000 }).catch(() => {});
+      await env.execute({ command: `git remote add origin ${remoteUrl}`, cwd: '.', timeout: 5000 });
+    }
+
+    // Initial commit if no commits exist
+    const logResult = await env.execute({ command: 'git log --oneline -1', cwd: '.', timeout: 5000 });
+    if (logResult.exitCode !== 0) {
+      await env.execute({ command: 'git add -A', cwd: '.', timeout: 30000 });
+      await env.execute({ command: 'git commit -m "Initial import" --allow-empty', cwd: '.', timeout: 10000 });
+    }
+
+    console.log('[workspace-server] Git repository initialized');
+  } catch (err) {
+    // Git failure should not prevent workspace from starting
+    console.warn('[workspace-server] Git initialization failed (non-fatal):', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
@@ -872,6 +968,16 @@ async function startup() {
   // Initial sync from S3 (only if project directory is empty)
   console.log('[workspace-server] Checking for initial S3 sync...');
   await initialSyncFromS3(projectPath);
+
+  // Fetch Anthropic API key from SSM (fall back to env var)
+  const ssmAnthropicKey = await getSSMSecret('anthropic-api-key');
+  if (ssmAnthropicKey) {
+    console.log('[workspace-server] Using Anthropic API key from SSM');
+    workspace = new WorkspaceService({ env, anthropicApiKey: ssmAnthropicKey });
+  }
+
+  // Initialize git repository with project config from S3
+  await initializeGit();
 
   // Start PTY
   ptyManager.start(projectPath);

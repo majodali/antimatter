@@ -183,6 +183,12 @@ export class AntimatterStack extends cdk.Stack {
       resources: [`arn:aws:cloudformation:${this.region}:${this.account}:stack/AntimatterEnv-*/*`],
     }));
 
+    // Grant API Lambda SSM permissions for secrets management
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter'],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/antimatter/secrets/*`],
+    }));
+
     // ==========================================
     // Command Execution - Lambda with EFS
     // ==========================================
@@ -211,6 +217,12 @@ export class AntimatterStack extends cdk.Stack {
 
     // Grant Command Lambda access to data bucket (needed for S3↔EFS sync)
     dataBucket.grantReadWrite(commandFunction);
+
+    // Grant Command Lambda SSM read access for secrets
+    commandFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/antimatter/secrets/*`],
+    }));
 
     // Grant API Lambda permission to invoke Command Lambda (Step 4).
     // Build/test/lint execution on the API Lambda is routed to the Command

@@ -1,6 +1,7 @@
 import serverlessExpress from '@codegenie/serverless-express';
 import express from 'express';
 import { S3Client } from '@aws-sdk/client-s3';
+import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { S3WorkspaceEnvironment } from '@antimatter/workspace';
 import { WorkspaceService } from './services/workspace-service.js';
 import { createFileRouter } from './routes/filesystem.js';
@@ -11,6 +12,7 @@ import { createWorkspaceRouter } from './routes/workspace.js';
 import { createActivityRouter } from './routes/activity.js';
 import { createGitRouter } from './routes/git.js';
 import { createEventsRouter } from './routes/events.js';
+import { createSecretsRouter } from './routes/secrets.js';
 import { EventLogger } from './services/event-logger.js';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import { CloudFormationClient } from '@aws-sdk/client-cloudformation';
@@ -47,12 +49,41 @@ app.use((req, res, next) => {
   }
 });
 
-// S3 client singleton + bucket name from environment
+// AWS client singletons
 const s3Client = new S3Client({});
+const ssmClient = new SSMClient({});
 const projectsBucket = process.env.PROJECTS_BUCKET ?? '';
 const eventBridgeClient = new EventBridgeClient({});
 const eventBusName = process.env.EVENT_BUS_NAME ?? 'antimatter';
 const cfnClient = new CloudFormationClient({});
+
+// Cached SSM secret fetch — persists across Lambda invocations (cold start only)
+let cachedAnthropicKey: string | undefined;
+
+async function getAnthropicKey(): Promise<string> {
+  if (cachedAnthropicKey === undefined) {
+    try {
+      const result = await ssmClient.send(
+        new GetParameterCommand({
+          Name: '/antimatter/secrets/anthropic-api-key',
+          WithDecryption: true,
+        }),
+      );
+      cachedAnthropicKey = result.Parameter?.Value ?? '';
+    } catch {
+      // Fall back to env var for backward compatibility
+      cachedAnthropicKey = process.env.ANTHROPIC_API_KEY ?? '';
+    }
+  }
+  return cachedAnthropicKey;
+}
+
+/** Clear cached secrets — called when secrets are updated via the API */
+export function clearSecretCache(name?: string): void {
+  if (!name || name === 'anthropic-api-key') {
+    cachedAnthropicKey = undefined;
+  }
+}
 
 /** Create a project-scoped EventLogger for Lambda requests */
 function createEventLogger(projectId: string): EventLogger {
@@ -98,27 +129,32 @@ const envRegistry = new EnvironmentRegistryService({
 });
 apiRouter.use('/infra-environments', createInfraEnvironmentRouter(envRegistry));
 
+// Secrets management — SSM Parameter Store
+apiRouter.use('/secrets', createSecretsRouter(ssmClient, clearSecretCache));
+
 // Project-scoped file routes — S3 fallback for browsing files when no workspace is running.
 // When a workspace EC2 instance is active, the frontend routes through /workspace/* instead.
-apiRouter.use('/projects/:projectId/files', (req, res, next) => {
+apiRouter.use('/projects/:projectId/files', async (req, res, next) => {
   const env = new S3WorkspaceEnvironment({
     s3Client,
     bucket: projectsBucket,
     prefix: `projects/${req.params.projectId}/files/`,
   });
-  const ws = new WorkspaceService({ env, anthropicApiKey: process.env.ANTHROPIC_API_KEY });
+  const anthropicApiKey = await getAnthropicKey();
+  const ws = new WorkspaceService({ env, anthropicApiKey });
   createFileRouter(ws)(req, res, next);
 });
 
 // Project-scoped build routes — config GET/PUT works via S3; execute routes will
 // fail gracefully since S3WorkspaceEnvironment doesn't support command execution.
-apiRouter.use('/projects/:projectId/build', (req, res, next) => {
+apiRouter.use('/projects/:projectId/build', async (req, res, next) => {
   const env = new S3WorkspaceEnvironment({
     s3Client,
     bucket: projectsBucket,
     prefix: `projects/${req.params.projectId}/files/`,
   });
-  const ws = new WorkspaceService({ env, anthropicApiKey: process.env.ANTHROPIC_API_KEY });
+  const anthropicApiKey = await getAnthropicKey();
+  const ws = new WorkspaceService({ env, anthropicApiKey });
   createBuildRouter(ws)(req, res, next);
 });
 

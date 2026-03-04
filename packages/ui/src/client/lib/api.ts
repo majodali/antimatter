@@ -735,3 +735,32 @@ export async function terminateInfraEnvironment(envId: string): Promise<void> {
     method: 'POST',
   });
 }
+
+// ---------------------------------------------------------------------------
+// Secrets Management (SSM Parameter Store)
+// ---------------------------------------------------------------------------
+
+export interface SecretStatus {
+  name: string;
+  description: string;
+  hasValue: boolean;
+}
+
+export async function fetchSecrets(): Promise<SecretStatus[]> {
+  const { secrets } = await apiFetch<{ secrets: SecretStatus[] }>('/api/secrets');
+  return secrets;
+}
+
+export async function setSecret(name: string, value: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`/api/secrets/${name}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+}
+
+export async function deleteSecret(name: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(`/api/secrets/${name}`, {
+    method: 'DELETE',
+  });
+}

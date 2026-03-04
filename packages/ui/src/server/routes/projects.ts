@@ -12,10 +12,18 @@ import {
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/node';
 
+interface ProjectGitConfig {
+  repository?: string;    // e.g. "https://github.com/user/repo.git"
+  defaultBranch?: string; // e.g. "main"
+  userName?: string;      // commit author name
+  userEmail?: string;     // commit author email
+}
+
 interface ProjectMeta {
   id: string;
   name: string;
   createdAt: string;
+  git?: ProjectGitConfig;
 }
 
 const SKIP_DIRS = new Set([
@@ -165,6 +173,51 @@ export function createProjectRouter(s3Client: S3Client, bucket: string): Router 
     }
   });
 
+  // Update project metadata (merge-patch)
+  router.patch('/:id', async (req, res) => {
+    try {
+      const metaKey = `projects/${req.params.id}/meta.json`;
+
+      // Read existing metadata
+      const metaRes = await s3Client.send(
+        new GetObjectCommand({ Bucket: bucket, Key: metaKey }),
+      );
+      const body = await metaRes.Body?.transformToString('utf-8');
+      if (!body) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      const existing = JSON.parse(body) as ProjectMeta;
+      const updates = req.body as Partial<Pick<ProjectMeta, 'name' | 'git'>>;
+
+      // Merge updates
+      const merged: ProjectMeta = {
+        ...existing,
+        ...(updates.name ? { name: updates.name } : {}),
+        ...(updates.git ? { git: { ...existing.git, ...updates.git } } : {}),
+      };
+
+      await s3Client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: metaKey,
+          Body: JSON.stringify(merged),
+          ContentType: 'application/json',
+        }),
+      );
+
+      res.json(merged);
+    } catch (error: any) {
+      if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+      res.status(500).json({
+        error: 'Failed to update project',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   // Delete project (all objects under prefix)
   router.delete('/:id', async (req, res) => {
     try {
@@ -242,6 +295,10 @@ export function createProjectRouter(s3Client: S3Client, bucket: string): Router 
         id,
         name: projectName,
         createdAt: new Date().toISOString(),
+        git: {
+          repository: url,
+          defaultBranch: 'main',
+        },
       };
 
       await s3Client.send(

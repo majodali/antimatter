@@ -1,17 +1,18 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Rocket, Play, Trash2, Settings, Server } from 'lucide-react';
+import { Rocket, Play, Trash2, Settings } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { DeployStatusItem } from './DeployStatusItem';
 import { DeployConfigEditor } from './DeployConfigEditor';
 import { EnvironmentList } from './EnvironmentList';
+import { SecretsPanel } from './SecretsPanel';
 import { useDeployStore } from '@/stores/deployStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { fetchDeployResults, executeDeployStreaming } from '@/lib/api';
 import { eventLog } from '@/lib/eventLog';
 import { cn } from '@/lib/utils';
 
-type DeployView = 'deploy' | 'environments';
+type DeployView = 'deploy' | 'environments' | 'secrets';
 
 export function DeployPanel() {
   const [view, setView] = useState<DeployView>('deploy');
@@ -134,6 +135,17 @@ export function DeployPanel() {
             >
               Environments
             </button>
+            <button
+              className={cn(
+                'px-2 py-0.5 rounded text-xs font-medium transition-colors',
+                view === 'secrets'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              onClick={() => setView('secrets')}
+            >
+              Secrets
+            </button>
           </div>
           {view === 'deploy' && runningCount > 0 && (
             <span className="text-xs text-yellow-600 dark:text-yellow-500 animate-pulse">
@@ -175,7 +187,9 @@ export function DeployPanel() {
         )}
       </div>
 
-      {view === 'environments' ? (
+      {view === 'secrets' ? (
+        <SecretsPanel />
+      ) : view === 'environments' ? (
         <EnvironmentList />
       ) : configMode ? (
         <DeployConfigEditor />
