@@ -16,7 +16,7 @@ import { createServer } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { URL } from 'node:url';
 import { existsSync, readdirSync, mkdirSync, createWriteStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
@@ -56,7 +56,9 @@ import { createEnvironmentRouter } from './routes/environments.js';
 import { createActivityRouter } from './routes/activity.js';
 import { createGitRouter } from './routes/git.js';
 import { createEventsRouter } from './routes/events.js';
+import { createWorkflowRouter } from './routes/workflow.js';
 import { createAuthMiddleware } from './middleware/auth.js';
+import { WorkflowManager } from './services/workflow-manager.js';
 import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
 
 // ---------------------------------------------------------------------------
@@ -108,13 +110,16 @@ function isNoiseFile(path: string): boolean {
 class FileChangeNotifier {
   private watcher: Watcher | null = null;
   private onBulkChange: (() => void) | null = null;
+  private onFilteredChanges: ((events: readonly WatchEvent[]) => void) | null = null;
 
   start(
     fs: FileSystem,
     broadcast: (msg: object) => void,
     onBulkChange?: () => void,
+    onFilteredChanges?: (events: readonly WatchEvent[]) => void,
   ): void {
     this.onBulkChange = onBulkChange ?? null;
+    this.onFilteredChanges = onFilteredChanges ?? null;
     this.watcher = watchDebounced(
       fs,
       '/' as WorkspacePath,
@@ -126,6 +131,11 @@ class FileChangeNotifier {
           type: 'file-changes',
           changes: filtered.map(e => ({ type: e.type, path: e.path })),
         });
+
+        // Feed workflow engine
+        if (this.onFilteredChanges) {
+          this.onFilteredChanges(filtered);
+        }
 
         // Trigger immediate S3 sync for bulk operations (git checkout, etc.)
         if (filtered.length > 20 && this.onBulkChange) {
@@ -594,6 +604,12 @@ function broadcastToClients(msg: object): void {
   }
 }
 
+// Workflow manager — event-driven rule engine
+const workflowManager = new WorkflowManager({
+  env,
+  broadcast: broadcastToClients,
+});
+
 // Build watcher — auto-triggers builds on file changes
 const buildWatcherManager = new BuildWatcherManager(
   workspace,
@@ -783,6 +799,7 @@ app.use('/api/environments', createEnvironmentRouter(workspace));
 app.use('/api/activity', createActivityRouter(workspace));
 app.use('/api/git', createGitRouter(workspace));
 app.use('/api/events', createEventsRouter(s3Client, PROJECTS_BUCKET, PROJECT_ID));
+app.use('/api/workflow', createWorkflowRouter(workflowManager));
 
 // ---------------------------------------------------------------------------
 // HTTP + WebSocket server
@@ -890,6 +907,25 @@ wss.on('connection', (ws: WebSocket) => {
           // Resume auto-build and flush accumulated changes
           buildWatcherManager.release();
           break;
+
+        // --- Workflow commands ---
+        case 'workflow-emit':
+          // Manual event emission: { type: 'workflow-emit', event: { type: 'deploy:teardown' } }
+          workflowManager.emitEvent(msg.event).catch((err: unknown) => {
+            console.error('[workspace-server] Workflow emit failed:', err);
+          });
+          break;
+        case 'workflow-hold':
+          workflowManager.hold();
+          break;
+        case 'workflow-release':
+          workflowManager.release();
+          break;
+        case 'workflow-reload':
+          workflowManager.start().catch((err: unknown) => {
+            console.error('[workspace-server] Workflow reload failed:', err);
+          });
+          break;
       }
     } catch {
       // Ignore malformed messages
@@ -963,6 +999,18 @@ async function initializeGit(): Promise<void> {
     // git init (idempotent — no-op if .git already exists from EBS)
     await env.execute({ command: 'git init', cwd: '.', timeout: 5000 });
 
+    // Ensure .gitignore includes sync metadata
+    const gitignorePath = join(WORKSPACE_ROOT, PROJECT_ID, '.gitignore');
+    let gitignoreContent = '';
+    try { gitignoreContent = await readFile(gitignorePath, 'utf-8'); } catch { /* no existing .gitignore */ }
+    const ignoreEntries = ['.antimatter-sync.json', '.antimatter-cache/'];
+    const missing = ignoreEntries.filter(e => !gitignoreContent.split('\n').some(l => l.trim() === e));
+    if (missing.length > 0) {
+      const suffix = (gitignoreContent && !gitignoreContent.endsWith('\n')) ? '\n' : '';
+      await writeFile(gitignorePath, gitignoreContent + suffix + missing.join('\n') + '\n');
+      console.log(`[workspace-server] Added to .gitignore: ${missing.join(', ')}`);
+    }
+
     // Set branch name
     const branch = gitConfig.defaultBranch || 'main';
     await env.execute({ command: `git checkout -B ${branch}`, cwd: '.', timeout: 5000 });
@@ -986,6 +1034,15 @@ async function initializeGit(): Promise<void> {
       // Remove existing origin (may not exist — ignore error)
       await env.execute({ command: 'git remote remove origin', cwd: '.', timeout: 5000 }).catch(() => {});
       await env.execute({ command: `git remote add origin ${remoteUrl}`, cwd: '.', timeout: 5000 });
+
+      // Fetch remote and set upstream tracking so `git pull` works
+      const fetchResult = await env.execute({ command: 'git fetch origin', cwd: '.', timeout: 30000 });
+      if (fetchResult.exitCode === 0) {
+        await env.execute({
+          command: `git branch --set-upstream-to=origin/${branch} ${branch}`,
+          cwd: '.', timeout: 5000,
+        }).catch(() => {});
+      }
     }
 
     // Initial commit if no commits exist
@@ -1032,11 +1089,15 @@ async function startup() {
   // Start build watcher (loads config and watches for file changes)
   await buildWatcherManager.start();
 
-  // Start file change notifier — broadcasts to IDE clients
+  // Start workflow manager (loads definition + state, fires project:initialize if first run)
+  await workflowManager.start();
+
+  // Start file change notifier — broadcasts to IDE clients + feeds workflow engine
   fileChangeNotifier.start(
     env.fileSystem,
     broadcastToClients,
     () => s3SyncScheduler?.sync(), // Trigger immediate S3 sync on bulk changes
+    (events) => workflowManager.onFileChanges(events), // Feed workflow engine
   );
 
   // Start S3 sync scheduler (every 30s)

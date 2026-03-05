@@ -1,0 +1,51 @@
+import { Router } from 'express';
+import type { WorkflowManager } from '../services/workflow-manager.js';
+
+export function createWorkflowRouter(workflowManager: WorkflowManager): Router {
+  const router = Router();
+
+  // GET /state — current workflow state
+  router.get('/state', (_req, res) => {
+    try {
+      const state = workflowManager.getState();
+      res.json(state ?? { version: 0, state: null, updatedAt: null });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to get workflow state',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // POST /emit — manually emit a custom event
+  router.post('/emit', async (req, res) => {
+    try {
+      const { event } = req.body as { event?: { type: string; [key: string]: unknown } };
+      if (!event?.type) {
+        return res.status(400).json({ error: 'event.type is required' });
+      }
+      const result = await workflowManager.emitEvent(event);
+      res.json({ result });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to emit workflow event',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // POST /reload — reload the workflow definition and state
+  router.post('/reload', async (_req, res) => {
+    try {
+      await workflowManager.start();
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to reload workflow',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  return router;
+}

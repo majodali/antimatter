@@ -434,7 +434,7 @@ describe('WorkflowRuntime', () => {
       interface S { status: string; items: string[] }
 
       const definition: WorkflowDefinition<S> = (wf) => {
-        wf.rule('init', 'Initialize', (e) => e.type === 'project:initialize', (_e, state) => {
+        wf.rule('project:init', 'Initialize', (e) => e.type === 'project:initialize', (_e, state) => {
           state.status = 'ready';
           state.items = [];
         });

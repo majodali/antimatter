@@ -185,7 +185,7 @@ export type WorkflowDefinition<S> = (wf: Workflow<S>) => void;
  * }
  *
  * export default defineWorkflow<MyState>((wf) => {
- *   wf.rule('init', 'Initialize workflow state',
+ *   wf.rule('project:init', 'Initialize workflow state',
  *     (e) => e.type === 'project:initialize',
  *     (_events, state) => {
  *       state.compile = { status: 'pending' };

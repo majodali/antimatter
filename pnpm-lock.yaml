@@ -133,6 +133,9 @@ importers:
       '@antimatter/tool-integration':
         specifier: workspace:*
         version: link:../tool-integration
+      '@antimatter/workflow':
+        specifier: workspace:*
+        version: link:../workflow
       '@antimatter/workspace':
         specifier: workspace:*
         version: link:../workspace

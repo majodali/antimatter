@@ -27,7 +27,7 @@ interface ProjectState {
 export default defineWorkflow<ProjectState>((wf) => {
 
   // --- Initialize ---
-  wf.rule('init', 'Initialize workflow state',
+  wf.rule('project:init', 'Initialize workflow state',
     (e) => e.type === 'project:initialize',
     (_events, state) => {
       state.compile = { status: 'pending' };

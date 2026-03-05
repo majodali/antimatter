@@ -10,6 +10,7 @@
  */
 
 import type { TestDef } from './test-types.js';
+import { getWorkflowTests } from './workflow-tests.js';
 
 // Helper: pause for a given duration
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -179,6 +180,9 @@ export function getWorkspaceTests(apiBase: string): TestDef[] {
         }
       },
     },
+
+    // ---- Workflow tests (run while workspace is up) ----
+    ...(albDns ? getWorkflowTests(albDns) : []),
 
     // ---- 5. Start again returns existing (idempotent) ----
     {
