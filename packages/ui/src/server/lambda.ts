@@ -13,6 +13,7 @@ import { createActivityRouter } from './routes/activity.js';
 import { createGitRouter } from './routes/git.js';
 import { createEventsRouter } from './routes/events.js';
 import { createSecretsRouter } from './routes/secrets.js';
+import { createAuthMiddleware } from './middleware/auth.js';
 import { EventLogger } from './services/event-logger.js';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import { CloudFormationClient } from '@aws-sdk/client-cloudformation';
@@ -39,7 +40,7 @@ app.use(express.json({ limit: '10mb' }));
 
 // CORS
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Origin', 'https://ide.antimatter.solutions');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') {
@@ -102,6 +103,8 @@ function createEventLogger(projectId: string): EventLogger {
 // the full path is preserved) and /* (for when it's stripped).
 const apiRouter = express.Router();
 
+// ---- Public routes (no auth required) ----
+
 // Health check
 apiRouter.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -116,6 +119,29 @@ apiRouter.get('/config', (_req, res) => {
       : null,
   });
 });
+
+// Auth config — serves Cognito configuration to the frontend (before login)
+apiRouter.get('/auth/config', (_req, res) => {
+  res.json({
+    userPoolId: process.env.COGNITO_USER_POOL_ID ?? '',
+    clientId: process.env.COGNITO_CLIENT_ID ?? '',
+    region: process.env.AWS_REGION ?? 'us-west-2',
+    domain: process.env.COGNITO_DOMAIN ?? '',
+    redirectUri: 'https://ide.antimatter.solutions/',
+  });
+});
+
+// ---- Auth middleware — all routes below require a valid Cognito JWT ----
+
+if (process.env.COGNITO_USER_POOL_ID && process.env.COGNITO_CLIENT_ID) {
+  apiRouter.use(createAuthMiddleware({
+    userPoolId: process.env.COGNITO_USER_POOL_ID,
+    region: process.env.AWS_REGION ?? 'us-west-2',
+    clientId: process.env.COGNITO_CLIENT_ID,
+  }));
+}
+
+// ---- Protected routes ----
 
 // Project CRUD routes
 apiRouter.use('/projects', createProjectRouter(s3Client, projectsBucket));

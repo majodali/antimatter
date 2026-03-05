@@ -23,6 +23,9 @@
     },
     {
       "path": "./packages/workspace"
+    },
+    {
+      "path": "./packages/workflow"
     }
   ]
 }

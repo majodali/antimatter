@@ -10,6 +10,10 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as efs from 'aws-cdk-lib/aws-efs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as events from 'aws-cdk-lib/aws-events';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -45,6 +49,24 @@ export class AntimatterStack extends cdk.Stack {
 
     websiteBucket.grantRead(oai);
 
+    // ==========================================
+    // DNS + TLS — Route53 + ACM
+    // ==========================================
+
+    // Hosted zone for antimatter.solutions (already exists from domain registration)
+    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'Zone', {
+      hostedZoneId: 'Z06940802YF3L0EO5UBCI',
+      zoneName: 'antimatter.solutions',
+    });
+
+    // ACM certificate for ide.antimatter.solutions — must be in us-east-1 for CloudFront.
+    // DnsValidatedCertificate handles the cross-region requirement explicitly.
+    const certificate = new acm.DnsValidatedCertificate(this, 'Certificate', {
+      domainName: 'ide.antimatter.solutions',
+      hostedZone,
+      region: 'us-east-1', // Required for CloudFront
+    });
+
     // CloudFront distribution
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       defaultBehavior: {
@@ -55,6 +77,8 @@ export class AntimatterStack extends cdk.Stack {
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
       },
       defaultRootObject: 'index.html',
+      domainNames: ['ide.antimatter.solutions'],
+      certificate,
       errorResponses: [
         {
           httpStatus: 404,
@@ -99,6 +123,53 @@ export class AntimatterStack extends cdk.Stack {
 
     const eventBus = new events.EventBus(this, 'EventBus', {
       eventBusName: 'antimatter',
+    });
+
+    // ==========================================
+    // Authentication — Cognito User Pool
+    // ==========================================
+
+    const userPool = new cognito.UserPool(this, 'UserPool', {
+      userPoolName: 'antimatter-users',
+      selfSignUpEnabled: false, // Admin creates users
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: false,
+      },
+      removalPolicy: cdk.RemovalPolicy.RETAIN, // Never auto-delete user pool
+    });
+
+    // Cognito prefix domain for Hosted UI (e.g. antimatter-ide.auth.us-west-2.amazoncognito.com)
+    const userPoolDomain = userPool.addDomain('CognitoDomain', {
+      cognitoDomain: { domainPrefix: 'antimatter-ide' },
+    });
+
+    // User Pool Client — SPA with authorization code + PKCE
+    const userPoolClient = userPool.addClient('WebClient', {
+      userPoolClientName: 'antimatter-web',
+      generateSecret: false, // SPA — no client secret
+      authFlows: {
+        userSrp: true,
+      },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.PROFILE,
+        ],
+        callbackUrls: ['https://ide.antimatter.solutions/'],
+        logoutUrls: ['https://ide.antimatter.solutions/'],
+      },
+      accessTokenValidity: cdk.Duration.hours(24),
+      idTokenValidity: cdk.Duration.hours(24),
+      refreshTokenValidity: cdk.Duration.days(3650), // ~10 years
+      preventUserExistenceErrors: true,
     });
 
     // ==========================================
@@ -382,6 +453,11 @@ export class AntimatterStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    // Pass Cognito configuration to API Lambda
+    apiFunction.addEnvironment('COGNITO_USER_POOL_ID', userPool.userPoolId);
+    apiFunction.addEnvironment('COGNITO_CLIENT_ID', userPoolClient.userPoolClientId);
+    apiFunction.addEnvironment('COGNITO_DOMAIN', `antimatter-ide.auth.${this.region}.amazoncognito.com`);
+
     // Pass workspace configuration to API Lambda
     apiFunction.addEnvironment('WORKSPACE_LAUNCH_TEMPLATE_ID', launchTemplate.launchTemplateId!);
     apiFunction.addEnvironment('WORKSPACE_INSTANCE_PROFILE_ARN', instanceProfile.instanceProfileArn);
@@ -424,7 +500,7 @@ export class AntimatterStack extends cdk.Stack {
       restApiName: 'Antimatter API',
       description: 'API for Antimatter IDE',
       defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowOrigins: ['https://ide.antimatter.solutions'],
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: ['Content-Type', 'Authorization'],
       },
@@ -580,6 +656,38 @@ export class AntimatterStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'EventBusName', {
       value: eventBus.eventBusName,
       description: 'EventBridge event bus for system events',
+    });
+
+    // ==========================================
+    // DNS Record — ide.antimatter.solutions → CloudFront
+    // ==========================================
+
+    new route53.ARecord(this, 'SiteAliasRecord', {
+      zone: hostedZone,
+      recordName: 'ide',
+      target: route53.RecordTarget.fromAlias(
+        new route53targets.CloudFrontTarget(distribution),
+      ),
+    });
+
+    new cdk.CfnOutput(this, 'CustomDomainURL', {
+      value: 'https://ide.antimatter.solutions',
+      description: 'Custom domain URL for the frontend',
+    });
+
+    new cdk.CfnOutput(this, 'CognitoUserPoolId', {
+      value: userPool.userPoolId,
+      description: 'Cognito User Pool ID',
+    });
+
+    new cdk.CfnOutput(this, 'CognitoClientId', {
+      value: userPoolClient.userPoolClientId,
+      description: 'Cognito User Pool Client ID',
+    });
+
+    new cdk.CfnOutput(this, 'CognitoDomain', {
+      value: `antimatter-ide.auth.${this.region}.amazoncognito.com`,
+      description: 'Cognito Hosted UI domain',
     });
   }
 }

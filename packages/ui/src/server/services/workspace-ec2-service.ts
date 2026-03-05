@@ -31,6 +31,8 @@ import type { Instance } from '@aws-sdk/client-ec2';
 import {
   ElasticLoadBalancingV2Client,
   RegisterTargetsCommand,
+  DeregisterTargetsCommand,
+  DescribeTargetHealthCommand,
   CreateTargetGroupCommand,
   DeleteTargetGroupCommand,
   CreateRuleCommand,
@@ -148,9 +150,16 @@ export class WorkspaceEc2Service {
     }
 
     // If the instance is RUNNING and we have an IP, ensure ALB routing rules exist
-    if (status === 'RUNNING' && privateIp && !WorkspaceEc2Service.routingCache.has(projectId)) {
-      await this.recoverRoutingState(projectId);
+    // and the target group has the correct IP registered
+    if (status === 'RUNNING' && privateIp) {
       if (!WorkspaceEc2Service.routingCache.has(projectId)) {
+        await this.recoverRoutingState(projectId);
+      }
+      if (WorkspaceEc2Service.routingCache.has(projectId)) {
+        // Routing exists — verify the target IP matches the current instance
+        await this.ensureTargetIp(projectId, privateIp);
+      } else {
+        // No routing — create fresh rules
         await this.createRoutingRules(projectId, privateIp);
       }
     }
@@ -374,6 +383,8 @@ export class WorkspaceEc2Service {
     const safeBucket = bucket.replace(/'/g, "'\\''");
     const safeToken = sessionToken.replace(/'/g, "'\\''");
     const eventBusName = process.env.EVENT_BUS_NAME ?? 'antimatter';
+    const cognitoUserPoolId = process.env.COGNITO_USER_POOL_ID ?? '';
+    const cognitoClientId = process.env.COGNITO_CLIENT_ID ?? '';
 
     return `#!/bin/bash
 set -x
@@ -416,6 +427,8 @@ NODE_ENV=production
 AWS_REGION=us-west-2
 AWS_DEFAULT_REGION=us-west-2
 EVENT_BUS_NAME=${eventBusName}
+COGNITO_USER_POOL_ID=${cognitoUserPoolId}
+COGNITO_CLIENT_ID=${cognitoClientId}
 ENVEOF
 
 # ---- Mount EBS data volume ----
@@ -468,6 +481,7 @@ Type=simple
 EnvironmentFile=/opt/antimatter/config.env
 WorkingDirectory=/opt/antimatter
 ExecStartPre=/bin/bash -c 'mkdir -p /workspace/data && (mount /dev/sdf /workspace/data 2>/dev/null || mount /dev/xvdf /workspace/data 2>/dev/null || mount /dev/nvme1n1 /workspace/data 2>/dev/null || true)'
+ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && aws s3 cp "s3://$PROJECTS_BUCKET/workspace-server/workspace-server.js" /opt/antimatter/workspace-server.js 2>/dev/null || echo "[workspace] S3 download failed — using existing binary"'
 ExecStart=/usr/bin/node /opt/antimatter/workspace-server.js
 Restart=always
 RestartSec=5
@@ -602,6 +616,62 @@ echo "[workspace] Boot script complete"
         error: err instanceof Error ? err.message : String(err),
       });
       throw err;
+    }
+  }
+
+  /**
+   * Ensure the target group for a project has the correct IP registered.
+   * After an instance stop/start, the private IP may change. This method
+   * detects stale registrations and updates to the current IP.
+   */
+  private async ensureTargetIp(projectId: string, expectedIp: string): Promise<void> {
+    const state = WorkspaceEc2Service.routingCache.get(projectId);
+    if (!state) return;
+
+    try {
+      const health = await this.elbv2.send(new DescribeTargetHealthCommand({
+        TargetGroupArn: state.targetGroupArn,
+      }));
+
+      const registeredTargets = health.TargetHealthDescriptions ?? [];
+      const hasCorrectIp = registeredTargets.some(t => t.Target?.Id === expectedIp);
+
+      if (!hasCorrectIp) {
+        console.log(`[workspace-ec2] Target IP mismatch for ${projectId} — updating to ${expectedIp}`);
+
+        // Deregister all stale targets
+        if (registeredTargets.length > 0) {
+          const staleTargets = registeredTargets
+            .filter(t => t.Target?.Id && t.Target.Id !== expectedIp)
+            .map(t => ({ Id: t.Target!.Id!, Port: t.Target!.Port }));
+
+          if (staleTargets.length > 0) {
+            await this.elbv2.send(new DeregisterTargetsCommand({
+              TargetGroupArn: state.targetGroupArn,
+              Targets: staleTargets,
+            }));
+            console.log(`[workspace-ec2] Deregistered ${staleTargets.length} stale target(s)`);
+          }
+        }
+
+        // Register the correct IP
+        await this.elbv2.send(new RegisterTargetsCommand({
+          TargetGroupArn: state.targetGroupArn,
+          Targets: [{ Id: expectedIp, Port: 8080 }],
+        }));
+
+        console.log(`[workspace-ec2] Registered correct IP ${expectedIp} for ${projectId}`);
+        this.eventLogger?.info('workspace', `Updated target IP for ${projectId} to ${expectedIp}`);
+      }
+    } catch (err) {
+      console.error(`[workspace-ec2] Failed to verify/update target IP for ${projectId}:`, err);
+      // If the target group is broken beyond repair, delete and recreate routing
+      try {
+        await this.deleteRoutingRules(projectId);
+        await this.createRoutingRules(projectId, expectedIp);
+      } catch (recreateErr) {
+        console.error(`[workspace-ec2] Failed to recreate routing for ${projectId}:`, recreateErr);
+      }
     }
   }
 

@@ -56,6 +56,7 @@ import { createEnvironmentRouter } from './routes/environments.js';
 import { createActivityRouter } from './routes/activity.js';
 import { createGitRouter } from './routes/git.js';
 import { createEventsRouter } from './routes/events.js';
+import { createAuthMiddleware } from './middleware/auth.js';
 import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
 
 // ---------------------------------------------------------------------------
@@ -708,6 +709,52 @@ app.get('/status', (_req, res) => {
     uptime: process.uptime(),
     ptyRunning: ptyManager.isRunning,
   });
+});
+
+// ---- Auth middleware for API routes ----
+// Cognito config is passed via user-data config.env.
+// Health and status endpoints above remain unauthenticated (used by ALB health checks).
+const COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID || '';
+const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID || '';
+
+if (COGNITO_USER_POOL_ID && COGNITO_CLIENT_ID) {
+  console.log('[workspace-server] Auth middleware enabled');
+  app.use('/api', createAuthMiddleware({
+    userPoolId: COGNITO_USER_POOL_ID,
+    region: process.env.AWS_REGION ?? 'us-west-2',
+    clientId: COGNITO_CLIENT_ID,
+  }));
+}
+
+// Refresh — download latest workspace server from S3 and restart via systemd
+app.post('/api/refresh', async (_req, res) => {
+  try {
+    if (!PROJECTS_BUCKET) {
+      return res.status(500).json({ error: 'PROJECTS_BUCKET not configured' });
+    }
+
+    console.log('[workspace-server] Refresh requested — downloading latest bundle from S3...');
+
+    const result = await env.execute({
+      command: `aws s3 cp "s3://${PROJECTS_BUCKET}/workspace-server/workspace-server.js" /opt/antimatter/workspace-server.js`,
+      cwd: '.',
+      timeout: 30000,
+    });
+
+    if (result.exitCode !== 0) {
+      console.error('[workspace-server] Refresh failed:', result.stderr);
+      return res.status(500).json({ error: 'Failed to download update', details: result.stderr });
+    }
+
+    console.log('[workspace-server] Bundle updated. Exiting for systemd restart...');
+    res.json({ success: true, message: 'Update downloaded. Restarting...' });
+
+    // Give response time to flush, then exit — systemd Restart=always restarts us
+    setTimeout(() => process.exit(0), 500);
+  } catch (err) {
+    console.error('[workspace-server] Refresh error:', err);
+    res.status(500).json({ error: 'Refresh failed', message: String(err) });
+  }
 });
 
 // Mount project-scoped API routes

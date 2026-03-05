@@ -1,6 +1,7 @@
 import type { WorkspacePath } from '@antimatter/filesystem';
 import type { BuildResult, BuildRule } from '@antimatter/project-model';
 import { eventLog } from './eventLog';
+import { getAccessToken } from './auth';
 
 export interface FileNode {
   name: string;
@@ -21,7 +22,14 @@ interface ApiError {
 }
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  // Inject Cognito access token for authenticated API calls
+  const token = await getAccessToken();
+  const headers = new Headers(init?.headers);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const res = await fetch(url, { ...init, headers });
 
   // Guard against non-JSON responses (e.g. CloudFront serving index.html for 404s)
   const contentType = res.headers.get('content-type') ?? '';
@@ -38,6 +46,16 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(msg);
   }
   return res.json() as Promise<T>;
+}
+
+/** Build headers with auth token for direct fetch() calls (SSE streaming, etc.) */
+async function authHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+  const token = await getAccessToken();
+  const headers: Record<string, string> = { ...extra };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,10 +206,10 @@ export async function sendChatMessageStreaming(
 ): Promise<void> {
   const res = await fetch(`${agentBase(projectId)}/chat`, {
     method: 'POST',
-    headers: {
+    headers: await authHeaders({
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
-    },
+    }),
     body: JSON.stringify({ message }),
     signal: abortSignal,
   });
@@ -266,10 +284,10 @@ export async function executeBuildStreaming(
 ): Promise<void> {
   const res = await fetch(`${buildBase(projectId)}/execute`, {
     method: 'POST',
-    headers: {
+    headers: await authHeaders({
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
-    },
+    }),
     body: JSON.stringify({ rules }),
   });
 
@@ -380,10 +398,10 @@ export async function executeDeployStreaming(
 ): Promise<void> {
   const res = await fetch(`${deployBase(projectId)}/execute`, {
     method: 'POST',
-    headers: {
+    headers: await authHeaders({
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
-    },
+    }),
     body: JSON.stringify({ targetIds, dryRun }),
   });
 
@@ -476,7 +494,7 @@ export async function executeProjectCommand(
 
   const res = await fetch(baseUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       command,
       syncBefore: true,
@@ -762,5 +780,16 @@ export async function setSecret(name: string, value: string): Promise<void> {
 export async function deleteSecret(name: string): Promise<void> {
   await apiFetch<{ success: boolean }>(`/api/secrets/${name}`, {
     method: 'DELETE',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Workspace Refresh
+// ---------------------------------------------------------------------------
+
+export async function refreshWorkspace(projectId: string): Promise<void> {
+  // This goes directly to the workspace EC2 via CloudFront → ALB
+  await apiFetch<{ success: boolean }>(`/workspace/${projectId}/api/refresh`, {
+    method: 'POST',
   });
 }
