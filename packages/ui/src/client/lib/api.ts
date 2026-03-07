@@ -806,6 +806,11 @@ function workflowBase(projectId?: string): string {
   return '/api/workflow';
 }
 
+export interface EnvironmentActionDeclaration {
+  event: { type: string; [key: string]: unknown };
+  icon?: string;
+}
+
 export interface PipelineDeclarations {
   modules: {
     name: string;
@@ -826,6 +831,12 @@ export interface PipelineDeclarations {
     name: string;
     stackName?: string;
     domain?: string;
+    actions?: Record<string, EnvironmentActionDeclaration>;
+  }[];
+  rules: {
+    id: string;
+    description: string;
+    sourceFile?: string;
   }[];
 }
 
@@ -841,5 +852,14 @@ export async function emitWorkflowEvent(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ event }),
+  });
+}
+
+export async function runWorkflowRule(
+  ruleId: string,
+  projectId?: string,
+): Promise<any> {
+  return apiFetch<any>(`${workflowBase(projectId)}/run-rule/${encodeURIComponent(ruleId)}`, {
+    method: 'POST',
   });
 }

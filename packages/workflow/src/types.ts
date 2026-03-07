@@ -143,11 +143,29 @@ export interface TargetDeclaration {
   readonly config: LambdaTargetConfig | S3TargetConfig;
 }
 
+/** An action that can be triggered on an environment (build, deploy, destroy, etc.). */
+export interface EnvironmentAction {
+  /** The workflow event to emit when this action is triggered. */
+  readonly event: { type: string; [key: string]: unknown };
+  /** Icon hint for the UI: 'build' | 'destroy' | 'pause' | 'play' */
+  readonly icon?: string;
+}
+
 /** An environment — a deployment context (dev, staging, production). */
 export interface EnvironmentDeclaration {
   readonly name: string;
   readonly stackName?: string;
   readonly domain?: string;
+  /** Actions available for this environment (e.g. build, deploy, destroy). */
+  readonly actions?: Readonly<Record<string, EnvironmentAction>>;
+}
+
+/** A workflow rule declaration — metadata exposed to the IDE. */
+export interface RuleDeclaration {
+  readonly id: string;
+  readonly description: string;
+  /** The source file that declared this rule (e.g. '.antimatter/build.ts'). */
+  readonly sourceFile?: string;
 }
 
 /** All declarations collected from workflow files. */
@@ -155,6 +173,7 @@ export interface WorkflowDeclarations {
   readonly modules: readonly ModuleDeclaration[];
   readonly targets: readonly TargetDeclaration[];
   readonly environments: readonly EnvironmentDeclaration[];
+  readonly rules: readonly RuleDeclaration[];
 }
 
 // ----------------------------------------------------------------------------
@@ -335,4 +354,8 @@ export interface PersistedWorkflowState<S = unknown> {
   readonly state: S;
   readonly lastInvocation?: WorkflowInvocationResult;
   readonly updatedAt: string;
+  /** Maps source file paths to the element IDs declared in that file. */
+  readonly fileDeclarations?: Readonly<Record<string, readonly string[]>>;
+  /** Maps workspace file paths to content hashes for startup diff detection. */
+  readonly fileManifest?: Readonly<Record<string, string>>;
 }

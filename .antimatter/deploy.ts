@@ -51,6 +51,10 @@ export default defineWorkflow<DeployState>((wf) => {
   wf.environment('production', {
     stackName: 'AntimatterStack',
     domain: 'd33wyunpiwy2df.cloudfront.net',
+    actions: {
+      build: { event: { type: 'build:full' }, icon: 'build' },
+      deploy: { event: { type: 'deploy:cdk' }, icon: 'play' },
+    },
   });
 
   // ---- Bundle rules (triggered by explicit events) ----

@@ -4,13 +4,18 @@
  * Responsibilities:
  *  - Loads workflow definitions from `.antimatter/*.ts` (multi-file)
  *  - Auto-reloads definitions when any automation file changes (debounced)
+ *  - Incremental reload: only re-runs changed definition files
+ *  - File→declaration tracking: knows which file declared each element
  *  - Persists state to `.antimatter/workflow-state.json`
  *  - Connects file change events to the workflow engine
  *  - Broadcasts invocation results to WebSocket clients
  *  - Hold/release pattern for pausing during batch operations
- *  - Exposes declarations (modules, targets, environments) from loaded definitions
+ *  - Exposes declarations (modules, targets, environments, rules)
+ *  - Manual rule execution via runRule() (skips predicate)
+ *  - Startup file diff: compares workspace files against manifest, emits changes
  */
 
+import { createHash } from 'node:crypto';
 import {
   WorkflowRuntime,
   type WorkflowDefinition,
@@ -45,6 +50,12 @@ export interface WorkflowManagerOptions {
   readonly onExecEnd?: () => void;
 }
 
+/** Tagged definition — pairs a file path with its loaded definition function. */
+interface TaggedDefinition {
+  filePath: string;
+  definition: WorkflowDefinition<any>;
+}
+
 // ---------------------------------------------------------------------------
 // Manager
 // ---------------------------------------------------------------------------
@@ -66,8 +77,13 @@ export class WorkflowManager {
   private readonly statePath: string;
   private readonly onExecStart?: () => void;
   private readonly onExecEnd?: () => void;
+
   /** Tracks which files were loaded in the last definition load. */
   private loadedFiles: string[] = [];
+  /** Loaded definitions by file path (for incremental reload). */
+  private loadedDefinitions = new Map<string, WorkflowDefinition<any>>();
+  /** Automation files that changed since last reload (for incremental reload). */
+  private changedAutomationFiles = new Set<string>();
 
   constructor(options: WorkflowManagerOptions) {
     this.env = options.env;
@@ -86,16 +102,44 @@ export class WorkflowManager {
    * If no prior state exists, fires `project:initialize`.
    */
   async start(): Promise<void> {
-    const definition = this.preloadedDefinition ?? (await this.loadDefinition());
-    if (!definition) {
-      console.log('[workflow-manager] No workflow definition found — skipping');
-      this.runtime = null;
-      return;
-    }
+    if (this.preloadedDefinition) {
+      // Testing path — use pre-loaded definition directly
+      this.runtime = new WorkflowRuntime(this.preloadedDefinition, {
+        executor: this.createExecutor(),
+      });
+    } else {
+      // Production path — load tagged definitions and build runtime with source tracking
+      const tagged = await this.loadTaggedDefinitions();
+      if (!tagged || tagged.length === 0) {
+        console.log('[workflow-manager] No workflow definition found — skipping');
+        this.runtime = null;
+        return;
+      }
 
-    this.runtime = new WorkflowRuntime(definition, {
-      executor: this.createExecutor(),
-    });
+      // Create runtime with an empty definition first, then register
+      // definitions with source file tracking.
+      this.runtime = new WorkflowRuntime(() => {}, {
+        executor: this.createExecutor(),
+      });
+
+      // Now register all definitions with source file tracking
+      const handle = this.runtime.getHandle();
+      for (const { filePath, definition } of tagged) {
+        this.runtime.setSourceFile(filePath);
+        try {
+          definition(handle);
+        } catch (err) {
+          console.error(`[workflow-manager] Error running definition from ${filePath}:`, err);
+        }
+      }
+      this.runtime.setSourceFile(null);
+
+      // Store definitions for incremental reload
+      this.loadedDefinitions.clear();
+      for (const { filePath, definition } of tagged) {
+        this.loadedDefinitions.set(filePath, definition);
+      }
+    }
 
     const decl = this.runtime.declarations;
     const parts = [`${this.runtime.ruleCount} rules`];
@@ -109,7 +153,18 @@ export class WorkflowManager {
     if (loadedState) {
       this.state = loadedState.state;
       this.persisted = loadedState;
+
+      // Restore file→declaration tracking from persisted state
+      if (loadedState.fileDeclarations) {
+        this.runtime.restoreFileDeclarations(loadedState.fileDeclarations);
+      }
+
       console.log('[workflow-manager] Restored persisted state');
+
+      // Startup diff: compare workspace files against manifest
+      if (loadedState.fileManifest) {
+        await this.emitStartupDiff(loadedState.fileManifest);
+      }
     } else {
       // First run — send project:initialize
       this.state = {} as any;
@@ -144,19 +199,19 @@ export class WorkflowManager {
    * Feed file change events from the FileChangeNotifier.
    * Converts WatchEvents to workflow FileChangeEvent/FileDeleteEvent.
    *
-   * If the workflow definition file (`.antimatter/workflow.ts`) changes,
-   * the manager automatically reloads the definition after a short debounce.
+   * If an automation file changes, the manager auto-reloads (incrementally)
+   * after a short debounce.
    */
   onFileChanges(events: readonly WatchEvent[]): void {
-    // Check for automation file changes — auto-reload with debounce.
-    // Triggers on any .ts file in the automation directory.
-    // This runs even if runtime is null (files might be newly created).
-    const automationChanged = events.some(e => {
+    // Check for automation file changes — track which files changed for incremental reload.
+    for (const e of events) {
       const normalized = e.path.replace(/^\//, '');
-      return this.isAutomationFile(normalized);
-    });
+      if (this.isAutomationFile(normalized)) {
+        this.changedAutomationFiles.add(normalized);
+      }
+    }
 
-    if (automationChanged) {
+    if (this.changedAutomationFiles.size > 0) {
       this.scheduleReload();
     }
 
@@ -183,7 +238,171 @@ export class WorkflowManager {
   }
 
   /**
-   * Schedule a debounced reload of the workflow definition.
+   * Manually emit a custom event and process it through the workflow.
+   */
+  async emitEvent(event: { type: string; [key: string]: unknown }): Promise<WorkflowInvocationResult | null> {
+    if (!this.runtime) return null;
+
+    const workflowEvent: WorkflowEvent = {
+      ...event,
+      timestamp: new Date().toISOString(),
+    };
+
+    return this.processEvents([workflowEvent]);
+  }
+
+  /**
+   * Run a specific rule by ID, skipping its predicate.
+   * Invokes the rule action with an empty event array.
+   * Emitted events are processed through subsequent cycles.
+   */
+  async runRule(ruleId: string): Promise<WorkflowInvocationResult | null> {
+    if (!this.runtime) return null;
+
+    // Serialize — don't process concurrently
+    if (this.processing) {
+      console.warn(`[workflow-manager] Cannot run rule ${ruleId} — another invocation is in progress`);
+      return null;
+    }
+
+    this.processing = true;
+    try {
+      const declBefore = JSON.stringify(this.runtime.declarations);
+      const { state: newState, result } = await this.runtime.runRule(ruleId, this.state);
+      this.state = newState;
+
+      // Persist state
+      await this.persistAndBroadcast(result);
+
+      // Check for dynamic declaration changes
+      this.broadcastIfDeclarationsChanged(declBefore);
+
+      return result;
+    } catch (err) {
+      console.error(`[workflow-manager] Error running rule ${ruleId}:`, err);
+      return null;
+    } finally {
+      this.processing = false;
+      this.flushPendingEvents();
+    }
+  }
+
+  /** Get the current persisted workflow state, or null if no workflow is loaded. */
+  getState(): PersistedWorkflowState<any> | null {
+    return this.persisted;
+  }
+
+  /** Get the declarations (modules, targets, environments, rules) from the loaded workflow. */
+  getDeclarations(): WorkflowDeclarations {
+    if (!this.runtime) {
+      return { modules: [], targets: [], environments: [], rules: [] };
+    }
+    return this.runtime.declarations;
+  }
+
+  // ---- Private: Event Processing ----
+
+  /**
+   * Process events through the runtime, persist state, and broadcast results.
+   */
+  private async processEvents(events: WorkflowEvent[]): Promise<WorkflowInvocationResult | null> {
+    if (!this.runtime) return null;
+
+    // Serialize — don't process events concurrently
+    if (this.processing) {
+      this.pendingEvents.push(...events);
+      return null;
+    }
+
+    this.processing = true;
+    try {
+      const declBefore = JSON.stringify(this.runtime.declarations);
+      const { state: newState, result } = await this.runtime.processEvents(events, this.state);
+      this.state = newState;
+
+      // Persist state and broadcast result
+      await this.persistAndBroadcast(result);
+
+      // Check for dynamic declaration changes (e.g., rule action called wf.environment())
+      this.broadcastIfDeclarationsChanged(declBefore);
+
+      return result;
+    } catch (err) {
+      console.error('[workflow-manager] Error processing events:', err);
+      return null;
+    } finally {
+      this.processing = false;
+      this.flushPendingEvents();
+    }
+  }
+
+  /** Persist state and broadcast workflow-result to clients. */
+  private async persistAndBroadcast(result: WorkflowInvocationResult): Promise<void> {
+    // Build file declarations map for persistence
+    const fileDeclarations: Record<string, readonly string[]> = {};
+    if (this.runtime) {
+      for (const [file, ids] of this.runtime.fileDeclarations) {
+        fileDeclarations[file] = ids;
+      }
+    }
+
+    this.persisted = {
+      version: 1,
+      state: this.state,
+      lastInvocation: result,
+      updatedAt: new Date().toISOString(),
+      fileDeclarations,
+    };
+    await this.saveState();
+
+    // Broadcast to connected clients
+    this.broadcast({
+      type: 'workflow-result',
+      result,
+      state: this.state,
+    });
+
+    // Log summary
+    const executed = result.rulesExecuted.filter(r => !r.error).length;
+    const errored = result.rulesExecuted.filter(r => r.error).length;
+    if (result.rulesExecuted.length > 0) {
+      console.log(
+        `[workflow-manager] Invocation: ${executed} rules OK, ${errored} errors, ${result.cycles} cycle(s), ${result.durationMs}ms`,
+      );
+    }
+  }
+
+  /** If declarations changed during execution, broadcast workflow-reloaded. */
+  private broadcastIfDeclarationsChanged(declBefore: string): void {
+    if (!this.runtime) return;
+    const declAfter = JSON.stringify(this.runtime.declarations);
+    if (declBefore !== declAfter) {
+      this.broadcast({
+        type: 'workflow-reloaded',
+        ruleCount: this.runtime.ruleCount,
+        declarations: this.runtime.declarations,
+        files: this.loadedFiles,
+      });
+    }
+  }
+
+  /** Flush any pending events that accumulated during processing. */
+  private flushPendingEvents(): void {
+    if (this.pendingEvents.length > 0 && !this.held) {
+      const queued = this.pendingEvents.splice(0);
+      // Fire and forget to avoid deep recursion — schedule on next tick
+      setTimeout(() => {
+        this.processEvents(queued).catch(e => {
+          console.error('[workflow-manager] Error processing queued events:', e);
+        });
+      }, 0);
+    }
+  }
+
+  // ---- Private: Reload ----
+
+  /**
+   * Schedule a debounced reload of changed workflow definition files.
    * Waits 500ms after the last change before reloading to avoid
    * thrashing during rapid saves (e.g. editor auto-save).
    */
@@ -198,13 +417,19 @@ export class WorkflowManager {
       if (this.reloading) return;
       this.reloading = true;
 
+      const changedFiles = [...this.changedAutomationFiles];
+      this.changedAutomationFiles.clear();
+
       try {
-        console.log('[workflow-manager] Workflow definition changed — auto-reloading');
-
-        await this.start();
-
-        // start() restores persisted state from the state file,
-        // so existing workflow state is preserved across reloads.
+        if (!this.runtime || changedFiles.length === 0) {
+          // No runtime or no changed files — do a full reload
+          console.log('[workflow-manager] Workflow definition changed — full reload');
+          await this.start();
+        } else {
+          // Incremental reload: only re-run changed files
+          console.log(`[workflow-manager] Incremental reload: ${changedFiles.map(f => f.split('/').pop()).join(', ')}`);
+          await this.incrementalReload(changedFiles);
+        }
 
         this.broadcast({
           type: 'workflow-reloaded',
@@ -227,95 +452,139 @@ export class WorkflowManager {
   }
 
   /**
-   * Manually emit a custom event and process it through the workflow.
+   * Incremental reload: re-run only the changed definition files.
+   * Removes old declarations from changed files, recompiles them,
+   * and re-runs them against the existing runtime handle.
    */
-  async emitEvent(event: { type: string; [key: string]: unknown }): Promise<WorkflowInvocationResult | null> {
-    if (!this.runtime) return null;
+  private async incrementalReload(changedFiles: string[]): Promise<void> {
+    if (!this.runtime) return;
 
-    const workflowEvent: WorkflowEvent = {
-      ...event,
-      timestamp: new Date().toISOString(),
-    };
+    for (const filePath of changedFiles) {
+      // Remove old declarations from this file
+      this.runtime.removeDeclarationsFromFile(filePath);
+      this.loadedDefinitions.delete(filePath);
 
-    return this.processEvents([workflowEvent]);
-  }
+      // Check if the file still exists (might have been deleted)
+      const exists = await this.env.exists(filePath);
+      if (!exists) {
+        // File was deleted — declarations already removed, update loaded files
+        this.loadedFiles = this.loadedFiles.filter(f => f !== filePath);
+        continue;
+      }
 
-  /** Get the current persisted workflow state, or null if no workflow is loaded. */
-  getState(): PersistedWorkflowState<any> | null {
-    return this.persisted;
-  }
+      // Recompile and load the changed file
+      try {
+        const def = await this.loadSingleDefinition(filePath);
+        if (def) {
+          // Re-run the definition with source file tracking
+          this.runtime.setSourceFile(filePath);
+          def(this.runtime.getHandle());
+          this.runtime.setSourceFile(null);
 
-  /** Get the declarations (modules, targets, environments) from the loaded workflow. */
-  getDeclarations(): WorkflowDeclarations {
-    if (!this.runtime) {
-      return { modules: [], targets: [], environments: [] };
+          this.loadedDefinitions.set(filePath, def);
+
+          // Ensure file is in the loaded list
+          if (!this.loadedFiles.includes(filePath)) {
+            this.loadedFiles.push(filePath);
+          }
+        }
+      } catch (err) {
+        console.error(`[workflow-manager] Failed to reload ${filePath}:`, err);
+        this.broadcast({
+          type: 'workflow-load-error',
+          file: filePath,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
-    return this.runtime.declarations;
+
+    // Save updated state (with new fileDeclarations)
+    if (this.persisted) {
+      const fileDeclarations: Record<string, readonly string[]> = {};
+      for (const [file, ids] of this.runtime.fileDeclarations) {
+        fileDeclarations[file] = ids;
+      }
+      this.persisted = { ...this.persisted, fileDeclarations, updatedAt: new Date().toISOString() };
+      await this.saveState();
+    }
   }
 
-  // ---- Private ----
+  // ---- Private: Startup Diff ----
 
   /**
-   * Process events through the runtime, persist state, and broadcast results.
+   * On startup with existing state, compare workspace files against the
+   * persisted manifest to detect changes that happened while the workspace
+   * was stopped (e.g., code pushed via git, files modified via Lambda API).
+   * Emits file:change / file:delete events for differences.
    */
-  private async processEvents(events: WorkflowEvent[]): Promise<WorkflowInvocationResult | null> {
-    if (!this.runtime) return null;
-
-    // Serialize — don't process events concurrently
-    if (this.processing) {
-      this.pendingEvents.push(...events);
-      return null;
-    }
-
-    this.processing = true;
+  private async emitStartupDiff(manifest: Record<string, string>): Promise<void> {
     try {
-      const { state: newState, result } = await this.runtime.processEvents(events, this.state);
-      this.state = newState;
+      const currentManifest = await this.computeFileManifest();
+      const events: WorkflowEvent[] = [];
+      const now = new Date().toISOString();
 
-      // Persist state
-      this.persisted = {
-        version: 1,
-        state: this.state,
-        lastInvocation: result,
-        updatedAt: new Date().toISOString(),
-      };
-      await this.saveState();
-
-      // Broadcast to connected clients
-      this.broadcast({
-        type: 'workflow-result',
-        result,
-        state: this.state,
-      });
-
-      // Log summary
-      const executed = result.rulesExecuted.filter(r => !r.error).length;
-      const errored = result.rulesExecuted.filter(r => r.error).length;
-      if (result.rulesExecuted.length > 0) {
-        console.log(
-          `[workflow-manager] Invocation: ${executed} rules OK, ${errored} errors, ${result.cycles} cycle(s), ${result.durationMs}ms`,
-        );
+      // Files that are new or changed
+      for (const [path, hash] of Object.entries(currentManifest)) {
+        if (!manifest[path] || manifest[path] !== hash) {
+          events.push({ type: 'file:change', path, timestamp: now });
+        }
       }
 
-      return result;
+      // Files that were deleted
+      for (const path of Object.keys(manifest)) {
+        if (!(path in currentManifest)) {
+          events.push({ type: 'file:delete', path, timestamp: now });
+        }
+      }
+
+      if (events.length > 0) {
+        console.log(`[workflow-manager] Startup diff: ${events.length} file(s) changed since last run`);
+        await this.processEvents(events);
+      } else {
+        console.log('[workflow-manager] Startup diff: no file changes detected');
+      }
+
+      // Update manifest in persisted state
+      if (this.persisted) {
+        this.persisted = { ...this.persisted, fileManifest: currentManifest };
+        await this.saveState();
+      }
     } catch (err) {
-      console.error('[workflow-manager] Error processing events:', err);
-      return null;
-    } finally {
-      this.processing = false;
-
-      // Process any events that accumulated during processing
-      if (this.pendingEvents.length > 0 && !this.held) {
-        const queued = this.pendingEvents.splice(0);
-        // Fire and forget to avoid deep recursion — schedule on next tick
-        setTimeout(() => {
-          this.processEvents(queued).catch(e => {
-            console.error('[workflow-manager] Error processing queued events:', e);
-          });
-        }, 0);
-      }
+      console.error('[workflow-manager] Error computing startup diff:', err);
     }
   }
+
+  /**
+   * Compute a hash manifest of all workspace files (excluding .antimatter/).
+   * Maps relative file paths to content hashes.
+   */
+  private async computeFileManifest(dir = '', result: Record<string, string> = {}): Promise<Record<string, string>> {
+    try {
+      const entries = await this.env.readDirectory(dir || '.');
+      for (const entry of entries) {
+        const path = dir ? `${dir}/${entry.name}` : entry.name;
+        // Skip .antimatter directory and node_modules
+        if (entry.name === '.antimatter' || entry.name === 'node_modules' || entry.name === '.git') continue;
+
+        if (entry.type === 'file') {
+          try {
+            const content = await this.env.readFile(path);
+            const hash = createHash('md5').update(content).digest('hex');
+            result[path] = hash;
+          } catch {
+            // Skip files that can't be read
+          }
+        } else if (entry.type === 'directory') {
+          await this.computeFileManifest(path, result);
+        }
+      }
+    } catch {
+      // Directory doesn't exist or can't be read
+    }
+    return result;
+  }
+
+  // ---- Private: File Loading ----
 
   /**
    * Check if a path is an automation file we should load/watch.
@@ -339,14 +608,9 @@ export class WorkflowManager {
 
   /**
    * Scan `.antimatter/*.ts` for automation files and load all definitions.
-   * Each file's default export is expected to be a WorkflowDefinition function.
-   * Definitions are composed: all are called with the same wf handle, so
-   * rules and declarations from all files are merged.
-   *
-   * If a file fails to transpile/load, it is skipped with a warning — other
-   * files are still loaded (error isolation).
+   * Returns tagged definitions (file path + definition function).
    */
-  private async loadDefinition(): Promise<WorkflowDefinition<any> | null> {
+  private async loadTaggedDefinitions(): Promise<TaggedDefinition[] | null> {
     try {
       // Check if the automation directory exists
       const dirExists = await this.env.exists(this.automationDir);
@@ -355,24 +619,24 @@ export class WorkflowManager {
       // Read directory entries
       const entries = await this.env.readDirectory(this.automationDir);
       const tsFiles = entries
-        .filter(e => e.type === 'file')
-        .map(e => `${this.automationDir}/${e.name}`)
-        .filter(path => this.isAutomationFile(path))
+        .filter((e: { type: string; name: string }) => e.type === 'file')
+        .map((e: { name: string }) => `${this.automationDir}/${e.name}`)
+        .filter((p: string) => this.isAutomationFile(p))
         .sort(); // deterministic order
 
       if (tsFiles.length === 0) return null;
 
-      console.log(`[workflow-manager] Found ${tsFiles.length} automation file(s): ${tsFiles.map(f => f.split('/').pop()).join(', ')}`);
+      console.log(`[workflow-manager] Found ${tsFiles.length} automation file(s): ${tsFiles.map((f: string) => f.split('/').pop()).join(', ')}`);
 
       // Load each file individually with error isolation
-      const definitions: WorkflowDefinition<any>[] = [];
+      const tagged: TaggedDefinition[] = [];
       const loaded: string[] = [];
 
       for (const filePath of tsFiles) {
         try {
           const def = await this.loadSingleDefinition(filePath);
           if (def) {
-            definitions.push(def);
+            tagged.push({ filePath, definition: def });
             loaded.push(filePath);
           }
         } catch (err) {
@@ -386,17 +650,7 @@ export class WorkflowManager {
       }
 
       this.loadedFiles = loaded;
-
-      if (definitions.length === 0) return null;
-
-      // Compose all definitions into one: call each with the same wf handle
-      const composite: WorkflowDefinition<any> = (wf) => {
-        for (const def of definitions) {
-          def(wf);
-        }
-      };
-
-      return composite;
+      return tagged.length > 0 ? tagged : null;
     } catch (err) {
       console.error('[workflow-manager] Failed to scan automation directory:', err);
       return null;
@@ -443,6 +697,8 @@ export class WorkflowManager {
     return definition;
   }
 
+  // ---- Private: State Persistence ----
+
   /** Load persisted state from the state file. */
   private async loadState(): Promise<PersistedWorkflowState<any> | null> {
     try {
@@ -465,6 +721,8 @@ export class WorkflowManager {
       console.error('[workflow-manager] Failed to persist state:', err);
     }
   }
+
+  // ---- Private: Executor ----
 
   /**
    * Create the executor function that bridges workflow ExecOptions

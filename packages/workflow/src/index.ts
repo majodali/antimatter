@@ -26,6 +26,8 @@ export type {
   ModuleDeclaration,
   TargetDeclaration,
   EnvironmentDeclaration,
+  EnvironmentAction,
+  RuleDeclaration,
   LambdaTargetConfig,
   S3TargetConfig,
   WorkflowDeclarations,

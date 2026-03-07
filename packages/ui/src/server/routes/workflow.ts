@@ -47,6 +47,23 @@ export function createWorkflowRouter(workflowManager: WorkflowManager): Router {
     }
   });
 
+  // POST /run-rule/:ruleId — manually run a specific rule (skips predicate)
+  router.post('/run-rule/:ruleId', async (req, res) => {
+    try {
+      const { ruleId } = req.params;
+      if (!ruleId) {
+        return res.status(400).json({ error: 'ruleId is required' });
+      }
+      const result = await workflowManager.runRule(ruleId);
+      res.json({ result });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to run workflow rule',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   // POST /reload — reload the workflow definition and state
   router.post('/reload', async (_req, res) => {
     try {

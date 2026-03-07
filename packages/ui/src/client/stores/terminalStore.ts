@@ -284,6 +284,12 @@ function handleWsMessage(
         }
         break;
 
+      case 'workflow-result':
+        if (msg.result) {
+          usePipelineStore.getState().handleWorkflowResult(msg.result, msg.state);
+        }
+        break;
+
       default:
         // Unknown message type — ignore
         break;

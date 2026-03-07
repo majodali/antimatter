@@ -1,53 +1,44 @@
 import { useEffect } from 'react';
-import { Hammer, Settings } from 'lucide-react';
+import { Hammer, Play, Settings, CheckCircle, XCircle, Loader2, Clock } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
-import { BuildStatusItem } from './BuildStatusItem';
-import { BuildConfigEditor } from './BuildConfigEditor';
-import { useBuildStore } from '@/stores/buildStore';
+import { usePipelineStore, type RuleExecutionState } from '@/stores/pipelineStore';
 import { useProjectStore } from '@/stores/projectStore';
-import { fetchBuildResults } from '@/lib/api';
-import { onBuildUpdate } from '@/lib/ws';
-import { eventLog } from '@/lib/eventLog';
+import { cn } from '@/lib/utils';
 
 export function BuildPanel() {
   const {
-    rules,
-    results,
-    configMode,
-    setResults,
-    setResult,
-    setConfigMode,
-    loadConfig,
-  } = useBuildStore();
+    declarations,
+    ruleResults,
+    loaded,
+    loadDeclarations,
+    runRule,
+  } = usePipelineStore();
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
-  // Load config and initial results on mount
+  // Load declarations on mount
   useEffect(() => {
-    loadConfig(currentProjectId ?? undefined);
-
-    fetchBuildResults(currentProjectId ?? undefined)
-      .then((res) => setResults(res))
-      .catch((err) => eventLog.error('build', 'Failed to load build results', String(err)));
-
-    const unsub = onBuildUpdate((payload) => {
-      setResult({
-        ruleId: payload.ruleId,
-        status: payload.status as any,
-        startedAt: new Date().toISOString(),
-        finishedAt: payload.status !== 'running' ? new Date().toISOString() : (undefined as any),
-        durationMs: 0,
-        diagnostics: [],
-      });
-    });
-    return unsub;
+    loadDeclarations(currentProjectId ?? undefined);
   }, [currentProjectId]);
 
-  const successCount = Array.from(results.values()).filter(
-    (r) => r.status === 'success' || r.status === 'cached',
-  ).length;
-  const failureCount = Array.from(results.values()).filter((r) => r.status === 'failure').length;
-  const runningCount = Array.from(results.values()).filter((r) => r.status === 'running').length;
+  const rules = declarations.rules ?? [];
+
+  const handleRunRule = async (ruleId: string) => {
+    try {
+      await runRule(ruleId, currentProjectId ?? undefined);
+    } catch {
+      // Error already handled by store
+    }
+  };
+
+  const handleOpenConfig = () => {
+    // Open .antimatter/ files in the editor
+    // Use the file tree to navigate to the automation directory
+    const { openFile } = (window as any).__editorActions ?? {};
+    if (openFile) {
+      openFile('.antimatter/build.ts');
+    }
+  };
 
   return (
     <div className="h-full flex flex-col bg-card">
@@ -56,9 +47,9 @@ export function BuildPanel() {
         <div className="flex items-center gap-2">
           <Hammer className="h-4 w-4 text-primary" />
           <h3 className="text-sm font-medium">Build</h3>
-          {runningCount > 0 && (
-            <span className="text-xs text-yellow-600 dark:text-yellow-500 animate-pulse">
-              {runningCount} running
+          {rules.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              {rules.length} rule{rules.length !== 1 ? 's' : ''}
             </span>
           )}
         </div>
@@ -66,80 +57,139 @@ export function BuildPanel() {
           <Button
             variant="ghost"
             size="icon"
-            className={`h-7 w-7 ${configMode ? 'bg-accent' : ''}`}
-            onClick={() => setConfigMode(!configMode)}
-            title="Configure builds"
+            className="h-7 w-7"
+            onClick={handleOpenConfig}
+            title="Open workflow configuration"
           >
             <Settings className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
 
-      {configMode ? (
-        <BuildConfigEditor />
-      ) : (
-        <>
-          {/* Summary */}
-          {results.size > 0 && (
-            <div className="px-3 py-2 border-b border-border bg-accent/30">
-              <div className="flex items-center gap-4 text-xs">
-                <div className="flex items-center gap-1">
-                  <span className="text-muted-foreground">Total:</span>
-                  <span className="font-medium">{results.size}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-green-600 dark:text-green-500">&#10003;</span>
-                  <span className="font-medium">{successCount}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-red-600 dark:text-red-500">&#10007;</span>
-                  <span className="font-medium">{failureCount}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Results list */}
-          <ScrollArea className="flex-1">
-            {results.size === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-center p-4">
-                <Hammer className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
-                <p className="text-sm text-muted-foreground">No build results yet</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {rules.size === 0
-                    ? 'Click the gear icon to configure build rules'
-                    : 'Builds run automatically when files change'}
-                </p>
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {Array.from(results.values())
-                  .sort((a, b) => {
-                    const priority: Record<string, number> = {
-                      running: 0,
-                      failure: 1,
-                      success: 2,
-                      cached: 3,
-                      pending: 4,
-                      skipped: 5,
-                    };
-                    return (priority[a.status] ?? 6) - (priority[b.status] ?? 6);
-                  })
-                  .map((result) => {
-                    const rule = rules.get(result.ruleId);
-                    return (
-                      <BuildStatusItem
-                        key={result.ruleId}
-                        result={result}
-                        ruleName={rule?.name}
-                      />
-                    );
-                  })}
-              </div>
-            )}
-          </ScrollArea>
-        </>
-      )}
+      {/* Rules list */}
+      <ScrollArea className="flex-1">
+        {rules.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center p-4">
+            <Hammer className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
+            <p className="text-sm text-muted-foreground">No workflow rules loaded</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {loaded
+                ? 'Add rules to .antimatter/*.ts files'
+                : 'Loading workflow definitions...'}
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {rules.map((rule) => {
+              const result = ruleResults.get(rule.id);
+              return (
+                <RuleItem
+                  key={rule.id}
+                  ruleId={rule.id}
+                  description={rule.description}
+                  sourceFile={rule.sourceFile}
+                  result={result}
+                  onRun={() => handleRunRule(rule.id)}
+                />
+              );
+            })}
+          </div>
+        )}
+      </ScrollArea>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Rule Item Component
+// ---------------------------------------------------------------------------
+
+function RuleItem({
+  ruleId,
+  description,
+  sourceFile,
+  result,
+  onRun,
+}: {
+  ruleId: string;
+  description: string;
+  sourceFile?: string;
+  result?: RuleExecutionState;
+  onRun: () => void;
+}) {
+  const isRunning = result?.status === 'running';
+
+  return (
+    <div className="px-3 py-2 flex items-center gap-2 group hover:bg-accent/30">
+      {/* Status icon */}
+      <div className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
+        <StatusIcon status={result?.status} />
+      </div>
+
+      {/* Rule info */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-medium truncate">{description}</span>
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-[10px] text-muted-foreground font-mono truncate">{ruleId}</span>
+          {result?.durationMs != null && result.status !== 'running' && (
+            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+              <Clock className="h-2.5 w-2.5" />
+              {formatDuration(result.durationMs)}
+            </span>
+          )}
+        </div>
+        {result?.error && (
+          <p className="text-[10px] text-red-600 dark:text-red-400 mt-0.5 truncate" title={result.error}>
+            {result.error}
+          </p>
+        )}
+      </div>
+
+      {/* Run button */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+        onClick={(e) => {
+          e.stopPropagation();
+          onRun();
+        }}
+        disabled={isRunning}
+        title={`Run ${ruleId}`}
+      >
+        {isRunning ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <Play className="h-3 w-3" />
+        )}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function StatusIcon({ status }: { status?: string }) {
+  switch (status) {
+    case 'running':
+      return <Loader2 className="h-3.5 w-3.5 text-yellow-600 dark:text-yellow-500 animate-spin" />;
+    case 'success':
+      return <CheckCircle className="h-3.5 w-3.5 text-green-600 dark:text-green-500" />;
+    case 'failed':
+      return <XCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-500" />;
+    default:
+      return <div className="h-2 w-2 rounded-full bg-muted-foreground/30" />;
+  }
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.round((ms % 60_000) / 1000);
+  return `${mins}m${secs}s`;
 }
