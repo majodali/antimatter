@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   Terminal as TerminalIcon,
   Trash2,
@@ -14,13 +14,27 @@ import { XTerm } from './XTerm';
 import { useTerminalStore } from '@/stores/terminalStore';
 import { useBuildStore } from '@/stores/buildStore';
 import { useProjectStore } from '@/stores/projectStore';
+import { refreshWorkspace } from '@/lib/api';
+import { eventLog } from '@/lib/eventLog';
+import { cn } from '@/lib/utils';
 
 /**
  * Connection status badge — shows the current state of the workspace terminal.
+ * During silent reconnect (<5s), shows green "Connected" to avoid flicker.
  */
-function ConnectionBadge({ state }: { state: string }) {
+function ConnectionBadge({ state, showReconnectOverlay }: { state: string; showReconnectOverlay: boolean }) {
   switch (state) {
     case 'connected':
+    case 'reconnecting':
+      // During silent reconnect, keep showing "Connected" (no flicker)
+      if (state === 'reconnecting' && showReconnectOverlay) {
+        return (
+          <span className="flex items-center gap-1 text-xs text-yellow-500 animate-pulse">
+            <Wifi className="h-3 w-3" />
+            Reconnecting...
+          </span>
+        );
+      }
       return (
         <span className="flex items-center gap-1 text-xs text-green-500">
           <Wifi className="h-3 w-3" />
@@ -61,14 +75,10 @@ function ConnectionBadge({ state }: { state: string }) {
 export function TerminalPanel() {
   const {
     connectionState,
-    errorMessage,
+    statusMessage,
+    showReconnectOverlay,
     isRunning,
-    isExecutingCommand,
-    commandHistory,
-    historyIndex,
     projectId: connectedProjectId,
-    setHistoryIndex,
-    executeCommand,
     clear,
     connect,
     disconnect,
@@ -77,11 +87,26 @@ export function TerminalPanel() {
     stopContainer,
   } = useTerminalStore();
 
-  const buildOutput = useBuildStore((s) => s.buildOutput);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
-  const [input, setInput] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const hasActiveWorkspace =
+    (connectionState === 'connected' || connectionState === 'reconnecting') && !!connectedProjectId;
+
+  const handleRefresh = useCallback(async () => {
+    if (!connectedProjectId || isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await refreshWorkspace(connectedProjectId);
+      eventLog.info('workspace', 'Workspace server refresh requested — restarting...', undefined, { toast: true });
+    } catch (err) {
+      eventLog.error('workspace', 'Failed to refresh workspace server', String(err), { toast: true });
+    } finally {
+      // Keep spinning briefly — the server will restart and WebSocket will reconnect
+      setTimeout(() => setIsRefreshing(false), 3000);
+    }
+  }, [connectedProjectId, isRefreshing]);
 
   // Show welcome message on first render
   useEffect(() => {
@@ -123,10 +148,11 @@ export function TerminalPanel() {
     stopContainer(currentProjectId);
   }, [currentProjectId, stopContainer]);
 
-  // Terminal data handler — sends keystrokes to the PTY via WebSocket
+  // Terminal data handler — sends keystrokes to the PTY via WebSocket.
+  // Also buffers input during silent reconnect.
   const handleTerminalData = useCallback(
     (data: string) => {
-      if (connectionState === 'connected') {
+      if (connectionState === 'connected' || connectionState === 'reconnecting') {
         sendInput(data);
       }
     },
@@ -141,49 +167,19 @@ export function TerminalPanel() {
     [resize],
   );
 
-  // Legacy: command input submission for fallback mode
-  const handleSubmit = useCallback(() => {
-    const trimmed = input.trim();
-    if (!trimmed || !currentProjectId || isExecutingCommand) return;
-    setInput('');
-    setHistoryIndex(-1);
-    executeCommand(currentProjectId, trimmed);
-  }, [input, currentProjectId, isExecutingCommand, executeCommand, setHistoryIndex]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        handleSubmit();
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        if (commandHistory.length === 0) return;
-        const newIndex =
-          historyIndex === -1
-            ? commandHistory.length - 1
-            : Math.max(0, historyIndex - 1);
-        setHistoryIndex(newIndex);
-        setInput(commandHistory[newIndex]);
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        if (historyIndex === -1) return;
-        const newIndex = historyIndex + 1;
-        if (newIndex >= commandHistory.length) {
-          setHistoryIndex(-1);
-          setInput('');
-        } else {
-          setHistoryIndex(newIndex);
-          setInput(commandHistory[newIndex]);
-        }
-      }
-    },
-    [handleSubmit, commandHistory, historyIndex, setHistoryIndex],
-  );
-
+  // Include 'reconnecting' so buttons/terminal remain usable during brief reconnects
   const isConnectedOrConnecting =
     connectionState === 'connected' ||
     connectionState === 'connecting' ||
-    connectionState === 'starting';
+    connectionState === 'starting' ||
+    connectionState === 'reconnecting';
+
+  // Show overlay for: starting, connecting, or reconnecting after 5s grace period
+  const shouldShowOverlay = statusMessage && (
+    connectionState === 'starting' ||
+    connectionState === 'connecting' ||
+    (connectionState === 'reconnecting' && showReconnectOverlay)
+  );
 
   return (
     <div className="h-full flex flex-col bg-background">
@@ -192,7 +188,7 @@ export function TerminalPanel() {
         <div className="flex items-center gap-2">
           <TerminalIcon className="h-3.5 w-3.5" />
           <span className="text-xs font-medium">Terminal</span>
-          <ConnectionBadge state={connectionState} />
+          <ConnectionBadge state={connectionState} showReconnectOverlay={showReconnectOverlay} />
           {isRunning && (
             <span className="text-xs text-muted-foreground animate-pulse">Building...</span>
           )}
@@ -211,7 +207,7 @@ export function TerminalPanel() {
               Start
             </Button>
           )}
-          {connectionState === 'connected' && (
+          {(connectionState === 'connected' || connectionState === 'reconnecting') && (
             <Button
               variant="ghost"
               size="sm"
@@ -221,6 +217,18 @@ export function TerminalPanel() {
             >
               <WifiOff className="h-3 w-3" />
               Disconnect
+            </Button>
+          )}
+          {hasActiveWorkspace && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              title="Refresh workspace server (download latest code from S3 and restart)"
+            >
+              <RefreshCw className={cn('h-3 w-3', isRefreshing && 'animate-spin')} />
             </Button>
           )}
           {connectionState === 'error' && (
@@ -260,59 +268,20 @@ export function TerminalPanel() {
       </div>
 
       {/* Terminal output — xterm.js handles all I/O when WebSocket is connected */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden relative">
         <XTerm
           onData={handleTerminalData}
           onResize={handleTerminalResize}
         />
+        {shouldShowOverlay && (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/70 z-10">
+            <div className="flex flex-col items-center gap-2 text-sm">
+              <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+              <span className="text-muted-foreground">{statusMessage}</span>
+            </div>
+          </div>
+        )}
       </div>
-
-      {/* Command input — shown only when NOT connected via WebSocket (fallback mode) */}
-      {connectionState !== 'connected' && (
-        <div className="border-t border-border bg-card px-3 py-1.5 flex items-center gap-2">
-          {currentProjectId ? (
-            <>
-              <span className="text-xs font-mono text-green-500 select-none">$</span>
-              <input
-                ref={inputRef}
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                disabled={isExecutingCommand}
-                placeholder={
-                  isExecutingCommand
-                    ? 'Running...'
-                    : connectionState === 'starting'
-                      ? 'Container starting...'
-                      : 'Type a command (workspace auto-connects on project open)...'
-                }
-                className="flex-1 bg-transparent text-xs font-mono outline-none placeholder:text-muted-foreground disabled:opacity-50"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 shrink-0"
-                onClick={handleSubmit}
-                disabled={isExecutingCommand || !input.trim()}
-                title="Run command"
-              >
-                {isExecutingCommand ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Play className="h-3 w-3" />
-                )}
-              </Button>
-            </>
-          ) : (
-            <span className="text-xs text-muted-foreground">
-              Select a project to run commands
-            </span>
-          )}
-        </div>
-      )}
     </div>
   );
 }

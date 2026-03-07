@@ -2,16 +2,19 @@
  * WorkflowManager — manages the lifecycle of a WorkflowRuntime instance.
  *
  * Responsibilities:
- *  - Loads workflow definition from `.antimatter/workflow.ts`
+ *  - Loads workflow definitions from `.antimatter/*.ts` (multi-file)
+ *  - Auto-reloads definitions when any automation file changes (debounced)
  *  - Persists state to `.antimatter/workflow-state.json`
  *  - Connects file change events to the workflow engine
  *  - Broadcasts invocation results to WebSocket clients
  *  - Hold/release pattern for pausing during batch operations
+ *  - Exposes declarations (modules, targets, environments) from loaded definitions
  */
 
 import {
   WorkflowRuntime,
   type WorkflowDefinition,
+  type WorkflowDeclarations,
   type WorkflowEvent,
   type WorkflowInvocationResult,
   type PersistedWorkflowState,
@@ -32,10 +35,14 @@ export interface WorkflowManagerOptions {
   readonly broadcast: (msg: object) => void;
   /** Pre-loaded definition (for testing — skips file loading). */
   readonly definition?: WorkflowDefinition<any>;
-  /** Path to the workflow definition file. Default: '.antimatter/workflow.ts' */
-  readonly definitionPath?: string;
+  /** Directory containing automation `.ts` files. Default: '.antimatter' */
+  readonly automationDir?: string;
   /** Path to the persisted state file. Default: '.antimatter/workflow-state.json' */
   readonly statePath?: string;
+  /** Called when a workflow command starts executing (e.g., to hold shutdown timer). */
+  readonly onExecStart?: () => void;
+  /** Called when a workflow command finishes executing (e.g., to release shutdown timer). */
+  readonly onExecEnd?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,19 +56,27 @@ export class WorkflowManager {
   private held = false;
   private pendingEvents: WorkflowEvent[] = [];
   private processing = false;
+  private reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  private reloading = false;
 
   private readonly env: WorkspaceEnvironment;
   private readonly broadcast: (msg: object) => void;
   private readonly preloadedDefinition?: WorkflowDefinition<any>;
-  private readonly definitionPath: string;
+  private readonly automationDir: string;
   private readonly statePath: string;
+  private readonly onExecStart?: () => void;
+  private readonly onExecEnd?: () => void;
+  /** Tracks which files were loaded in the last definition load. */
+  private loadedFiles: string[] = [];
 
   constructor(options: WorkflowManagerOptions) {
     this.env = options.env;
     this.broadcast = options.broadcast;
     this.preloadedDefinition = options.definition;
-    this.definitionPath = options.definitionPath ?? '.antimatter/workflow.ts';
+    this.automationDir = options.automationDir ?? '.antimatter';
     this.statePath = options.statePath ?? '.antimatter/workflow-state.json';
+    this.onExecStart = options.onExecStart;
+    this.onExecEnd = options.onExecEnd;
   }
 
   // ---- Public API ----
@@ -82,7 +97,12 @@ export class WorkflowManager {
       executor: this.createExecutor(),
     });
 
-    console.log(`[workflow-manager] Loaded workflow with ${this.runtime.ruleCount} rules`);
+    const decl = this.runtime.declarations;
+    const parts = [`${this.runtime.ruleCount} rules`];
+    if (decl.modules.length) parts.push(`${decl.modules.length} modules`);
+    if (decl.targets.length) parts.push(`${decl.targets.length} targets`);
+    if (decl.environments.length) parts.push(`${decl.environments.length} environments`);
+    console.log(`[workflow-manager] Loaded workflow: ${parts.join(', ')} from ${this.loadedFiles.length} file(s)`);
 
     // Load persisted state
     const loadedState = await this.loadState();
@@ -123,8 +143,23 @@ export class WorkflowManager {
   /**
    * Feed file change events from the FileChangeNotifier.
    * Converts WatchEvents to workflow FileChangeEvent/FileDeleteEvent.
+   *
+   * If the workflow definition file (`.antimatter/workflow.ts`) changes,
+   * the manager automatically reloads the definition after a short debounce.
    */
   onFileChanges(events: readonly WatchEvent[]): void {
+    // Check for automation file changes — auto-reload with debounce.
+    // Triggers on any .ts file in the automation directory.
+    // This runs even if runtime is null (files might be newly created).
+    const automationChanged = events.some(e => {
+      const normalized = e.path.replace(/^\//, '');
+      return this.isAutomationFile(normalized);
+    });
+
+    if (automationChanged) {
+      this.scheduleReload();
+    }
+
     if (!this.runtime) return;
 
     const workflowEvents: WorkflowEvent[] = events
@@ -148,6 +183,50 @@ export class WorkflowManager {
   }
 
   /**
+   * Schedule a debounced reload of the workflow definition.
+   * Waits 500ms after the last change before reloading to avoid
+   * thrashing during rapid saves (e.g. editor auto-save).
+   */
+  private scheduleReload(): void {
+    if (this.reloadTimer) {
+      clearTimeout(this.reloadTimer);
+    }
+
+    this.reloadTimer = setTimeout(async () => {
+      this.reloadTimer = null;
+
+      if (this.reloading) return;
+      this.reloading = true;
+
+      try {
+        console.log('[workflow-manager] Workflow definition changed — auto-reloading');
+
+        await this.start();
+
+        // start() restores persisted state from the state file,
+        // so existing workflow state is preserved across reloads.
+
+        this.broadcast({
+          type: 'workflow-reloaded',
+          ruleCount: this.runtime?.ruleCount ?? 0,
+          declarations: this.getDeclarations(),
+          files: this.loadedFiles,
+        });
+
+        console.log('[workflow-manager] Auto-reload complete');
+      } catch (err) {
+        console.error('[workflow-manager] Auto-reload failed:', err);
+        this.broadcast({
+          type: 'workflow-reload-error',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        this.reloading = false;
+      }
+    }, 500);
+  }
+
+  /**
    * Manually emit a custom event and process it through the workflow.
    */
   async emitEvent(event: { type: string; [key: string]: unknown }): Promise<WorkflowInvocationResult | null> {
@@ -164,6 +243,14 @@ export class WorkflowManager {
   /** Get the current persisted workflow state, or null if no workflow is loaded. */
   getState(): PersistedWorkflowState<any> | null {
     return this.persisted;
+  }
+
+  /** Get the declarations (modules, targets, environments) from the loaded workflow. */
+  getDeclarations(): WorkflowDeclarations {
+    if (!this.runtime) {
+      return { modules: [], targets: [], environments: [] };
+    }
+    return this.runtime.declarations;
   }
 
   // ---- Private ----
@@ -231,60 +318,129 @@ export class WorkflowManager {
   }
 
   /**
-   * Load the workflow definition from `.antimatter/workflow.ts`.
-   * Transpiles TypeScript to ESM JavaScript, writes to a temp file, and imports it.
+   * Check if a path is an automation file we should load/watch.
+   * Includes `.ts` files in the automation directory, excluding
+   * compiled artifacts, declaration files, and state files.
+   */
+  private isAutomationFile(path: string): boolean {
+    const normalized = path.replace(/\\/g, '/');
+    if (!normalized.startsWith(this.automationDir + '/')) return false;
+    // Only top-level files in the dir (not subdirectories)
+    const parts = normalized.slice(this.automationDir.length + 1).split('/');
+    if (parts.length !== 1) return false;
+    const filename = parts[0];
+    if (!filename.endsWith('.ts')) return false;
+    // Exclude compiled artifacts, declaration files, state files
+    if (filename.endsWith('.d.ts')) return false;
+    if (filename.endsWith('.compiled.mjs')) return false;
+    if (filename === 'workflow-state.json') return false;
+    return true;
+  }
+
+  /**
+   * Scan `.antimatter/*.ts` for automation files and load all definitions.
+   * Each file's default export is expected to be a WorkflowDefinition function.
+   * Definitions are composed: all are called with the same wf handle, so
+   * rules and declarations from all files are merged.
+   *
+   * If a file fails to transpile/load, it is skipped with a warning — other
+   * files are still loaded (error isolation).
    */
   private async loadDefinition(): Promise<WorkflowDefinition<any> | null> {
     try {
-      // Check if the definition file exists
-      const exists = await this.env.exists(this.definitionPath);
-      if (!exists) return null;
+      // Check if the automation directory exists
+      const dirExists = await this.env.exists(this.automationDir);
+      if (!dirExists) return null;
 
-      // Read the TypeScript source
-      const source = await this.env.readFile(this.definitionPath);
+      // Read directory entries
+      const entries = await this.env.readDirectory(this.automationDir);
+      const tsFiles = entries
+        .filter(e => e.type === 'file')
+        .map(e => `${this.automationDir}/${e.name}`)
+        .filter(path => this.isAutomationFile(path))
+        .sort(); // deterministic order
 
-      // Transpile TS → ESM JS using esbuild
-      const esbuild = await import('esbuild');
-      const result = await esbuild.transform(source, {
-        loader: 'ts',
-        format: 'esm',
-        target: 'node20',
-        // Replace the workflow import with the actual resolved path
-        // since the compiled file won't be in a node_modules context
-      });
+      if (tsFiles.length === 0) return null;
 
-      // Write compiled output to a temp file (dynamic import needs a real file)
-      const compiledPath = this.definitionPath.replace(/\.ts$/, '.compiled.mjs');
-      await this.env.writeFile(compiledPath, result.code);
+      console.log(`[workflow-manager] Found ${tsFiles.length} automation file(s): ${tsFiles.map(f => f.split('/').pop()).join(', ')}`);
 
-      // Resolve the absolute path for import()
-      // The env root + compiled path gives us the real filesystem path
-      const { fileURLToPath } = await import('node:url');
-      const { resolve } = await import('node:path');
+      // Load each file individually with error isolation
+      const definitions: WorkflowDefinition<any>[] = [];
+      const loaded: string[] = [];
 
-      // We need the actual filesystem path — get it from the env
-      // The env.writeFile writes relative to its root, which for LocalWorkspaceEnvironment
-      // is the project directory
-      const absolutePath = resolve(
-        (this.env as any).rootPath ?? process.cwd(),
-        compiledPath,
-      );
-
-      // Dynamic import with cache-busting query param
-      const fileUrl = `file://${absolutePath.replace(/\\/g, '/')}?t=${Date.now()}`;
-      const module = await import(fileUrl);
-
-      const definition = module.default;
-      if (typeof definition !== 'function') {
-        console.error('[workflow-manager] Workflow definition must export a default function');
-        return null;
+      for (const filePath of tsFiles) {
+        try {
+          const def = await this.loadSingleDefinition(filePath);
+          if (def) {
+            definitions.push(def);
+            loaded.push(filePath);
+          }
+        } catch (err) {
+          console.error(`[workflow-manager] Failed to load ${filePath} — skipping:`, err);
+          this.broadcast({
+            type: 'workflow-load-error',
+            file: filePath,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
-      return definition;
+      this.loadedFiles = loaded;
+
+      if (definitions.length === 0) return null;
+
+      // Compose all definitions into one: call each with the same wf handle
+      const composite: WorkflowDefinition<any> = (wf) => {
+        for (const def of definitions) {
+          def(wf);
+        }
+      };
+
+      return composite;
     } catch (err) {
-      console.error('[workflow-manager] Failed to load workflow definition:', err);
+      console.error('[workflow-manager] Failed to scan automation directory:', err);
       return null;
     }
+  }
+
+  /**
+   * Load a single workflow definition file.
+   * Transpiles TypeScript to ESM JavaScript, writes to a temp file, and imports it.
+   */
+  private async loadSingleDefinition(filePath: string): Promise<WorkflowDefinition<any> | null> {
+    // Read the TypeScript source
+    const source = await this.env.readFile(filePath);
+
+    // Transpile TS → ESM JS using esbuild
+    const esbuild = await import('esbuild');
+    const result = await esbuild.transform(source, {
+      loader: 'ts',
+      format: 'esm',
+      target: 'node20',
+    });
+
+    // Write compiled output to a temp file (dynamic import needs a real file)
+    const compiledPath = filePath.replace(/\.ts$/, '.compiled.mjs');
+    await this.env.writeFile(compiledPath, result.code);
+
+    // Resolve the absolute path for import()
+    const { resolve } = await import('node:path');
+    const absolutePath = resolve(
+      (this.env as any).rootPath ?? process.cwd(),
+      compiledPath,
+    );
+
+    // Dynamic import with cache-busting query param
+    const fileUrl = `file://${absolutePath.replace(/\\/g, '/')}?t=${Date.now()}`;
+    const module = await import(fileUrl);
+
+    const definition = module.default;
+    if (typeof definition !== 'function') {
+      console.warn(`[workflow-manager] ${filePath} does not export a default function — skipping`);
+      return null;
+    }
+
+    return definition;
   }
 
   /** Load persisted state from the state file. */
@@ -316,22 +472,27 @@ export class WorkflowManager {
    */
   private createExecutor(): (command: string, options?: ExecOptions) => Promise<ExecResult> {
     return async (command: string, options?: ExecOptions): Promise<ExecResult> => {
-      const execOptions: ExecuteOptions = {
-        command,
-        cwd: options?.cwd,
-        env: options?.env as Record<string, string>,
-        timeout: options?.timeout,
-        onStdout: options?.onStdout,
-        onStderr: options?.onStderr,
-      };
+      this.onExecStart?.();
+      try {
+        const execOptions: ExecuteOptions = {
+          command,
+          cwd: options?.cwd,
+          env: options?.env as Record<string, string>,
+          timeout: options?.timeout,
+          onStdout: options?.onStdout,
+          onStderr: options?.onStderr,
+        };
 
-      const result = await this.env.execute(execOptions);
-      return {
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        durationMs: result.durationMs,
-      };
+        const result = await this.env.execute(execOptions);
+        return {
+          exitCode: result.exitCode,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          durationMs: result.durationMs,
+        };
+      } finally {
+        this.onExecEnd?.();
+      }
     };
   }
 }

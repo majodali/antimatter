@@ -12,11 +12,11 @@
     }
   },
   "dependencies": {
-    "@antimatter/project-model": "workspace:*",
-    "@antimatter/filesystem": "workspace:*",
-    "@antimatter/tool-integration": "workspace:*",
-    "@antimatter/build-system": "workspace:*",
-    "@antimatter/agent-framework": "workspace:*"
+    "@antimatter/project-model": "*",
+    "@antimatter/filesystem": "*",
+    "@antimatter/tool-integration": "*",
+    "@antimatter/build-system": "*",
+    "@antimatter/agent-framework": "*"
   },
   "scripts": {
     "test": "vitest run",

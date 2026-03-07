@@ -163,8 +163,14 @@ export class AntimatterStack extends cdk.Stack {
           cognito.OAuthScope.EMAIL,
           cognito.OAuthScope.PROFILE,
         ],
-        callbackUrls: ['https://ide.antimatter.solutions/'],
-        logoutUrls: ['https://ide.antimatter.solutions/'],
+        callbackUrls: [
+          'https://ide.antimatter.solutions/',
+          'https://d33wyunpiwy2df.cloudfront.net/',
+        ],
+        logoutUrls: [
+          'https://ide.antimatter.solutions/',
+          'https://d33wyunpiwy2df.cloudfront.net/',
+        ],
       },
       accessTokenValidity: cdk.Duration.hours(24),
       idTokenValidity: cdk.Duration.hours(24),
@@ -383,10 +389,14 @@ export class AntimatterStack extends cdk.Stack {
       requireImdsv2: true,
     });
 
+    // Set ALB idle timeout to 5 minutes (default 60s is too aggressive for WebSocket)
+    workspaceAlb.setAttribute('idle_timeout.timeout_seconds', '300');
+
     // CloudFront behavior for /ws/* → ALB (WebSocket proxy)
     const wsOrigin = new origins.HttpOrigin(workspaceAlb.loadBalancerDnsName, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
       httpPort: 80,
+      readTimeout: cdk.Duration.seconds(60), // Increase from default 30s for WebSocket
     });
 
     distribution.addBehavior('/ws/*', wsOrigin, {

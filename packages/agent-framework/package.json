@@ -12,10 +12,10 @@
     }
   },
   "dependencies": {
-    "@antimatter/project-model": "workspace:*",
-    "@antimatter/filesystem": "workspace:*",
-    "@antimatter/tool-integration": "workspace:*",
-    "@antimatter/build-system": "workspace:*",
+    "@antimatter/project-model": "*",
+    "@antimatter/filesystem": "*",
+    "@antimatter/tool-integration": "*",
+    "@antimatter/build-system": "*",
     "@anthropic-ai/sdk": "^0.38.0"
   },
   "scripts": {

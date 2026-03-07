@@ -2,7 +2,7 @@
  * Workflow Functional Tests
  *
  * Exercises the workflow engine integration on a running EC2 workspace:
- *   write definition → reload → emit events → verify state → file triggers → persistence
+ *   write definition → reload → emit events → verify state → file triggers → persistence → auto-reload
  *
  * These tests run as part of the 'workspace' suite — they require a running
  * workspace container with the workflow router mounted. They use the shared
@@ -257,6 +257,90 @@ export default defineWorkflow((wf) => {
           detail: ok
             ? `No rules executed for unknown event type`
             : `${res.status}: ${JSON.stringify(body).substring(0, 200)}`,
+        };
+      },
+    },
+
+    // ---- 8. Auto-reload on definition file change ----
+    {
+      name: 'WF: Auto-Reload on Definition Change',
+      suite: 'workspace',
+      run: async (ctx) => {
+        const base = wsUrl(ctx);
+
+        // Write a new workflow definition with an additional rule
+        const updatedSource = `
+import { defineWorkflow } from '@antimatter/workflow';
+
+interface TestState {
+  initialized: boolean;
+  fileChangeCount: number;
+  lastChangedFile: string;
+  echoOutput: string;
+  autoReloadWorked: boolean;
+}
+
+export default defineWorkflow((wf) => {
+  wf.rule('project:init', 'Initialize test state',
+    (e) => e.type === 'project:initialize',
+    (_events, state) => {
+      state.initialized = true;
+      state.fileChangeCount = 0;
+      state.lastChangedFile = '';
+      state.echoOutput = '';
+      state.autoReloadWorked = false;
+    },
+  );
+
+  wf.rule('track-changes', 'Track file changes',
+    (e) => e.type === 'file:change',
+    (events, state) => {
+      state.fileChangeCount += events.length;
+      state.lastChangedFile = String(events[events.length - 1].path);
+    },
+  );
+
+  wf.rule('auto-reload-verify', 'Verify auto-reload',
+    (e) => e.type === 'workflow:auto-reload-check',
+    (_events, state) => {
+      state.autoReloadWorked = true;
+    },
+  );
+});
+`;
+
+        // Write the updated definition — should trigger auto-reload
+        const writeRes = await fetch(`${base}/api/files/write`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: '.antimatter/workflow.ts', content: updatedSource }),
+        });
+        if (!writeRes.ok) return { pass: false, detail: 'Failed to write updated definition' };
+
+        // Wait for debounce (500ms) + reload processing
+        await sleep(3000);
+
+        // Emit the new event type — if auto-reload worked, the new rule will fire
+        const emitRes = await fetch(`${base}/api/workflow/emit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: { type: 'workflow:auto-reload-check' } }),
+        });
+        const emitBody = await emitRes.json();
+
+        const ruleExecuted = emitBody.result?.rulesExecuted?.some(
+          (r: any) => r.ruleId === 'auto-reload-verify' && !r.error,
+        );
+
+        const stateRes = await fetch(`${base}/api/workflow/state`);
+        const state = await stateRes.json();
+        const ok = ruleExecuted && state?.state?.autoReloadWorked === true;
+
+        return {
+          pass: ok,
+          detail: ok
+            ? `Auto-reload verified: autoReloadWorked=${state.state.autoReloadWorked}`
+            : `ruleExecuted=${ruleExecuted}, autoReloadWorked=${state?.state?.autoReloadWorked}`,
         };
       },
     },

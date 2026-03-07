@@ -107,7 +107,7 @@ export const useDeployStore = create<DeployState>((set, get) => ({
         targets: new Map((config.targets ?? []).map((t: DeploymentTarget) => [t.id, t])),
       });
     } catch (err) {
-      eventLog.error('deploy', 'Failed to load deploy config', String(err));
+      eventLog.error('deploy', 'Failed to load deploy config', String(err), { toast: true });
     }
   },
 
@@ -122,8 +122,9 @@ export const useDeployStore = create<DeployState>((set, get) => ({
         },
         projectId,
       );
+      eventLog.toast.success('Deploy configuration saved');
     } catch (err) {
-      eventLog.error('deploy', 'Failed to save deploy config', String(err));
+      eventLog.error('deploy', 'Failed to save deploy config', String(err), { toast: true });
     }
   },
 

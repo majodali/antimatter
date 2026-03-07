@@ -101,7 +101,7 @@ export const useBuildStore = create<BuildState>()(
             rules: new Map(config.rules.map((r) => [r.id, r])),
           });
         } catch (err) {
-          eventLog.error('build', 'Failed to load build config', String(err));
+          eventLog.error('build', 'Failed to load build config', String(err), { toast: true });
         }
       },
 
@@ -114,8 +114,9 @@ export const useBuildStore = create<BuildState>()(
             },
             projectId,
           );
+          eventLog.toast.success('Build configuration saved');
         } catch (err) {
-          eventLog.error('build', 'Failed to save build config', String(err));
+          eventLog.error('build', 'Failed to save build config', String(err), { toast: true });
         }
       },
 

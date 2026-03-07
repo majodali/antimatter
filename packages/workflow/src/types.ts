@@ -108,6 +108,56 @@ export interface ExecResult {
 }
 
 // ----------------------------------------------------------------------------
+// Declarations — metadata about modules, targets, environments
+// ----------------------------------------------------------------------------
+
+/** A build module — a unit of code that can be built and tested. */
+export interface ModuleDeclaration {
+  readonly name: string;
+  readonly type: 'frontend' | 'lambda' | 'infrastructure' | 'library';
+  readonly build: string;
+  readonly test?: string;
+  readonly cwd?: string;
+  readonly output: string;
+  readonly outputType: 'directory' | 'file';
+}
+
+/** Configuration for a Lambda deploy target. */
+export interface LambdaTargetConfig {
+  readonly functionName: string;
+  readonly region?: string;
+}
+
+/** Configuration for an S3 deploy target. */
+export interface S3TargetConfig {
+  readonly bucket: string;
+  readonly prefix?: string;
+  readonly distributionId?: string;
+}
+
+/** A deployment target — defines how a module is deployed. */
+export interface TargetDeclaration {
+  readonly name: string;
+  readonly module: string; // references module by name
+  readonly type: 'lambda-update' | 's3-upload';
+  readonly config: LambdaTargetConfig | S3TargetConfig;
+}
+
+/** An environment — a deployment context (dev, staging, production). */
+export interface EnvironmentDeclaration {
+  readonly name: string;
+  readonly stackName?: string;
+  readonly domain?: string;
+}
+
+/** All declarations collected from workflow files. */
+export interface WorkflowDeclarations {
+  readonly modules: readonly ModuleDeclaration[];
+  readonly targets: readonly TargetDeclaration[];
+  readonly environments: readonly EnvironmentDeclaration[];
+}
+
+// ----------------------------------------------------------------------------
 // Workflow Handle
 // ----------------------------------------------------------------------------
 
@@ -139,6 +189,15 @@ export interface Workflow<S> {
     predicate: WorkflowPredicate,
     action: WorkflowAction<S, E>,
   ): void;
+
+  /** Declare a build module. */
+  module(name: string, opts: Omit<ModuleDeclaration, 'name'>): void;
+
+  /** Declare a deployment target. */
+  target(name: string, opts: Omit<TargetDeclaration, 'name'>): void;
+
+  /** Declare an environment. */
+  environment(name: string, opts: Omit<EnvironmentDeclaration, 'name'>): void;
 
   // --- Execution utilities (called from within actions) ---
 

@@ -1,7 +1,42 @@
 import { Router } from 'express';
 import type { WorkspaceService } from '../services/workspace-service.js';
 
-export function createFileRouter(workspace: WorkspaceService): Router {
+interface FileNode {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  children?: FileNode[];
+}
+
+/**
+ * Recursively filter a file tree against the explorerIgnore patterns.
+ * Directories matching a pattern are removed along with all their children.
+ */
+function filterTree(nodes: FileNode[], ignorePatterns: string[]): FileNode[] {
+  return nodes
+    .filter(node => {
+      const normalized = node.path.startsWith('/') ? node.path.slice(1) : node.path;
+      // For directories, check if name/ matches any ignore prefix
+      if (node.isDirectory) {
+        return !ignorePatterns.some(p => node.name + '/' === p || normalized + '/' === p || normalized.startsWith(p));
+      }
+      // For files, check if the full path starts with any ignore prefix
+      return !ignorePatterns.some(p => normalized.startsWith(p));
+    })
+    .map(node => {
+      if (node.children) {
+        return { ...node, children: filterTree(node.children, ignorePatterns) };
+      }
+      return node;
+    });
+}
+
+export interface FileRouterOptions {
+  /** Returns the current explorerIgnore patterns for filtering file tree responses. */
+  getExplorerIgnore?: () => string[];
+}
+
+export function createFileRouter(workspace: WorkspaceService, options?: FileRouterOptions): Router {
   const router = Router();
 
   // Get recursive directory tree
@@ -9,7 +44,9 @@ export function createFileRouter(workspace: WorkspaceService): Router {
     try {
       const path = (req.query.path as string) || '/';
       const tree = await workspace.getDirectoryTreeRecursive(path);
-      res.json({ tree });
+      const ignorePatterns = options?.getExplorerIgnore?.() ?? [];
+      const filtered = ignorePatterns.length > 0 ? filterTree(tree, ignorePatterns) : tree;
+      res.json({ tree: filtered });
     } catch (error) {
       res.status(500).json({
         error: 'Failed to get directory tree',

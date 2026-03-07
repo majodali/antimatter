@@ -35,6 +35,10 @@ export async function initAuth(): Promise<void> {
     return;
   }
 
+  // Use the current origin so OAuth works regardless of which CloudFront
+  // domain the app is served from (custom domain OR *.cloudfront.net).
+  const redirectUri = window.location.origin + '/';
+
   Amplify.configure({
     Auth: {
       Cognito: {
@@ -44,8 +48,8 @@ export async function initAuth(): Promise<void> {
           oauth: {
             domain: authConfig.domain,
             scopes: ['openid', 'email', 'profile'],
-            redirectSignIn: [authConfig.redirectUri],
-            redirectSignOut: [authConfig.redirectUri],
+            redirectSignIn: [redirectUri],
+            redirectSignOut: [redirectUri],
             responseType: 'code',
           },
         },

@@ -100,17 +100,66 @@ eventLogger.startPeriodicFlush(10_000);
 // File Change Notifier — broadcasts filesystem changes to IDE via WebSocket
 // ---------------------------------------------------------------------------
 
-const NOISE_PREFIXES = ['/.git/', '/node_modules/', '/.antimatter-cache/'];
-const NOISE_FILES = ['/.antimatter-sync.json'];
+// Two-tier ignore configuration:
+//   watcherIgnore  — events matching these prefixes never reach the workflow engine or UI.
+//   explorerIgnore — events matching these prefixes are hidden from the UI (file explorer +
+//                    WebSocket broadcasts) but STILL reach the workflow engine.
+// Defaults are sensible for most projects; can be overridden via .antimatter/config.json.
 
-function isNoiseFile(path: string): boolean {
-  return NOISE_PREFIXES.some(p => path.startsWith(p)) || NOISE_FILES.includes(path);
+const DEFAULT_WATCHER_IGNORE = ['.git/'];
+const DEFAULT_EXPLORER_IGNORE = [
+  'node_modules/', '.antimatter-cache/', 'dist/', '.next/', '__pycache__/', '.git/',
+];
+const NOISE_FILES = ['.antimatter-sync.json'];
+
+let watcherIgnorePatterns: string[] = [...DEFAULT_WATCHER_IGNORE];
+let explorerIgnorePatterns: string[] = [...DEFAULT_EXPLORER_IGNORE];
+
+/** Load ignore config from .antimatter/config.json (if it exists). */
+async function loadIgnoreConfig(projectPath: string): Promise<void> {
+  try {
+    const configPath = join(projectPath, '.antimatter', 'config.json');
+    const raw = await readFile(configPath, 'utf-8');
+    const config = JSON.parse(raw);
+    if (Array.isArray(config.watcherIgnore)) {
+      watcherIgnorePatterns = config.watcherIgnore;
+      console.log(`[config] watcherIgnore loaded: ${watcherIgnorePatterns.join(', ')}`);
+    }
+    if (Array.isArray(config.explorerIgnore)) {
+      explorerIgnorePatterns = config.explorerIgnore;
+      console.log(`[config] explorerIgnore loaded: ${explorerIgnorePatterns.join(', ')}`);
+    }
+  } catch {
+    // No config file or invalid JSON — use defaults
+  }
+}
+
+/** Returns the current explorerIgnore patterns (used by file tree API). */
+function getExplorerIgnorePatterns(): string[] {
+  return explorerIgnorePatterns;
+}
+
+function isWatcherIgnored(path: string): boolean {
+  const normalized = path.startsWith('/') ? path.slice(1) : path;
+  return watcherIgnorePatterns.some(p => normalized.startsWith(p)) || NOISE_FILES.includes(normalized);
+}
+
+function isExplorerIgnored(path: string): boolean {
+  const normalized = path.startsWith('/') ? path.slice(1) : path;
+  return explorerIgnorePatterns.some(p => normalized.startsWith(p)) || NOISE_FILES.includes(normalized);
 }
 
 class FileChangeNotifier {
   private watcher: Watcher | null = null;
   private onBulkChange: (() => void) | null = null;
   private onFilteredChanges: ((events: readonly WatchEvent[]) => void) | null = null;
+
+  // Batching: accumulate WebSocket broadcasts for up to BATCH_MS or BATCH_MAX events
+  private pendingBroadcast: { type: string; path: string }[] = [];
+  private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
+  private broadcastFn: ((msg: object) => void) | null = null;
+  private readonly BROADCAST_BATCH_MS = 500;
+  private readonly BROADCAST_BATCH_MAX = 50;
 
   start(
     fs: FileSystem,
@@ -120,25 +169,29 @@ class FileChangeNotifier {
   ): void {
     this.onBulkChange = onBulkChange ?? null;
     this.onFilteredChanges = onFilteredChanges ?? null;
+    this.broadcastFn = broadcast;
+
     this.watcher = watchDebounced(
       fs,
       '/' as WorkspacePath,
       (events: readonly WatchEvent[]) => {
-        const filtered = events.filter(e => !isNoiseFile(e.path));
-        if (filtered.length === 0) return;
+        // First tier: filter by watcherIgnore — these events are entirely discarded
+        const watcherFiltered = events.filter(e => !isWatcherIgnored(e.path));
+        if (watcherFiltered.length === 0) return;
 
-        broadcast({
-          type: 'file-changes',
-          changes: filtered.map(e => ({ type: e.type, path: e.path })),
-        });
-
-        // Feed workflow engine
+        // Feed workflow engine with ALL non-watcherIgnore events (including node_modules)
         if (this.onFilteredChanges) {
-          this.onFilteredChanges(filtered);
+          this.onFilteredChanges(watcherFiltered);
+        }
+
+        // Second tier: filter by explorerIgnore for UI broadcasting
+        const uiFiltered = watcherFiltered.filter(e => !isExplorerIgnored(e.path));
+        if (uiFiltered.length > 0) {
+          this.queueBroadcast(uiFiltered);
         }
 
         // Trigger immediate S3 sync for bulk operations (git checkout, etc.)
-        if (filtered.length > 20 && this.onBulkChange) {
+        if (watcherFiltered.length > 20 && this.onBulkChange) {
           this.onBulkChange();
         }
       },
@@ -146,7 +199,40 @@ class FileChangeNotifier {
     );
   }
 
+  /** Queue file-changes for batched WebSocket broadcast. */
+  private queueBroadcast(events: readonly WatchEvent[]): void {
+    for (const e of events) {
+      this.pendingBroadcast.push({ type: e.type, path: e.path });
+    }
+
+    // Flush immediately if batch size reached
+    if (this.pendingBroadcast.length >= this.BROADCAST_BATCH_MAX) {
+      this.flushBroadcast();
+      return;
+    }
+
+    // Otherwise start/reset timer
+    if (this.broadcastTimer) {
+      clearTimeout(this.broadcastTimer);
+    }
+    this.broadcastTimer = setTimeout(() => this.flushBroadcast(), this.BROADCAST_BATCH_MS);
+  }
+
+  /** Send accumulated file-changes as a single WebSocket message. */
+  private flushBroadcast(): void {
+    if (this.broadcastTimer) {
+      clearTimeout(this.broadcastTimer);
+      this.broadcastTimer = null;
+    }
+    if (this.pendingBroadcast.length === 0 || !this.broadcastFn) return;
+
+    const changes = this.pendingBroadcast;
+    this.pendingBroadcast = [];
+    this.broadcastFn({ type: 'file-changes', changes });
+  }
+
   stop(): void {
+    this.flushBroadcast(); // Send any pending changes before stopping
     this.watcher?.close();
     this.watcher = null;
   }
@@ -294,9 +380,16 @@ class PtyManager {
 class ConnectionManager {
   private readonly connections = new Set<WebSocket>();
   private shutdownTimer: ReturnType<typeof setTimeout> | null = null;
+  private workflowHoldCount = 0;
+  private holdSafetyTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly MAX_HOLD_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
   get count(): number {
     return this.connections.size;
+  }
+
+  private get isHeld(): boolean {
+    return this.workflowHoldCount > 0;
   }
 
   add(ws: WebSocket): void {
@@ -314,14 +407,67 @@ class ConnectionManager {
     eventLogger.info('workspace', `Client disconnected (${this.connections.size} remaining)`);
     console.log(`[connections] Client removed (${this.connections.size} remaining)`);
 
-    if (this.connections.size === 0) {
-      console.log(`[connections] No connections — starting ${IDLE_TIMEOUT_MS / 1000}s shutdown timer`);
-      eventLogger.info('workspace', `No connections — idle shutdown timer started (${IDLE_TIMEOUT_MS / 1000}s)`);
-      this.shutdownTimer = setTimeout(async () => {
-        console.log('[connections] Idle timeout reached — stopping instance');
-        await selfStop();
-      }, IDLE_TIMEOUT_MS);
+    if (this.connections.size === 0 && !this.isHeld) {
+      this.startShutdownTimer();
     }
+  }
+
+  /**
+   * Hold shutdown — called when a workflow command starts executing.
+   * Prevents idle shutdown while long-running commands (npm install, CDK deploy) are in progress.
+   */
+  holdShutdown(): void {
+    this.workflowHoldCount++;
+    console.log(`[connections] Shutdown hold acquired (count: ${this.workflowHoldCount})`);
+
+    // Cancel any pending shutdown timer
+    if (this.shutdownTimer) {
+      clearTimeout(this.shutdownTimer);
+      this.shutdownTimer = null;
+      console.log('[connections] Shutdown timer cancelled (workflow hold active)');
+    }
+
+    // Safety net: start a max-hold timer to prevent leaked holds from keeping instances alive forever
+    if (!this.holdSafetyTimer) {
+      this.holdSafetyTimer = setTimeout(() => {
+        console.warn(`[connections] Max hold duration (${ConnectionManager.MAX_HOLD_DURATION_MS / 60_000}min) exceeded — force releasing all holds`);
+        this.workflowHoldCount = 0;
+        this.holdSafetyTimer = null;
+        if (this.connections.size === 0) {
+          this.startShutdownTimer();
+        }
+      }, ConnectionManager.MAX_HOLD_DURATION_MS);
+    }
+  }
+
+  /**
+   * Release shutdown — called when a workflow command finishes.
+   * If no more holds and no connections, starts the idle shutdown timer.
+   */
+  releaseShutdown(): void {
+    if (this.workflowHoldCount > 0) {
+      this.workflowHoldCount--;
+    }
+    console.log(`[connections] Shutdown hold released (count: ${this.workflowHoldCount})`);
+
+    // Clear safety timer if no more holds
+    if (this.workflowHoldCount === 0 && this.holdSafetyTimer) {
+      clearTimeout(this.holdSafetyTimer);
+      this.holdSafetyTimer = null;
+    }
+
+    if (this.workflowHoldCount === 0 && this.connections.size === 0) {
+      this.startShutdownTimer();
+    }
+  }
+
+  private startShutdownTimer(): void {
+    console.log(`[connections] No connections — starting ${IDLE_TIMEOUT_MS / 1000}s shutdown timer`);
+    eventLogger.info('workspace', `No connections — idle shutdown timer started (${IDLE_TIMEOUT_MS / 1000}s)`);
+    this.shutdownTimer = setTimeout(async () => {
+      console.log('[connections] Idle timeout reached — stopping instance');
+      await selfStop();
+    }, IDLE_TIMEOUT_MS);
   }
 }
 
@@ -507,10 +653,15 @@ async function selfStop(): Promise<void> {
 // S3 Initial Sync — download project files on first boot
 // ---------------------------------------------------------------------------
 
-async function initialSyncFromS3(projectPath: string): Promise<void> {
+/**
+ * Download project files from S3 on first boot.
+ * Returns the list of relative paths that were downloaded, so the workflow
+ * engine can be fed synthetic file:change events for them.
+ */
+async function initialSyncFromS3(projectPath: string): Promise<string[]> {
   if (!PROJECTS_BUCKET) {
     console.log('[sync] No S3 bucket configured — skipping sync');
-    return;
+    return [];
   }
 
   // Check if project directory has files (skip sync if not empty)
@@ -518,14 +669,14 @@ async function initialSyncFromS3(projectPath: string): Promise<void> {
     const entries = readdirSync(projectPath);
     if (entries.length > 0) {
       console.log(`[sync] Project directory has ${entries.length} entries — skipping S3 sync`);
-      return;
+      return [];
     }
   }
 
   console.log('[sync] Empty project directory — syncing from S3...');
   const s3 = new S3Client({});
   const prefix = `projects/${PROJECT_ID}/files/`;
-  let downloaded = 0;
+  const downloadedFiles: string[] = [];
 
   try {
     let continuationToken: string | undefined;
@@ -555,15 +706,15 @@ async function initialSyncFromS3(projectPath: string): Promise<void> {
           const stream = getResult.Body as Readable;
           const ws = createWriteStream(localPath);
           await pipeline(stream, ws);
-          downloaded++;
+          downloadedFiles.push(relativePath);
         }
       }
 
       continuationToken = result.NextContinuationToken;
     } while (continuationToken);
 
-    console.log(`[sync] Downloaded ${downloaded} files from S3`);
-    eventLogger.info('workspace', `S3 sync complete: ${downloaded} files downloaded`, { downloaded });
+    console.log(`[sync] Downloaded ${downloadedFiles.length} files from S3`);
+    eventLogger.info('workspace', `S3 sync complete: ${downloadedFiles.length} files downloaded`, { downloaded: downloadedFiles.length });
   } catch (err) {
     console.error('[sync] S3 sync failed:', err);
     eventLogger.error('workspace', 'S3 initial sync failed', {
@@ -571,6 +722,8 @@ async function initialSyncFromS3(projectPath: string): Promise<void> {
     });
     // Continue — workspace can still function with an empty directory
   }
+
+  return downloadedFiles;
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +761,8 @@ function broadcastToClients(msg: object): void {
 const workflowManager = new WorkflowManager({
   env,
   broadcast: broadcastToClients,
+  onExecStart: () => connectionManager.holdShutdown(),
+  onExecEnd: () => connectionManager.releaseShutdown(),
 });
 
 // Build watcher — auto-triggers builds on file changes
@@ -762,6 +917,13 @@ app.post('/api/refresh', async (_req, res) => {
       return res.status(500).json({ error: 'Failed to download update', details: result.stderr });
     }
 
+    // Also download package.json and install external dependencies (esbuild, node-pty)
+    await env.execute({
+      command: `aws s3 cp "s3://${PROJECTS_BUCKET}/workspace-server/package.json" /opt/antimatter/package.json && cd /opt/antimatter && npm install --production`,
+      cwd: '.',
+      timeout: 60000,
+    }).catch(err => console.warn('[workspace-server] package.json update skipped:', err));
+
     console.log('[workspace-server] Bundle updated. Exiting for systemd restart...');
     res.json({ success: true, message: 'Update downloaded. Restarting...' });
 
@@ -774,7 +936,9 @@ app.post('/api/refresh', async (_req, res) => {
 });
 
 // Mount project-scoped API routes
-app.use('/api/files', createFileRouter(workspace));
+app.use('/api/files', createFileRouter(workspace, {
+  getExplorerIgnore: () => explorerIgnorePatterns,
+}));
 app.use('/api/build', createBuildRouter(workspace, {
   onConfigSaved: (rules) => {
     buildWatcherManager.restart(rules).catch((err) => {
@@ -857,9 +1021,18 @@ wss.on('connection', (ws: WebSocket) => {
   // Send status
   ws.send(JSON.stringify({ type: 'status', state: 'ready' }));
 
+  // Server-side proactive heartbeat — sends every 20s to keep the connection
+  // alive through CloudFront/ALB proxies that have idle timeouts.
+  // This ensures data flows even when both client and PTY are idle.
+  const heartbeatTimer = setInterval(() => {
+    if (ws.readyState === 1 /* WebSocket.OPEN */) {
+      ws.send(JSON.stringify({ type: 'heartbeat' }));
+    }
+  }, 20_000);
+
   // Forward PTY output to this client
   const unsubscribe = ptyManager.onData((data) => {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws.readyState === 1 /* WebSocket.OPEN */) {
       ws.send(JSON.stringify({ type: 'output', data }));
     }
   });
@@ -934,12 +1107,14 @@ wss.on('connection', (ws: WebSocket) => {
 
   ws.on('close', () => {
     console.log('[workspace-server] WebSocket client disconnected');
+    clearInterval(heartbeatTimer);
     unsubscribe();
     connectionManager.remove(ws);
   });
 
   ws.on('error', (err) => {
     console.error('[workspace-server] WebSocket error:', err);
+    clearInterval(heartbeatTimer);
     unsubscribe();
     connectionManager.remove(ws);
   });
@@ -1071,7 +1246,7 @@ async function startup() {
 
   // Initial sync from S3 (only if project directory is empty)
   console.log('[workspace-server] Checking for initial S3 sync...');
-  await initialSyncFromS3(projectPath);
+  const downloadedFiles = await initialSyncFromS3(projectPath);
 
   // Fetch Anthropic API key from SSM (fall back to env var)
   const ssmAnthropicKey = await getSSMSecret('anthropic-api-key');
@@ -1091,6 +1266,20 @@ async function startup() {
 
   // Start workflow manager (loads definition + state, fires project:initialize if first run)
   await workflowManager.start();
+
+  // Feed initial S3 files to workflow engine as synthetic file:change events.
+  // This lets workflow rules react to the project's initial state (e.g., trigger
+  // pnpm install when package.json is present). Happens AFTER workflow start so
+  // rules are loaded, but BEFORE file watcher start so no double-events.
+  if (downloadedFiles.length > 0) {
+    const syntheticEvents: WatchEvent[] = downloadedFiles
+      .map(p => ({ type: 'change' as const, path: p as WorkspacePath }));
+    console.log(`[workspace-server] Feeding ${syntheticEvents.length} initial files to workflow engine`);
+    workflowManager.onFileChanges(syntheticEvents);
+  }
+
+  // Load ignore config from .antimatter/config.json (before starting file watcher)
+  await loadIgnoreConfig(projectPath);
 
   // Start file change notifier — broadcasts to IDE clients + feeds workflow engine
   fileChangeNotifier.start(

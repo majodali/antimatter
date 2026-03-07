@@ -22,6 +22,14 @@ export type {
   ExecOptions,
   ExecResult,
 
+  // Declarations
+  ModuleDeclaration,
+  TargetDeclaration,
+  EnvironmentDeclaration,
+  LambdaTargetConfig,
+  S3TargetConfig,
+  WorkflowDeclarations,
+
   // Workflow handle
   Workflow,
   WorkflowDefinition,

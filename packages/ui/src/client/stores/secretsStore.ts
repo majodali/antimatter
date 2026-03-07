@@ -22,7 +22,7 @@ export const useSecretsStore = create<SecretsState>((set, get) => ({
       const secrets = await fetchSecrets();
       set({ secrets, isLoading: false });
     } catch (err) {
-      eventLog.error('secrets', 'Failed to load secrets', String(err));
+      eventLog.error('secrets', 'Failed to load secrets', String(err), { toast: true });
       set({ isLoading: false });
     }
   },
@@ -36,9 +36,9 @@ export const useSecretsStore = create<SecretsState>((set, get) => ({
           s.name === name ? { ...s, hasValue: true } : s,
         ),
       }));
-      eventLog.info('secrets', `Secret "${name}" updated`);
+      eventLog.info('secrets', `Secret "${name}" updated`, undefined, { toast: true });
     } catch (err) {
-      eventLog.error('secrets', `Failed to set secret "${name}"`, String(err));
+      eventLog.error('secrets', `Failed to set secret "${name}"`, String(err), { toast: true });
       // Reload to get actual state
       get().loadSecrets();
     }
@@ -53,9 +53,9 @@ export const useSecretsStore = create<SecretsState>((set, get) => ({
           s.name === name ? { ...s, hasValue: false } : s,
         ),
       }));
-      eventLog.info('secrets', `Secret "${name}" cleared`);
+      eventLog.info('secrets', `Secret "${name}" cleared`, undefined, { toast: true });
     } catch (err) {
-      eventLog.error('secrets', `Failed to delete secret "${name}"`, String(err));
+      eventLog.error('secrets', `Failed to delete secret "${name}"`, String(err), { toast: true });
       get().loadSecrets();
     }
   },

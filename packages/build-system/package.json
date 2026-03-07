@@ -12,9 +12,9 @@
     }
   },
   "dependencies": {
-    "@antimatter/project-model": "workspace:*",
-    "@antimatter/filesystem": "workspace:*",
-    "@antimatter/tool-integration": "workspace:*"
+    "@antimatter/project-model": "*",
+    "@antimatter/filesystem": "*",
+    "@antimatter/tool-integration": "*"
   },
   "scripts": {
     "test": "vitest run",

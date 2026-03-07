@@ -103,6 +103,20 @@ export class LocalFileSystem implements FileSystem {
       { recursive: true },
       (eventType, filename) => {
         if (!filename) return;
+
+        // Early reject .git/ at the OS event level — git internals are
+        // never useful as filesystem change events at any layer.
+        // node_modules/ is NOT rejected here — it's handled by the
+        // FileChangeNotifier's configurable ignore lists. The file watcher
+        // only starts after initialization, so pnpm install noise is avoided.
+        const rawNormalized = filename.replace(/\\/g, '/');
+        if (
+          rawNormalized.startsWith('.git/') ||
+          rawNormalized === '.git'
+        ) {
+          return;
+        }
+
         const normalized = normalizePath(filename);
         const fullPath =
           normalizePath(path) === ''

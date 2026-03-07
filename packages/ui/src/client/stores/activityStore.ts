@@ -14,6 +14,7 @@ export type EventCategory =
   | 'system'
   | 'workspace'
   | 'deploy'
+  | 'secrets'
   | 'agent';
 
 export type EventLevel = 'info' | 'warn' | 'error';

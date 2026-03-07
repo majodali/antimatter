@@ -1,0 +1,13 @@
+{
+  "watcherIgnore": [".git/"],
+  "explorerIgnore": [
+    "node_modules/",
+    ".antimatter-cache/",
+    "dist/",
+    "dist-lambda/",
+    "dist-workspace/",
+    ".next/",
+    "__pycache__/",
+    ".git/"
+  ]
+}

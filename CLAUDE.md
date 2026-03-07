@@ -9,9 +9,9 @@ V0 plan: `docs/v0-plan.md`
 
 ## Architecture
 
-### Monorepo Structure (Nx + pnpm)
+### Monorepo Structure (npm workspaces)
 
-Six packages with clear boundaries:
+Eight packages with clear boundaries:
 
 - **`@antimatter/project-model`** — Domain types (Project, Module, SourceFile, BuildRule, TestSuite, etc.). Foundation — all other packages reference this. Immutable interfaces, strong typing.
 - **`@antimatter/filesystem`** — File system abstraction. Implementations: `MemoryFileSystem`, `LocalFileSystem`, `S3FileSystem`. Includes path utilities, content hashing, change tracking, workspace snapshots.
@@ -112,7 +112,7 @@ Every change follows this cycle:
 
 2. **Break down into unit tests** — For each functional test case, identify the packages involved and create/update unit tests in those packages (`packages/*/src/__tests__/*.spec.ts`). Unit tests cover the component-level behavior that the functional test exercises end-to-end.
 
-3. **Develop until unit tests pass locally** — Implement the change across packages. Run unit tests locally with `nx run-many --target=test --all` until everything passes.
+3. **Develop until unit tests pass locally** — Implement the change across packages. Run unit tests locally with `npm test` (runs across all workspaces) until everything passes.
 
 4. **Deploy and run functional tests** — When all unit tests pass, deploy to AWS and run the full functional test suite against the live environment via the `/tests` page or `POST /api/tests/run`.
 
@@ -153,8 +153,8 @@ This ensures functional test logic is written once and runs in both contexts.
 
 | What | Where | Runs | Command |
 |------|-------|------|---------|
-| Unit tests (per package) | `packages/*/src/__tests__/*.spec.ts` | Local (Vitest) | `nx test <package>` |
-| Service-level functional | `packages/test-harness/src/__tests__/` | Local (Vitest) | `nx test test-harness` |
+| Unit tests (per package) | `packages/*/src/__tests__/*.spec.ts` | Local (Vitest) | `npm test -w @antimatter/<package>` |
+| Service-level functional | `packages/test-harness/src/__tests__/` | Local (Vitest) | `npm test -w @antimatter/test-harness` |
 | Smoke tests (deployed) | `packages/ui/src/server/tests/smoke-tests.ts` | AWS (Lambda) | `POST /api/tests/run?suite=smoke` |
 | Functional tests (deployed) | `packages/ui/src/server/tests/functional-tests.ts` | AWS (Lambda) | `POST /api/tests/run?suite=functional` |
 | Test dashboard (UI) | `/tests` route in frontend | Browser | Navigate to `/tests` |
@@ -163,26 +163,25 @@ This ensures functional test logic is written once and runs in both contexts.
 
 ```bash
 # Run all unit tests locally (the main development loop)
-nx run-many --target=test --all
+npm test
 
 # Test specific package
-nx test filesystem
-nx test build-system
-nx test agent-framework
-nx test test-harness
+npm test -w @antimatter/filesystem
+npm test -w @antimatter/build-system
+npm test -w @antimatter/agent-framework
+npm test -w @antimatter/test-harness
 
 # Build all packages
-nx run-many --target=build --all
+npm run build
 
-# Build specific package
-nx build <package-name>
+# Build UI (Vite frontend build)
+npm run build -w @antimatter/ui
 
-# Lint / Typecheck
-nx run-many --target=lint --all
-nx run-many --target=typecheck --all
+# Lint
+npm run lint
 
 # Deploy to AWS
-nx run ui:build && bash scripts/build-lambda.sh && cd infrastructure && MSYS_NO_PATHCONV=1 npx cdk deploy --require-approval never
+npm run build -w @antimatter/ui && bash scripts/build-lambda.sh && cd infrastructure && MSYS_NO_PATHCONV=1 npx cdk deploy --require-approval never
 
 # Run deployed functional tests
 # Via browser: https://d33wyunpiwy2df.cloudfront.net/tests
@@ -196,7 +195,7 @@ nx run ui:build && bash scripts/build-lambda.sh && cd infrastructure && MSYS_NO_
 - **Interface-first** — define interfaces, then implementations. Depend on abstractions.
 - **Test with Vitest** — tests colocated with source (`*.spec.ts`) or in `__tests__/` directories
 - **Test-driven** — functional tests define the behavior, unit tests cover the components. Tests are written before implementation.
-- **pnpm workspaces** for package management, **Nx** for task orchestration
+- **npm workspaces** for package management and task orchestration
 - **Zustand** for frontend state management
 - **Express** for backend API (runs both locally and on Lambda via serverless-express)
 

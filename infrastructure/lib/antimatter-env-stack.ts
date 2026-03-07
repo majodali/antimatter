@@ -235,10 +235,14 @@ export class AntimatterEnvStack extends cdk.Stack {
       requireImdsv2: true,
     });
 
+    // Set ALB idle timeout to 5 minutes (default 60s is too aggressive for WebSocket)
+    workspaceAlb.setAttribute('idle_timeout.timeout_seconds', '300');
+
     // CloudFront behavior for /ws/* → ALB (WebSocket proxy)
     const wsOrigin = new origins.HttpOrigin(workspaceAlb.loadBalancerDnsName, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
       httpPort: 80,
+      readTimeout: cdk.Duration.seconds(60), // Increase from default 30s for WebSocket
     });
 
     distribution.addBehavior('/ws/*', wsOrigin, {

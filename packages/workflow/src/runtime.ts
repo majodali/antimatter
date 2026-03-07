@@ -9,6 +9,10 @@
 import type {
   ExecOptions,
   ExecResult,
+  ModuleDeclaration,
+  TargetDeclaration,
+  EnvironmentDeclaration,
+  WorkflowDeclarations,
   Workflow,
   WorkflowAction,
   WorkflowDefinition,
@@ -46,6 +50,11 @@ export class WorkflowRuntime<S> {
   private readonly executor: WorkflowRuntimeOptions['executor'];
   private readonly maxCycles: number;
 
+  // Declarations — collected during definition phase.
+  private readonly _modules = new Map<string, ModuleDeclaration>();
+  private readonly _targets = new Map<string, TargetDeclaration>();
+  private readonly _environments = new Map<string, EnvironmentDeclaration>();
+
   // Mutable execution context — set during processEvents, null otherwise.
   private emitQueue: WorkflowEvent[] | null = null;
   private logs: WorkflowLogEntry[] = [];
@@ -61,10 +70,20 @@ export class WorkflowRuntime<S> {
     this.maxCycles = options.config?.maxCycles ?? 10;
 
     // Build the handle — a single object captured by all action closures.
-    // rule() collects rules; exec/emit/log delegate to runtime state.
+    // rule() collects rules; module/target/environment collect declarations;
+    // exec/emit/log delegate to runtime state.
     this.handle = {
       rule: (id, description, predicate, action) => {
         this.rules.push({ id, description, predicate, action: action as WorkflowAction<S, any> });
+      },
+      module: (name, opts) => {
+        this._modules.set(name, { name, ...opts });
+      },
+      target: (name, opts) => {
+        this._targets.set(name, { name, ...opts });
+      },
+      environment: (name, opts) => {
+        this._environments.set(name, { name, ...opts });
       },
       exec: (command, opts) => {
         return this.executor(command, opts);
@@ -87,6 +106,15 @@ export class WorkflowRuntime<S> {
   /** The registered rules, in declaration order. */
   get ruleCount(): number {
     return this.rules.length;
+  }
+
+  /** All declarations collected from the workflow definition. */
+  get declarations(): WorkflowDeclarations {
+    return {
+      modules: Array.from(this._modules.values()),
+      targets: Array.from(this._targets.values()),
+      environments: Array.from(this._environments.values()),
+    };
   }
 
   /**

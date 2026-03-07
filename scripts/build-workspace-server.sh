@@ -4,7 +4,7 @@ set -e
 echo "Building workspace server with esbuild..."
 
 # Install dependencies (ensures esbuild is available)
-pnpm install --frozen-lockfile 2>/dev/null || true
+npm ci 2>/dev/null || true
 
 # Run the esbuild bundler script
 node packages/ui/scripts/build-workspace-server.mjs

@@ -793,3 +793,53 @@ export async function refreshWorkspace(projectId: string): Promise<void> {
     method: 'POST',
   });
 }
+
+// ---------------------------------------------------------------------------
+// Workflow / Pipeline API (workspace-scoped)
+// ---------------------------------------------------------------------------
+
+function workflowBase(projectId?: string): string {
+  const pid = projectId ?? activeWorkspaceProjectId;
+  if (pid) {
+    return `/workspace/${pid}/api/workflow`;
+  }
+  return '/api/workflow';
+}
+
+export interface PipelineDeclarations {
+  modules: {
+    name: string;
+    type: string;
+    build: string;
+    test?: string;
+    cwd?: string;
+    output: string;
+    outputType: string;
+  }[];
+  targets: {
+    name: string;
+    module: string;
+    type: string;
+    config: Record<string, unknown>;
+  }[];
+  environments: {
+    name: string;
+    stackName?: string;
+    domain?: string;
+  }[];
+}
+
+export async function fetchPipelineDeclarations(projectId?: string): Promise<PipelineDeclarations> {
+  return apiFetch<PipelineDeclarations>(`${workflowBase(projectId)}/declarations`);
+}
+
+export async function emitWorkflowEvent(
+  event: { type: string; [key: string]: unknown },
+  projectId?: string,
+): Promise<any> {
+  return apiFetch<any>(`${workflowBase(projectId)}/emit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ event }),
+  });
+}

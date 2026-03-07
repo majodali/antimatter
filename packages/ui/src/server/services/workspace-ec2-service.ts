@@ -402,7 +402,7 @@ if [ ! -f /opt/antimatter/.tools-installed ]; then
   yum install -y nodejs git docker gcc-c++ make python3 || true
 
   # Global npm packages
-  npm install -g pnpm nx aws-cdk || true
+  npm install -g aws-cdk || true
 
   # Enable Docker (may fail during cloud-init — not critical)
   systemctl enable docker || true
@@ -464,11 +464,12 @@ fi
 echo "[workspace] Downloading workspace server..."
 aws s3 cp "s3://${safeBucket}/workspace-server/workspace-server.js" /opt/antimatter/workspace-server.js || echo "[workspace] WARNING: workspace-server.js not found in S3"
 
-# ---- Install node-pty (native module needed for terminal) ----
+# ---- Download workspace server package.json for external dependencies ----
+aws s3 cp "s3://${safeBucket}/workspace-server/package.json" /opt/antimatter/package.json || echo "[workspace] WARNING: package.json not found in S3"
+
+# ---- Install native modules (node-pty, esbuild) needed at runtime ----
 cd /opt/antimatter
-if [ ! -d node_modules/node-pty ]; then
-  npm install node-pty 2>/dev/null || echo "[workspace] WARNING: node-pty install failed"
-fi
+npm install 2>/dev/null || echo "[workspace] WARNING: npm install failed"
 
 # ---- Create systemd service (auto-starts on boot) ----
 cat > /etc/systemd/system/workspace-server.service << 'SVCEOF'
@@ -482,6 +483,7 @@ EnvironmentFile=/opt/antimatter/config.env
 WorkingDirectory=/opt/antimatter
 ExecStartPre=/bin/bash -c 'mkdir -p /workspace/data && (mount /dev/sdf /workspace/data 2>/dev/null || mount /dev/xvdf /workspace/data 2>/dev/null || mount /dev/nvme1n1 /workspace/data 2>/dev/null || true)'
 ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && aws s3 cp "s3://$PROJECTS_BUCKET/workspace-server/workspace-server.js" /opt/antimatter/workspace-server.js 2>/dev/null || echo "[workspace] S3 download failed — using existing binary"'
+ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && aws s3 cp "s3://$PROJECTS_BUCKET/workspace-server/package.json" /opt/antimatter/package.json 2>/dev/null && cd /opt/antimatter && npm install --production 2>/dev/null || true'
 ExecStart=/usr/bin/node /opt/antimatter/workspace-server.js
 Restart=always
 RestartSec=5

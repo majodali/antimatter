@@ -5,6 +5,7 @@ import { MainLayout } from './components/layout/MainLayout';
 import { TestRunnerPage } from './components/tests/TestRunnerPage';
 import { ActivityLogPage } from './components/activity/ActivityLogPage';
 import { ProjectPicker } from './components/projects/ProjectPicker';
+import { Toaster } from './components/ui/toaster';
 import { useProjectStore } from './stores/projectStore';
 
 function ProjectGate() {
@@ -27,6 +28,7 @@ function App() {
             <Route path="/logs" element={<ActivityLogPage />} />
             <Route path="/*" element={<ProjectGate />} />
           </Routes>
+          <Toaster />
         </ThemeProvider>
       </Router>
     </AuthGate>

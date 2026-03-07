@@ -34,6 +34,19 @@ export function createWorkflowRouter(workflowManager: WorkflowManager): Router {
     }
   });
 
+  // GET /declarations — modules, targets, environments from loaded definitions
+  router.get('/declarations', (_req, res) => {
+    try {
+      const declarations = workflowManager.getDeclarations();
+      res.json(declarations);
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to get workflow declarations',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   // POST /reload — reload the workflow definition and state
   router.post('/reload', async (_req, res) => {
     try {

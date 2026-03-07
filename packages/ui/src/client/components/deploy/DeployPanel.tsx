@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Rocket, Play, Trash2, Settings, RefreshCw } from 'lucide-react';
+import { Rocket, Play, Trash2, Settings } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { DeployStatusItem } from './DeployStatusItem';
@@ -8,8 +8,7 @@ import { EnvironmentList } from './EnvironmentList';
 import { SecretsPanel } from './SecretsPanel';
 import { useDeployStore } from '@/stores/deployStore';
 import { useProjectStore } from '@/stores/projectStore';
-import { useTerminalStore } from '@/stores/terminalStore';
-import { fetchDeployResults, executeDeployStreaming, refreshWorkspace } from '@/lib/api';
+import { fetchDeployResults, executeDeployStreaming } from '@/lib/api';
 import { eventLog } from '@/lib/eventLog';
 import { cn } from '@/lib/utils';
 
@@ -33,25 +32,6 @@ export function DeployPanel() {
     loadConfig,
   } = useDeployStore();
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const wsConnectionState = useTerminalStore((s) => s.connectionState);
-  const wsProjectId = useTerminalStore((s) => s.projectId);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-
-  const hasActiveWorkspace = wsConnectionState === 'connected' && !!wsProjectId;
-
-  const handleRefresh = useCallback(async () => {
-    if (!wsProjectId || isRefreshing) return;
-    setIsRefreshing(true);
-    try {
-      await refreshWorkspace(wsProjectId);
-      eventLog.info('workspace', 'Workspace server refresh requested — restarting...');
-    } catch (err) {
-      eventLog.error('workspace', 'Failed to refresh workspace server', String(err));
-    } finally {
-      // Keep spinning briefly — the server will restart and WebSocket will reconnect
-      setTimeout(() => setIsRefreshing(false), 3000);
-    }
-  }, [wsProjectId, isRefreshing]);
 
   // Load config and initial results on mount
   useEffect(() => {
@@ -174,18 +154,6 @@ export function DeployPanel() {
           )}
         </div>
         <div className="flex items-center gap-1">
-          {hasActiveWorkspace && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              title="Refresh workspace server (download latest code from S3 and restart)"
-            >
-              <RefreshCw className={cn('h-3.5 w-3.5', isRefreshing && 'animate-spin')} />
-            </Button>
-          )}
           {view === 'deploy' && (
             <>
             <Button

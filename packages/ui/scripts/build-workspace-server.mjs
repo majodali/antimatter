@@ -20,10 +20,12 @@ await build({
   target: 'node20',
   format: 'cjs',
   conditions: ['@antimatter/source'],
-  // node-pty is a native module — must be installed on EC2, not bundled.
+  // Native modules — must be installed on EC2, not bundled.
+  // node-pty: native terminal binding
+  // esbuild: native binary for TypeScript transpilation (used by WorkflowManager)
   // @aws-sdk is bundled (NOT external) because it's not pre-installed on
   // Amazon Linux 2023 like it is in the Lambda runtime.
-  external: ['node-pty'],
+  external: ['node-pty', 'esbuild'],
   sourcemap: false,
   minify: false, // Keep readable for debugging
   logLevel: 'info',

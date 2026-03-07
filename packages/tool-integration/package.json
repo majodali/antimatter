@@ -12,7 +12,7 @@
     }
   },
   "dependencies": {
-    "@antimatter/project-model": "workspace:*"
+    "@antimatter/project-model": "*"
   },
   "scripts": {
     "test": "vitest run",
