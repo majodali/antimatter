@@ -45,7 +45,6 @@ import type { SyncOptions, SyncResult } from '@antimatter/workspace';
 import { watchDebounced } from '@antimatter/filesystem';
 import type { FileSystem, WatchEvent, Watcher, WorkspacePath } from '@antimatter/filesystem';
 import { EventLogger } from './services/event-logger.js';
-import { BuildWatcher } from '@antimatter/build-system';
 import type { BuildRule, BuildResult } from '@antimatter/project-model';
 import { WorkspaceService } from './services/workspace-service.js';
 import { createFileRouter } from './routes/filesystem.js';
@@ -471,148 +470,6 @@ class ConnectionManager {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Build Watcher Manager — auto-triggers builds on file changes
-// ---------------------------------------------------------------------------
-
-class BuildWatcherManager {
-  private watcher: BuildWatcher | null = null;
-  private building = false;
-  private rules: BuildRule[] = [];
-
-  constructor(
-    private readonly workspace: WorkspaceService,
-    private readonly fileSystemGetter: () => import('@antimatter/filesystem').FileSystem,
-    private readonly workspaceRoot: string,
-    private readonly broadcast: (msg: object) => void,
-  ) {}
-
-  /**
-   * Load build config and start (or restart) the file watcher.
-   */
-  async start(): Promise<void> {
-    try {
-      const config = await this.workspace.loadBuildConfig();
-      this.rules = config.rules ?? [];
-    } catch {
-      console.log('[build-watcher] No build config found — watcher not started');
-      return;
-    }
-
-    if (this.rules.length === 0) {
-      console.log('[build-watcher] No build rules — watcher not started');
-      return;
-    }
-
-    this.startWatcher();
-  }
-
-  /**
-   * Restart the watcher with new rules (e.g. after config save).
-   */
-  async restart(rules: BuildRule[]): Promise<void> {
-    this.rules = rules;
-    this.stopWatcher();
-
-    if (rules.length > 0) {
-      this.startWatcher();
-    }
-  }
-
-  /**
-   * Pause auto-triggering (for agent batch edits).
-   */
-  hold(): void {
-    if (this.watcher) {
-      this.watcher.hold();
-      console.log('[build-watcher] Build watcher held');
-    }
-  }
-
-  /**
-   * Resume auto-triggering and flush accumulated changes.
-   */
-  release(): void {
-    if (this.watcher) {
-      this.watcher.release();
-      console.log('[build-watcher] Build watcher released');
-    }
-  }
-
-  /**
-   * Manually trigger a build for specific rules (or all).
-   */
-  async runBuild(ruleIds?: string[]): Promise<void> {
-    const rulesToRun = ruleIds
-      ? this.rules.filter((r) => ruleIds.includes(r.id))
-      : this.rules;
-
-    if (rulesToRun.length === 0) return;
-    await this.executeBuild(rulesToRun);
-  }
-
-  stop(): void {
-    this.stopWatcher();
-  }
-
-  private startWatcher(): void {
-    this.stopWatcher();
-
-    const fs = this.fileSystemGetter();
-    this.watcher = new BuildWatcher({
-      fs,
-      workspaceRoot: this.workspaceRoot,
-      debounceMs: 500,
-      onTriggered: (ruleIds, changedPaths) => {
-        console.log(`[build-watcher] Files changed: ${changedPaths.length} files → triggered rules: ${ruleIds.join(', ')}`);
-        const triggered = this.rules.filter((r) => ruleIds.includes(r.id));
-        this.executeBuild(triggered).catch((err) => {
-          console.error('[build-watcher] Auto-build failed:', err);
-        });
-      },
-    });
-
-    this.watcher.setRules(this.rules);
-    this.watcher.start();
-    console.log(`[build-watcher] Watching ${this.rules.length} rules for file changes`);
-  }
-
-  private stopWatcher(): void {
-    if (this.watcher) {
-      this.watcher.stop();
-      this.watcher = null;
-    }
-  }
-
-  private async executeBuild(rules: BuildRule[]): Promise<void> {
-    if (this.building) {
-      console.log('[build-watcher] Build already in progress — skipping');
-      return;
-    }
-
-    this.building = true;
-    const ruleIds = rules.map((r) => r.id);
-    this.broadcast({ type: 'build-started', ruleIds });
-
-    try {
-      const resultMap = await this.workspace.executeBuild(rules, (event) => {
-        // Forward build progress events to all WebSocket clients
-        this.broadcast(event);
-      });
-
-      const results = Array.from(resultMap.values());
-      this.broadcast({ type: 'build-complete', results });
-    } catch (err) {
-      this.broadcast({
-        type: 'build-error',
-        error: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      this.building = false;
-    }
-  }
-}
-
 /**
  * Stop this EC2 instance. Reads instance ID from metadata.
  */
@@ -764,14 +621,6 @@ const workflowManager = new WorkflowManager({
   onExecStart: () => connectionManager.holdShutdown(),
   onExecEnd: () => connectionManager.releaseShutdown(),
 });
-
-// Build watcher — auto-triggers builds on file changes
-const buildWatcherManager = new BuildWatcherManager(
-  workspace,
-  () => env.fileSystem,
-  projectPath,
-  broadcastToClients,
-);
 
 // S3 sync scheduler — periodic workspace → S3 backup
 const s3SyncScheduler = PROJECTS_BUCKET
@@ -939,13 +788,7 @@ app.post('/api/refresh', async (_req, res) => {
 app.use('/api/files', createFileRouter(workspace, {
   getExplorerIgnore: () => explorerIgnorePatterns,
 }));
-app.use('/api/build', createBuildRouter(workspace, {
-  onConfigSaved: (rules) => {
-    buildWatcherManager.restart(rules).catch((err) => {
-      console.error('[workspace-server] Failed to restart build watcher:', err);
-    });
-  },
-}));
+app.use('/api/build', createBuildRouter(workspace, {}));
 app.use('/api/agent', createAgentRouter(workspace));
 app.use('/api/deploy', (req, res, next) => {
   createDeployRouter(
@@ -1053,32 +896,6 @@ wss.on('connection', (ws: WebSocket) => {
           break;
         case 'ping':
           ws.send(JSON.stringify({ type: 'pong' }));
-          break;
-
-        // --- Build commands ---
-        case 'build-run':
-          // Manual build trigger: { type: 'build-run', ruleIds?: string[] }
-          buildWatcherManager.runBuild(msg.ruleIds).catch((err) => {
-            console.error('[workspace-server] Manual build failed:', err);
-          });
-          break;
-        case 'build-config-save':
-          // Save config and restart watcher: { type: 'build-config-save', rules: BuildRule[] }
-          if (Array.isArray(msg.rules)) {
-            workspace.saveBuildConfig({ rules: msg.rules }).then(() => {
-              buildWatcherManager.restart(msg.rules);
-            }).catch((err) => {
-              console.error('[workspace-server] Config save failed:', err);
-            });
-          }
-          break;
-        case 'build-hold':
-          // Pause auto-build (for agent batch edits)
-          buildWatcherManager.hold();
-          break;
-        case 'build-release':
-          // Resume auto-build and flush accumulated changes
-          buildWatcherManager.release();
           break;
 
         // --- Workflow commands ---
@@ -1260,9 +1077,6 @@ async function startup() {
 
   // Start PTY
   ptyManager.start(projectPath);
-
-  // Start build watcher (loads config and watches for file changes)
-  await buildWatcherManager.start();
 
   // Start workflow manager (loads definition + state, fires project:initialize if first run)
   await workflowManager.start();

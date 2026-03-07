@@ -830,7 +830,7 @@ export interface PipelineDeclarations {
   environments: {
     name: string;
     stackName?: string;
-    domain?: string;
+    url?: string;
     actions?: Record<string, EnvironmentActionDeclaration>;
   }[];
   rules: {

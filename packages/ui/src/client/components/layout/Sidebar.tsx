@@ -23,6 +23,7 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon"
+          title="Explorer"
           className={cn(
             activeView === 'files' && 'bg-accent text-accent-foreground'
           )}
@@ -33,17 +34,18 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon"
+          title="Chat"
           className={cn(
             chatPanelVisible && 'bg-accent text-accent-foreground'
           )}
           onClick={() => useUIStore.getState().toggleChatPanel()}
-          title="Toggle chat panel"
         >
           <MessageSquare className="h-5 w-5" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
+          title="Build"
           className={cn(
             activeView === 'build' && 'bg-accent text-accent-foreground'
           )}
@@ -54,6 +56,7 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon"
+          title="Deploy"
           className={cn(
             activeView === 'deploy' && 'bg-accent text-accent-foreground'
           )}
@@ -64,6 +67,7 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon"
+          title="Git"
           className={cn(
             activeView === 'git' && 'bg-accent text-accent-foreground'
           )}
@@ -74,6 +78,7 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon"
+          title="Activity"
           className={cn(
             activeView === 'activity' && 'bg-accent text-accent-foreground'
           )}
@@ -85,13 +90,13 @@ export function Sidebar() {
 
       <Separator orientation="vertical" />
 
-      {/* Content area */}
-      <div className="flex-1 overflow-hidden">
-        {activeView === 'files' && <FileExplorer />}
-        {activeView === 'build' && <BuildPanel />}
-        {activeView === 'deploy' && <DeployPanel />}
-        {activeView === 'git' && <GitPanel />}
-        {activeView === 'activity' && <ActivityPanel />}
+      {/* Content area — all panels mounted, inactive hidden with CSS */}
+      <div className="flex-1 overflow-hidden relative">
+        <div className={cn('h-full', activeView !== 'files' && 'hidden')}><FileExplorer /></div>
+        <div className={cn('h-full', activeView !== 'build' && 'hidden')}><BuildPanel /></div>
+        <div className={cn('h-full', activeView !== 'deploy' && 'hidden')}><DeployPanel /></div>
+        <div className={cn('h-full', activeView !== 'git' && 'hidden')}><GitPanel /></div>
+        <div className={cn('h-full', activeView !== 'activity' && 'hidden')}><ActivityPanel /></div>
       </div>
     </div>
   );

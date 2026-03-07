@@ -346,10 +346,17 @@ export class WorkflowManager {
       }
     }
 
+    // Only update lastInvocation if at least one rule matched and ran.
+    // This prevents file-change events that match no predicates from
+    // overwriting useful invocation results.
+    const lastInvocation = result.rulesExecuted.length > 0
+      ? result
+      : this.persisted?.lastInvocation ?? null;
+
     this.persisted = {
       version: 1,
       state: this.state,
-      lastInvocation: result,
+      lastInvocation,
       updatedAt: new Date().toISOString(),
       fileDeclarations,
     };
@@ -672,8 +679,15 @@ export class WorkflowManager {
 
     const rootPath = (this.env as any).rootPath ?? process.cwd();
     const absoluteSourcePath = resolve(rootPath, filePath);
-    const compiledPath = filePath.replace(/\.ts$/, '.compiled.mjs');
+    // Write compiled output to .antimatter-cache/compiled/ to keep .antimatter/ clean
+    const basename = filePath.split('/').pop()!.replace(/\.ts$/, '.compiled.mjs');
+    const compiledPath = `.antimatter-cache/compiled/${basename}`;
     const absoluteCompiledPath = resolve(rootPath, compiledPath);
+
+    // Ensure the compiled output directory exists
+    const { mkdir } = await import('node:fs/promises');
+    const compiledDir = resolve(rootPath, '.antimatter-cache/compiled');
+    await mkdir(compiledDir, { recursive: true });
 
     // Bundle with esbuild — resolves @antimatter/* via the source condition
     // so we don't depend on dist/ being built.

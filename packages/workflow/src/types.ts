@@ -155,7 +155,8 @@ export interface EnvironmentAction {
 export interface EnvironmentDeclaration {
   readonly name: string;
   readonly stackName?: string;
-  readonly domain?: string;
+  /** URL for this environment (e.g. 'ide.antimatter.solutions' or 'ide.antimatter.solutions/env/dev'). */
+  readonly url?: string;
   /** Actions available for this environment (e.g. build, deploy, destroy). */
   readonly actions?: Readonly<Record<string, EnvironmentAction>>;
 }

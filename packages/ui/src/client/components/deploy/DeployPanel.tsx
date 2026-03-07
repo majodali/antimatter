@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Rocket, Play, Trash2, Settings, Hammer, Pause, Globe, Server } from 'lucide-react';
+import { Rocket, Play, Trash2, Settings, Hammer, Pause, Globe } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
-import { EnvironmentList } from './EnvironmentList';
 import { SecretsPanel } from './SecretsPanel';
 import { usePipelineStore } from '@/stores/pipelineStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { cn } from '@/lib/utils';
 import type { EnvironmentActionDeclaration } from '@/lib/api';
 
-type DeployView = 'deploy' | 'environments' | 'secrets';
+type DeployView = 'deploy' | 'secrets';
 
 export function DeployPanel() {
   const [view, setView] = useState<DeployView>('deploy');
@@ -28,8 +27,6 @@ export function DeployPanel() {
   }, [currentProjectId]);
 
   const environments = declarations.environments ?? [];
-  const targets = declarations.targets ?? [];
-  const modules = declarations.modules ?? [];
 
   const handleOpenConfig = () => {
     const { openFile } = (window as any).__editorActions ?? {};
@@ -56,17 +53,6 @@ export function DeployPanel() {
               onClick={() => setView('deploy')}
             >
               Deploy
-            </button>
-            <button
-              className={cn(
-                'px-2 py-0.5 rounded text-xs font-medium transition-colors',
-                view === 'environments'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-              onClick={() => setView('environments')}
-            >
-              Environments
             </button>
             <button
               className={cn(
@@ -98,29 +84,26 @@ export function DeployPanel() {
 
       {view === 'secrets' ? (
         <SecretsPanel />
-      ) : view === 'environments' ? (
-        <EnvironmentList />
       ) : (
         <ScrollArea className="flex-1">
-          {environments.length === 0 && targets.length === 0 ? (
+          {environments.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center p-4">
               <Rocket className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
               <p className="text-sm text-muted-foreground">No deployment configuration</p>
               <p className="text-xs text-muted-foreground mt-1">
                 {loaded
-                  ? 'Add environments and targets to .antimatter/*.ts files'
+                  ? 'Add environments to .antimatter/*.ts files'
                   : 'Loading workflow definitions...'}
               </p>
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {/* Environments with action buttons */}
               {environments.map((env) => (
                 <EnvironmentItem
                   key={env.name}
                   name={env.name}
                   stackName={env.stackName}
-                  domain={env.domain}
+                  url={env.url}
                   actions={env.actions}
                   workflowState={workflowState}
                   onAction={(action) => {
@@ -128,29 +111,6 @@ export function DeployPanel() {
                   }}
                 />
               ))}
-
-              {/* Targets (read-only metadata) */}
-              {targets.length > 0 && (
-                <div className="px-3 py-2">
-                  <h4 className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2 font-semibold">
-                    Targets
-                  </h4>
-                  <div className="space-y-1.5">
-                    {targets.map((target) => {
-                      const mod = modules.find(m => m.name === target.module);
-                      return (
-                        <TargetItem
-                          key={target.name}
-                          name={target.name}
-                          type={target.type}
-                          moduleName={target.module}
-                          moduleType={mod?.type}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </ScrollArea>
@@ -166,14 +126,14 @@ export function DeployPanel() {
 function EnvironmentItem({
   name,
   stackName,
-  domain,
+  url,
   actions,
   workflowState,
   onAction,
 }: {
   name: string;
   stackName?: string;
-  domain?: string;
+  url?: string;
   actions?: Record<string, EnvironmentActionDeclaration>;
   workflowState: any;
   onAction: (action: EnvironmentActionDeclaration) => void;
@@ -205,49 +165,13 @@ function EnvironmentItem({
           ))}
         </div>
       </div>
-      {domain && (
-        <p className="text-[10px] text-muted-foreground mt-0.5 ml-5.5">{domain}</p>
+      {url && (
+        <p className="text-[10px] text-muted-foreground mt-0.5 ml-5.5">{url}</p>
       )}
 
       {/* Workflow state summary for this environment */}
       {workflowState && (
         <WorkflowStateSummary state={workflowState} />
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Target Item
-// ---------------------------------------------------------------------------
-
-function TargetItem({
-  name,
-  type,
-  moduleName,
-  moduleType,
-}: {
-  name: string;
-  type: string;
-  moduleName: string;
-  moduleType?: string;
-}) {
-  return (
-    <div className="flex items-center gap-2 px-1 py-0.5">
-      <Server className="h-3 w-3 text-muted-foreground" />
-      <span className="text-[11px] font-medium truncate">{name}</span>
-      <span className="text-[10px] text-muted-foreground">
-        {type}
-      </span>
-      {moduleType && (
-        <span className={cn(
-          'text-[9px] px-1 py-0.5 rounded',
-          moduleType === 'frontend' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' :
-          moduleType === 'lambda' ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' :
-          'bg-muted text-muted-foreground',
-        )}>
-          {moduleType}
-        </span>
       )}
     </div>
   );
