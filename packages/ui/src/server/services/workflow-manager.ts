@@ -566,7 +566,7 @@ export class WorkflowManager {
         // Skip .antimatter directory and node_modules
         if (entry.name === '.antimatter' || entry.name === 'node_modules' || entry.name === '.git') continue;
 
-        if (entry.type === 'file') {
+        if (!entry.isDirectory) {
           try {
             const content = await this.env.readFile(path);
             const hash = createHash('md5').update(content).digest('hex');
@@ -574,7 +574,7 @@ export class WorkflowManager {
           } catch {
             // Skip files that can't be read
           }
-        } else if (entry.type === 'directory') {
+        } else if (entry.isDirectory) {
           await this.computeFileManifest(path, result);
         }
       }
@@ -619,8 +619,8 @@ export class WorkflowManager {
       // Read directory entries
       const entries = await this.env.readDirectory(this.automationDir);
       const tsFiles = entries
-        .filter((e: { type: string; name: string }) => e.type === 'file')
-        .map((e: { name: string }) => `${this.automationDir}/${e.name}`)
+        .filter((e) => !e.isDirectory)
+        .map((e) => `${this.automationDir}/${e.name}`)
         .filter((p: string) => this.isAutomationFile(p))
         .sort(); // deterministic order
 
@@ -659,33 +659,41 @@ export class WorkflowManager {
 
   /**
    * Load a single workflow definition file.
-   * Transpiles TypeScript to ESM JavaScript, writes to a temp file, and imports it.
+   * Bundles TypeScript to a self-contained ESM JavaScript file and imports it.
+   *
+   * Uses esbuild.build() with bundle:true instead of transform() because
+   * workspace packages (e.g. @antimatter/workflow) use the @antimatter/source
+   * export condition to point at raw TypeScript source, and their dist/ folders
+   * may not be built.  Bundling resolves those imports at compile time.
    */
   private async loadSingleDefinition(filePath: string): Promise<WorkflowDefinition<any> | null> {
-    // Read the TypeScript source
-    const source = await this.env.readFile(filePath);
-
-    // Transpile TS → ESM JS using esbuild
     const esbuild = await import('esbuild');
-    const result = await esbuild.transform(source, {
-      loader: 'ts',
+    const { resolve } = await import('node:path');
+
+    const rootPath = (this.env as any).rootPath ?? process.cwd();
+    const absoluteSourcePath = resolve(rootPath, filePath);
+    const compiledPath = filePath.replace(/\.ts$/, '.compiled.mjs');
+    const absoluteCompiledPath = resolve(rootPath, compiledPath);
+
+    // Bundle with esbuild — resolves @antimatter/* via the source condition
+    // so we don't depend on dist/ being built.
+    const buildResult = await esbuild.build({
+      entryPoints: [absoluteSourcePath],
+      bundle: true,
       format: 'esm',
+      platform: 'node',
       target: 'node20',
+      outfile: absoluteCompiledPath,
+      conditions: ['@antimatter/source', 'import'],
+      logLevel: 'silent',
     });
 
-    // Write compiled output to a temp file (dynamic import needs a real file)
-    const compiledPath = filePath.replace(/\.ts$/, '.compiled.mjs');
-    await this.env.writeFile(compiledPath, result.code);
-
-    // Resolve the absolute path for import()
-    const { resolve } = await import('node:path');
-    const absolutePath = resolve(
-      (this.env as any).rootPath ?? process.cwd(),
-      compiledPath,
-    );
+    if (buildResult.errors.length > 0) {
+      throw new Error(`esbuild: ${buildResult.errors.map(e => e.text).join(', ')}`);
+    }
 
     // Dynamic import with cache-busting query param
-    const fileUrl = `file://${absolutePath.replace(/\\/g, '/')}?t=${Date.now()}`;
+    const fileUrl = `file://${absoluteCompiledPath.replace(/\\/g, '/')}?t=${Date.now()}`;
     const module = await import(fileUrl);
 
     const definition = module.default;
