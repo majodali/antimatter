@@ -17,6 +17,7 @@ export type {
   WorkflowPredicate,
   WorkflowAction,
   WorkflowRule,
+  RuleOptions,
 
   // Execution
   ExecOptions,
@@ -41,4 +42,5 @@ export type {
   WorkflowLogEntry,
   WorkflowInvocationResult,
   PersistedWorkflowState,
+  PersistedRuleResult,
 } from './types.js';

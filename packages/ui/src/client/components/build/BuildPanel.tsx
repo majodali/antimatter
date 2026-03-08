@@ -86,8 +86,8 @@ export function BuildPanel() {
                 <RuleItem
                   key={rule.id}
                   ruleId={rule.id}
-                  description={rule.description}
-                  sourceFile={rule.sourceFile}
+                  name={rule.name}
+                  manual={rule.manual}
                   result={result}
                   onRun={() => handleRunRule(rule.id)}
                 />
@@ -106,14 +106,14 @@ export function BuildPanel() {
 
 function RuleItem({
   ruleId,
-  description,
-  sourceFile,
+  name,
+  manual,
   result,
   onRun,
 }: {
   ruleId: string;
-  description: string;
-  sourceFile?: string;
+  name: string;
+  manual: boolean;
   result?: RuleExecutionState;
   onRun: () => void;
 }) {
@@ -129,10 +129,7 @@ function RuleItem({
       {/* Rule info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-xs font-medium truncate">{description}</span>
-        </div>
-        <div className="flex items-center gap-2 mt-0.5">
-          <span className="text-[10px] text-muted-foreground font-mono truncate">{ruleId}</span>
+          <span className="text-xs font-medium truncate">{name}</span>
           {result?.durationMs != null && result.status !== 'running' && (
             <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
               <Clock className="h-2.5 w-2.5" />
@@ -147,24 +144,26 @@ function RuleItem({
         )}
       </div>
 
-      {/* Run button */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-        onClick={(e) => {
-          e.stopPropagation();
-          onRun();
-        }}
-        disabled={isRunning}
-        title={`Run ${ruleId}`}
-      >
-        {isRunning ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : (
-          <Play className="h-3 w-3" />
-        )}
-      </Button>
+      {/* Run button — only shown for manual rules */}
+      {manual && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRun();
+          }}
+          disabled={isRunning}
+          title={`Run ${name}`}
+        >
+          {isRunning ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Play className="h-3 w-3" />
+          )}
+        </Button>
+      )}
     </div>
   );
 }

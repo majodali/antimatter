@@ -40,7 +40,7 @@ interface TestState {
 }
 
 export default defineWorkflow((wf) => {
-  wf.rule('project:init', 'Initialize test state',
+  wf.rule('Initialize test state',
     (e) => e.type === 'project:initialize',
     (_events, state) => {
       state.initialized = true;
@@ -50,7 +50,7 @@ export default defineWorkflow((wf) => {
     },
   );
 
-  wf.rule('track-changes', 'Track file changes',
+  wf.rule('Track file changes',
     (e) => e.type === 'file:change',
     (events, state) => {
       state.fileChangeCount += events.length;
@@ -58,7 +58,7 @@ export default defineWorkflow((wf) => {
     },
   );
 
-  wf.rule('echo-test', 'Echo test via exec',
+  wf.rule('Echo test via exec',
     (e) => e.type === 'workflow:echo-test',
     async (_events, state) => {
       const result = await wf.exec('echo hello-workflow');
@@ -67,14 +67,14 @@ export default defineWorkflow((wf) => {
     },
   );
 
-  wf.rule('chain-start', 'Start a chain',
+  wf.rule('Start a chain',
     (e) => e.type === 'workflow:chain',
     (_events, _state) => {
       wf.emit({ type: 'workflow:chain-step-2' });
     },
   );
 
-  wf.rule('chain-end', 'End a chain',
+  wf.rule('End a chain',
     (e) => e.type === 'workflow:chain-step-2',
     (_events, state) => {
       state.echoOutput = 'chain-complete';
@@ -128,7 +128,7 @@ export default defineWorkflow((wf) => {
         const body = await res.json();
 
         const ruleExecuted = body.result?.rulesExecuted?.some(
-          (r: any) => r.ruleId === 'echo-test' && !r.error,
+          (r: any) => r.ruleId === 'echo-test-via-exec' && !r.error,
         );
 
         const stateRes = await fetch(`${base}/api/workflow/state`);
@@ -281,7 +281,7 @@ interface TestState {
 }
 
 export default defineWorkflow((wf) => {
-  wf.rule('project:init', 'Initialize test state',
+  wf.rule('Initialize test state',
     (e) => e.type === 'project:initialize',
     (_events, state) => {
       state.initialized = true;
@@ -292,7 +292,7 @@ export default defineWorkflow((wf) => {
     },
   );
 
-  wf.rule('track-changes', 'Track file changes',
+  wf.rule('Track file changes',
     (e) => e.type === 'file:change',
     (events, state) => {
       state.fileChangeCount += events.length;
@@ -300,7 +300,7 @@ export default defineWorkflow((wf) => {
     },
   );
 
-  wf.rule('auto-reload-verify', 'Verify auto-reload',
+  wf.rule('Verify auto-reload',
     (e) => e.type === 'workflow:auto-reload-check',
     (_events, state) => {
       state.autoReloadWorked = true;
@@ -329,7 +329,7 @@ export default defineWorkflow((wf) => {
         const emitBody = await emitRes.json();
 
         const ruleExecuted = emitBody.result?.rulesExecuted?.some(
-          (r: any) => r.ruleId === 'auto-reload-verify' && !r.error,
+          (r: any) => r.ruleId === 'verify-auto-reload' && !r.error,
         );
 
         const stateRes = await fetch(`${base}/api/workflow/state`);

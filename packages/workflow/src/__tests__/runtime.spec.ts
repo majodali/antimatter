@@ -32,8 +32,8 @@ describe('WorkflowRuntime', () => {
   describe('construction', () => {
     it('registers rules from the definition function', () => {
       const definition: WorkflowDefinition<{ count: number }> = (wf) => {
-        wf.rule('a', 'Rule A', () => true, () => {});
-        wf.rule('b', 'Rule B', () => false, () => {});
+        wf.rule('Rule A', () => true, () => {});
+        wf.rule('Rule B', () => false, () => {});
       };
 
       const runtime = new WorkflowRuntime(definition, { executor: noopExecutor });
@@ -53,10 +53,10 @@ describe('WorkflowRuntime', () => {
       const fired: string[] = [];
 
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('match', 'Matches file:change', (e) => e.type === 'file:change', () => {
+        wf.rule('Matches file:change', (e) => e.type === 'file:change', () => {
           fired.push('match');
         });
-        wf.rule('nomatch', 'Matches file:delete', (e) => e.type === 'file:delete', () => {
+        wf.rule('Matches file:delete', (e) => e.type === 'file:delete', () => {
           fired.push('nomatch');
         });
       };
@@ -71,7 +71,7 @@ describe('WorkflowRuntime', () => {
       let received: WorkflowEvent[] = [];
 
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('r', 'test', (e) => e.type === 'file:change', (events) => {
+        wf.rule('test', (e) => e.type === 'file:change', (events) => {
           received = events;
         });
       };
@@ -93,7 +93,7 @@ describe('WorkflowRuntime', () => {
     it('does not fire rules when no events match', async () => {
       const fired = vi.fn();
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('r', 'test', (e) => e.type === 'never', fired);
+        wf.rule('test', (e) => e.type === 'never', fired);
       };
 
       const runtime = new WorkflowRuntime(definition, { executor: noopExecutor });
@@ -111,9 +111,9 @@ describe('WorkflowRuntime', () => {
       const order: string[] = [];
 
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('first', 'First', () => true, () => { order.push('first'); });
-        wf.rule('second', 'Second', () => true, () => { order.push('second'); });
-        wf.rule('third', 'Third', () => true, () => { order.push('third'); });
+        wf.rule('First', () => true, () => { order.push('first'); });
+        wf.rule('Second', () => true, () => { order.push('second'); });
+        wf.rule('Third', () => true, () => { order.push('third'); });
       };
 
       const runtime = new WorkflowRuntime(definition, { executor: noopExecutor });
@@ -126,11 +126,11 @@ describe('WorkflowRuntime', () => {
       const order: string[] = [];
 
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('slow', 'Slow', () => true, async () => {
+        wf.rule('Slow', () => true, async () => {
           await new Promise(r => setTimeout(r, 10));
           order.push('slow');
         });
-        wf.rule('fast', 'Fast', () => true, () => {
+        wf.rule('Fast', () => true, () => {
           order.push('fast');
         });
       };
@@ -149,7 +149,7 @@ describe('WorkflowRuntime', () => {
       interface S { count: number }
 
       const definition: WorkflowDefinition<S> = (wf) => {
-        wf.rule('inc', 'Increment', () => true, (_events, state) => {
+        wf.rule('Increment', () => true, (_events, state) => {
           state.count += 1;
         });
       };
@@ -164,7 +164,7 @@ describe('WorkflowRuntime', () => {
       interface S { value: string }
 
       const definition: WorkflowDefinition<S> = (wf) => {
-        wf.rule('r', 'test', () => true, (_events, state) => {
+        wf.rule('test', () => true, (_events, state) => {
           state.value = 'modified';
         });
       };
@@ -181,8 +181,8 @@ describe('WorkflowRuntime', () => {
       interface S { value: number }
 
       const definition: WorkflowDefinition<S> = (wf) => {
-        wf.rule('set', 'Set', () => true, (_e, s) => { s.value = 42; });
-        wf.rule('read', 'Read', () => true, (_e, s) => { s.value = s.value * 2; });
+        wf.rule('Set', () => true, (_e, s) => { s.value = 42; });
+        wf.rule('Read', () => true, (_e, s) => { s.value = s.value * 2; });
       };
 
       const runtime = new WorkflowRuntime(definition, { executor: noopExecutor });
@@ -199,11 +199,11 @@ describe('WorkflowRuntime', () => {
       const fired: string[] = [];
 
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('emit', 'Emits custom', (e) => e.type === 'start', () => {
+        wf.rule('Emits custom', (e) => e.type === 'start', () => {
           fired.push('emit');
           wf.emit({ type: 'custom:done' });
         });
-        wf.rule('react', 'Reacts to custom', (e) => e.type === 'custom:done', () => {
+        wf.rule('Reacts to custom', (e) => e.type === 'custom:done', () => {
           fired.push('react');
         });
       };
@@ -219,7 +219,7 @@ describe('WorkflowRuntime', () => {
 
     it('emitted events have a timestamp', async () => {
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('r', 'test', () => true, () => {
+        wf.rule('test', () => true, () => {
           wf.emit({ type: 'custom' });
         });
       };
@@ -234,15 +234,15 @@ describe('WorkflowRuntime', () => {
       const fired: string[] = [];
 
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('a', 'A', (e) => e.type === 'start', () => {
+        wf.rule('A', (e) => e.type === 'start', () => {
           fired.push('a');
           wf.emit({ type: 'step:1' });
         });
-        wf.rule('b', 'B', (e) => e.type === 'step:1', () => {
+        wf.rule('B', (e) => e.type === 'step:1', () => {
           fired.push('b');
           wf.emit({ type: 'step:2' });
         });
-        wf.rule('c', 'C', (e) => e.type === 'step:2', () => {
+        wf.rule('C', (e) => e.type === 'step:2', () => {
           fired.push('c');
         });
       };
@@ -256,7 +256,7 @@ describe('WorkflowRuntime', () => {
 
     it('stops at maxCycles to prevent infinite loops', async () => {
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('loop', 'Infinite loop', () => true, () => {
+        wf.rule('Infinite loop', () => true, () => {
           wf.emit({ type: 'loop' });
         });
       };
@@ -272,7 +272,7 @@ describe('WorkflowRuntime', () => {
 
     it('stops processing when no events remain', async () => {
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('r', 'test', (e) => e.type === 'start', () => {
+        wf.rule('test', (e) => e.type === 'start', () => {
           // No emit — cycle should stop.
         });
       };
@@ -291,7 +291,7 @@ describe('WorkflowRuntime', () => {
       const executor = vi.fn().mockResolvedValue(successResult);
 
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('build', 'Build', () => true, async () => {
+        wf.rule('Build', () => true, async () => {
           await wf.exec('tsc --build', { cwd: 'packages/lib' });
         });
       };
@@ -306,7 +306,7 @@ describe('WorkflowRuntime', () => {
       const executor = vi.fn().mockResolvedValue({ ...failResult, stderr: 'type error' });
 
       const definition: WorkflowDefinition<{ error?: string }> = (wf) => {
-        wf.rule('build', 'Build', () => true, async (_e, state) => {
+        wf.rule('Build', () => true, async (_e, state) => {
           const r = await wf.exec('tsc');
           if (r.exitCode !== 0) state.error = r.stderr;
         });
@@ -324,7 +324,7 @@ describe('WorkflowRuntime', () => {
   describe('logging', () => {
     it('captures log messages in the result', async () => {
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('r', 'test', () => true, () => {
+        wf.rule('test', () => true, () => {
           wf.log('hello');
           wf.log('warning', 'warn');
           wf.log('failure', 'error');
@@ -342,7 +342,7 @@ describe('WorkflowRuntime', () => {
 
     it('logs have timestamps', async () => {
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('r', 'test', () => true, () => { wf.log('msg'); });
+        wf.rule('test', () => true, () => { wf.log('msg'); });
       };
 
       const runtime = new WorkflowRuntime(definition, { executor: noopExecutor });
@@ -359,11 +359,11 @@ describe('WorkflowRuntime', () => {
       const fired: string[] = [];
 
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('fail', 'Fails', () => true, () => {
+        wf.rule('Fails', () => true, () => {
           fired.push('fail');
           throw new Error('boom');
         });
-        wf.rule('ok', 'Succeeds', () => true, () => {
+        wf.rule('Succeeds', () => true, () => {
           fired.push('ok');
         });
       };
@@ -378,7 +378,7 @@ describe('WorkflowRuntime', () => {
 
     it('captures async action errors', async () => {
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('fail', 'Async fail', () => true, async () => {
+        wf.rule('Async fail', () => true, async () => {
           throw new Error('async boom');
         });
       };
@@ -403,7 +403,7 @@ describe('WorkflowRuntime', () => {
 
     it('reports zero cycles when no events match any rule', async () => {
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('r', 'test', (e) => e.type === 'never', () => {});
+        wf.rule('test', (e) => e.type === 'never', () => {});
       };
 
       const runtime = new WorkflowRuntime(definition, { executor: noopExecutor });
@@ -415,7 +415,7 @@ describe('WorkflowRuntime', () => {
 
     it('tracks durationMs', async () => {
       const definition: WorkflowDefinition<{}> = (wf) => {
-        wf.rule('slow', 'Slow', () => true, async () => {
+        wf.rule('Slow', () => true, async () => {
           await new Promise(r => setTimeout(r, 10));
         });
       };
@@ -434,7 +434,7 @@ describe('WorkflowRuntime', () => {
       interface S { status: string; items: string[] }
 
       const definition: WorkflowDefinition<S> = (wf) => {
-        wf.rule('project:init', 'Initialize', (e) => e.type === 'project:initialize', (_e, state) => {
+        wf.rule('Initialize', (e) => e.type === 'project:initialize', (_e, state) => {
           state.status = 'ready';
           state.items = [];
         });

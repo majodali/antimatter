@@ -27,7 +27,7 @@ interface ProjectState {
 export default defineWorkflow<ProjectState>((wf) => {
 
   // --- Initialize ---
-  wf.rule('project:init', 'Initialize workflow state',
+  wf.rule('Initialize workflow state',
     (e) => e.type === 'project:initialize',
     (_events, state) => {
       state.compile = { status: 'pending' };
@@ -37,7 +37,7 @@ export default defineWorkflow<ProjectState>((wf) => {
   );
 
   // --- Compile (typed event — events are narrowed to FileChangeEvent[]) ---
-  wf.rule<FileChangeEvent>('compile', 'Compile TypeScript sources',
+  wf.rule<FileChangeEvent>('Compile TypeScript sources',
     (e) => e.type === 'file:change' && String(e.path).endsWith('.ts'),
     async (events, state) => {
       state.compile.status = 'running';
@@ -58,7 +58,7 @@ export default defineWorkflow<ProjectState>((wf) => {
   );
 
   // --- Test ---
-  wf.rule('test', 'Run tests after successful compile',
+  wf.rule('Run tests after successful compile',
     (e) => e.type === 'compile:success',
     async (_events, state) => {
       state.test.status = 'running';
@@ -76,7 +76,7 @@ export default defineWorkflow<ProjectState>((wf) => {
   );
 
   // --- Deploy ---
-  wf.rule('deploy', 'Deploy dev environment after tests pass',
+  wf.rule('Deploy dev environment after tests pass',
     (e) => e.type === 'test:success',
     async (_events, state) => {
       // Only auto-deploy if not already active
@@ -103,7 +103,7 @@ export default defineWorkflow<ProjectState>((wf) => {
   );
 
   // --- Teardown (manual trigger) ---
-  wf.rule('teardown', 'Tear down dev environment',
+  wf.rule('Tear down dev environment',
     (e) => e.type === 'deploy:teardown',
     async (_events, state) => {
       if (!state.deploy.stackName) return;

@@ -23,6 +23,7 @@ import {
   type WorkflowEvent,
   type WorkflowInvocationResult,
   type PersistedWorkflowState,
+  type PersistedRuleResult,
   type ExecOptions,
   type ExecResult,
 } from '@antimatter/workflow';
@@ -351,7 +352,21 @@ export class WorkflowManager {
     // overwriting useful invocation results.
     const lastInvocation = result.rulesExecuted.length > 0
       ? result
-      : this.persisted?.lastInvocation ?? null;
+      : this.persisted?.lastInvocation;
+
+    // Accumulate rule results across invocations
+    const existingResults: Record<string, PersistedRuleResult> = this.persisted?.ruleResults
+      ? { ...this.persisted.ruleResults }
+      : {};
+    const now = new Date().toISOString();
+    for (const executed of result.rulesExecuted) {
+      existingResults[executed.ruleId] = {
+        status: executed.error ? 'failed' : 'success',
+        lastRunAt: now,
+        durationMs: executed.durationMs,
+        error: executed.error,
+      };
+    }
 
     this.persisted = {
       version: 1,
@@ -359,6 +374,7 @@ export class WorkflowManager {
       lastInvocation,
       updatedAt: new Date().toISOString(),
       fileDeclarations,
+      ruleResults: existingResults,
     };
     await this.saveState();
 

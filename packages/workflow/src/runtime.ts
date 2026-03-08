@@ -22,6 +22,18 @@ import type {
   WorkflowRuntimeConfig,
 } from './types.js';
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Generate a URL-safe slug from a human-readable name. */
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 // ----------------------------------------------------------------------------
 // Public API
 // ----------------------------------------------------------------------------
@@ -77,8 +89,10 @@ export class WorkflowRuntime<S> {
     // rule() collects rules; module/target/environment collect declarations;
     // exec/emit/log delegate to runtime state.
     this.handle = {
-      rule: (id, description, predicate, action) => {
-        this.rules.push({ id, description, predicate, action: action as WorkflowAction<S, any>, sourceFile: this._currentSourceFile ?? undefined });
+      rule: (name, predicate, action, options) => {
+        const id = options?.id ?? slugify(name);
+        const manual = options?.manual !== false;
+        this.rules.push({ id, name, predicate, action: action as WorkflowAction<S, any>, manual, sourceFile: this._currentSourceFile ?? undefined });
         this.trackDeclaration(id);
       },
       module: (name, opts) => {
@@ -122,7 +136,7 @@ export class WorkflowRuntime<S> {
       modules: Array.from(this._modules.values()),
       targets: Array.from(this._targets.values()),
       environments: Array.from(this._environments.values()),
-      rules: this.rules.map(r => ({ id: r.id, description: r.description, sourceFile: r.sourceFile })),
+      rules: this.rules.map(r => ({ id: r.id, name: r.name, manual: r.manual, sourceFile: r.sourceFile })),
     };
   }
 
@@ -363,8 +377,9 @@ export class WorkflowRuntime<S> {
 
 interface RegisteredRule<S> {
   readonly id: string;
-  readonly description: string;
+  readonly name: string;
   readonly predicate: (event: WorkflowEvent) => boolean;
   readonly action: WorkflowAction<S, any>;
+  readonly manual: boolean;
   readonly sourceFile?: string;
 }

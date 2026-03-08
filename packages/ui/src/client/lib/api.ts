@@ -835,9 +835,16 @@ export interface PipelineDeclarations {
   }[];
   rules: {
     id: string;
-    description: string;
+    name: string;
+    manual: boolean;
     sourceFile?: string;
   }[];
+  ruleResults?: Record<string, {
+    status: 'success' | 'failed';
+    lastRunAt: string;
+    durationMs?: number;
+    error?: string;
+  }>;
 }
 
 export async function fetchPipelineDeclarations(projectId?: string): Promise<PipelineDeclarations> {

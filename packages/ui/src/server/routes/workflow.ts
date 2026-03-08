@@ -34,11 +34,15 @@ export function createWorkflowRouter(workflowManager: WorkflowManager): Router {
     }
   });
 
-  // GET /declarations — modules, targets, environments from loaded definitions
+  // GET /declarations — modules, targets, environments, rules + accumulated ruleResults
   router.get('/declarations', (_req, res) => {
     try {
       const declarations = workflowManager.getDeclarations();
-      res.json(declarations);
+      const persisted = workflowManager.getState();
+      res.json({
+        ...declarations,
+        ruleResults: persisted?.ruleResults ?? {},
+      });
     } catch (error) {
       res.status(500).json({
         error: 'Failed to get workflow declarations',

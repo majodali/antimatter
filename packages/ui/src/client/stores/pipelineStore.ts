@@ -87,7 +87,25 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     set({ loading: true });
     try {
       const declarations = await fetchPipelineDeclarations(projectId);
-      set({ declarations, loaded: true, loading: false });
+      // Populate ruleResults from persisted state (returned alongside declarations)
+      const persistedResults = declarations.ruleResults;
+      if (persistedResults) {
+        const results = new Map(get().ruleResults);
+        for (const [ruleId, r] of Object.entries(persistedResults)) {
+          if (!results.has(ruleId)) {
+            results.set(ruleId, {
+              ruleId,
+              status: r.status,
+              lastRunAt: r.lastRunAt,
+              durationMs: r.durationMs,
+              error: r.error,
+            });
+          }
+        }
+        set({ declarations, loaded: true, loading: false, ruleResults: results });
+      } else {
+        set({ declarations, loaded: true, loading: false });
+      }
     } catch (err) {
       // Not an error if workflow has no declarations — just means no automation files exist
       set({ declarations: EMPTY_DECLARATIONS, loaded: true, loading: false });

@@ -52,7 +52,7 @@ export default defineWorkflow<BuildState>((wf) => {
    * project:initialize — runs once when no workflow state exists.
    * Installs dependencies idempotently (--frozen-lockfile).
    */
-  wf.rule('project:init', 'Install dependencies on first run',
+  wf.rule('Install dependencies on first run',
     (e) => e.type === 'project:initialize',
     async (_events, state) => {
       state.deps = { status: 'installing' };
@@ -83,7 +83,7 @@ export default defineWorkflow<BuildState>((wf) => {
    * Scoped to packages/**\/*.ts to avoid reacting to config files, scripts, etc.
    * Excludes .antimatter/ (workflow files are not project source).
    */
-  wf.rule<FileChangeEvent>('compile-on-change', 'Type-check on .ts file change',
+  wf.rule<FileChangeEvent>('Type-check on .ts file change',
     (e) => {
       if (e.type !== 'file:change') return false;
       const path = String(e.path);

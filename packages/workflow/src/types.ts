@@ -73,12 +73,21 @@ export type WorkflowAction<S, E extends WorkflowEvent = WorkflowEvent> = (
   state: S,
 ) => void | Promise<void>;
 
+/** Options for wf.rule() declaration. */
+export interface RuleOptions {
+  /** Override the auto-generated slug. Default: slugify(name). */
+  readonly id?: string;
+  /** Whether this rule can be run manually from the Build panel. Default: true. */
+  readonly manual?: boolean;
+}
+
 /** A workflow rule: predicate selects events, action handles them. */
 export interface WorkflowRule<S = unknown> {
   readonly id: string;
-  readonly description: string;
+  readonly name: string;
   readonly predicate: WorkflowPredicate;
   readonly action: WorkflowAction<S, any>;
+  readonly manual: boolean;
 }
 
 // ----------------------------------------------------------------------------
@@ -164,7 +173,8 @@ export interface EnvironmentDeclaration {
 /** A workflow rule declaration — metadata exposed to the IDE. */
 export interface RuleDeclaration {
   readonly id: string;
-  readonly description: string;
+  readonly name: string;
+  readonly manual: boolean;
   /** The source file that declared this rule (e.g. '.antimatter/build.ts'). */
   readonly sourceFile?: string;
 }
@@ -198,16 +208,17 @@ export interface Workflow<S> {
   /**
    * Register a workflow rule.
    *
-   * Optionally provide a type parameter to narrow the events passed to the action:
-   *   wf.rule<FileChangeEvent>('compile', ...)
+   * Provide a human-readable name — the system generates a stable slug (id) from it.
+   * Override the auto-slug via `options.id` if needed.
    *
-   * When no type parameter is given, events are `WorkflowEvent`.
+   * Optionally provide a type parameter to narrow the events passed to the action:
+   *   wf.rule<FileChangeEvent>('Type-check on change', pred, action)
    */
   rule<E extends WorkflowEvent = WorkflowEvent>(
-    id: string,
-    description: string,
+    name: string,
     predicate: WorkflowPredicate,
     action: WorkflowAction<S, E>,
+    options?: RuleOptions,
   ): void;
 
   /** Declare a build module. */
@@ -264,7 +275,7 @@ export type WorkflowDefinition<S> = (wf: Workflow<S>) => void;
  * }
  *
  * export default defineWorkflow<MyState>((wf) => {
- *   wf.rule('project:init', 'Initialize workflow state',
+ *   wf.rule('Initialize workflow state',
  *     (e) => e.type === 'project:initialize',
  *     (_events, state) => {
  *       state.compile = { status: 'pending' };
@@ -273,7 +284,7 @@ export type WorkflowDefinition<S> = (wf: Workflow<S>) => void;
  *   );
  *
  *   // Type parameter narrows events to FileChangeEvent[]
- *   wf.rule<FileChangeEvent>('compile', 'Compile TypeScript sources',
+ *   wf.rule<FileChangeEvent>('Compile TypeScript sources',
  *     (e) => e.type === 'file:change' && String(e.path).endsWith('.ts'),
  *     async (events, state) => {
  *       const result = await wf.exec('tsc --build');
@@ -285,7 +296,7 @@ export type WorkflowDefinition<S> = (wf: Workflow<S>) => void;
  *     },
  *   );
  *
- *   wf.rule('test', 'Run tests after successful compile',
+ *   wf.rule('Run tests after successful compile',
  *     (e) => e.type === 'compile:success',
  *     async (_events, state) => {
  *       const result = await wf.exec('vitest run');
@@ -350,6 +361,14 @@ export interface WorkflowInvocationResult {
  * Persisted workflow state envelope. The runtime wraps the script's
  * state object with metadata for lifecycle management.
  */
+/** Persisted per-rule execution state for display in the IDE. */
+export interface PersistedRuleResult {
+  readonly status: 'success' | 'failed';
+  readonly lastRunAt: string;
+  readonly durationMs?: number;
+  readonly error?: string;
+}
+
 export interface PersistedWorkflowState<S = unknown> {
   readonly version: number;
   readonly state: S;
@@ -359,4 +378,6 @@ export interface PersistedWorkflowState<S = unknown> {
   readonly fileDeclarations?: Readonly<Record<string, readonly string[]>>;
   /** Maps workspace file paths to content hashes for startup diff detection. */
   readonly fileManifest?: Readonly<Record<string, string>>;
+  /** Accumulated rule execution results — persisted across invocations. */
+  readonly ruleResults?: Readonly<Record<string, PersistedRuleResult>>;
 }

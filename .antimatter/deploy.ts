@@ -59,7 +59,7 @@ export default defineWorkflow<DeployState>((wf) => {
 
   // ---- Bundle rules (triggered by explicit events) ----
 
-  wf.rule('bundle-api-lambda', 'Bundle API Lambda',
+  wf.rule('Bundle API Lambda',
     (e) => e.type === 'build:bundle-api-lambda',
     async (_events, state) => {
       state.bundle.apiLambda = { status: 'running' };
@@ -80,7 +80,7 @@ export default defineWorkflow<DeployState>((wf) => {
     },
   );
 
-  wf.rule('bundle-workspace', 'Bundle workspace server',
+  wf.rule('Bundle workspace server',
     (e) => e.type === 'build:bundle-workspace',
     async (_events, state) => {
       state.bundle.workspaceServer = { status: 'running' };
@@ -101,7 +101,7 @@ export default defineWorkflow<DeployState>((wf) => {
     },
   );
 
-  wf.rule('bundle-frontend', 'Bundle frontend',
+  wf.rule('Bundle frontend',
     (e) => e.type === 'build:bundle-frontend',
     async (_events, state) => {
       state.bundle.frontend = { status: 'running' };
@@ -124,7 +124,7 @@ export default defineWorkflow<DeployState>((wf) => {
 
   // ---- Upload workspace server to S3 ----
 
-  wf.rule('upload-workspace-server', 'Upload workspace server bundle to S3',
+  wf.rule('Upload workspace server bundle to S3',
     (e) => e.type === 'deploy:upload-workspace',
     async (_events, state) => {
       wf.log('Uploading workspace server to S3...');
@@ -159,7 +159,7 @@ export default defineWorkflow<DeployState>((wf) => {
 
   // ---- Full build (install + bundle all modules) ----
 
-  wf.rule('full-build', 'Build all modules',
+  wf.rule('Build all modules',
     (e) => e.type === 'build:full',
     async (_events, state) => {
       // Step 1: Install dependencies
@@ -178,11 +178,12 @@ export default defineWorkflow<DeployState>((wf) => {
       wf.emit({ type: 'build:bundle-api-lambda' });
       wf.emit({ type: 'build:bundle-workspace' });
     },
+    { manual: false },
   );
 
   // ---- CDK deploy ----
 
-  wf.rule('cdk-deploy', 'Full CDK deploy',
+  wf.rule('Full CDK deploy',
     (e) => e.type === 'deploy:cdk',
     async (_events, state) => {
       state.deploy = { status: 'deploying' };
@@ -202,11 +203,12 @@ export default defineWorkflow<DeployState>((wf) => {
         wf.log(`CDK deploy failed (exit ${result.exitCode})`, 'error');
       }
     },
+    { manual: false },
   );
 
   // ---- Initialize deploy state ----
 
-  wf.rule('deploy:init', 'Initialize deploy state',
+  wf.rule('Initialize deploy state',
     (e) => e.type === 'project:initialize',
     (_events, state) => {
       state.bundle = {
@@ -216,5 +218,6 @@ export default defineWorkflow<DeployState>((wf) => {
       };
       state.deploy = { status: 'idle' };
     },
+    { manual: false },
   );
 });
