@@ -52,8 +52,7 @@ export default defineWorkflow<DeployState>((wf) => {
     stackName: 'AntimatterStack',
     url: 'ide.antimatter.solutions',
     actions: {
-      build: { event: { type: 'build:full' }, icon: 'build' },
-      deploy: { event: { type: 'deploy:cdk' }, icon: 'play' },
+      promote: { event: { type: 'deploy:promote' }, icon: 'play' },
     },
   });
 
@@ -202,6 +201,29 @@ export default defineWorkflow<DeployState>((wf) => {
         state.deploy.status = 'failed';
         wf.log(`CDK deploy failed (exit ${result.exitCode})`, 'error');
       }
+    },
+    { manual: false },
+  );
+
+  // ---- Promote to production (validate builds, then deploy) ----
+
+  wf.rule('Promote to production',
+    (e) => e.type === 'deploy:promote',
+    async (_events, state) => {
+      // Validate that all bundles have succeeded
+      const { apiLambda, workspaceServer, frontend } = state.bundle;
+      const allSuccess = apiLambda.status === 'success'
+        && workspaceServer.status === 'success'
+        && frontend.status === 'success';
+
+      if (!allSuccess) {
+        const statuses = `api=${apiLambda.status}, ws=${workspaceServer.status}, fe=${frontend.status}`;
+        wf.log(`Cannot promote: not all bundles succeeded (${statuses})`, 'error');
+        return;
+      }
+
+      wf.log('All bundles valid. Promoting to production via CDK deploy...');
+      wf.emit({ type: 'deploy:cdk' });
     },
     { manual: false },
   );
