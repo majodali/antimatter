@@ -7,11 +7,12 @@ import {
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { EditorPanel } from '../editor/EditorPanel';
-import { TerminalPanel } from '../terminal/TerminalPanel';
+import { BottomPanelTabs } from './BottomPanelTabs';
 import { ChatPanel } from '../chat/ChatPanel';
 import { Separator } from '../ui/separator';
 import { useProjectStore } from '@/stores/projectStore';
 import { useTerminalStore } from '@/stores/terminalStore';
+import { useErrorStore } from '@/stores/errorStore';
 import { useUIStore } from '@/stores/uiStore';
 
 export function MainLayout() {
@@ -25,6 +26,8 @@ export function MainLayout() {
     if (connectionState === 'disconnected' || connectionState === 'error' || projectId !== currentProjectId) {
       connect(currentProjectId);
     }
+    // Load project errors from REST API
+    useErrorStore.getState().loadErrors(currentProjectId);
   }, [currentProjectId]);
 
   return (
@@ -50,9 +53,9 @@ export function MainLayout() {
 
               <PanelResizeHandle className="h-1 bg-border hover:bg-primary/50 transition-colors" />
 
-              {/* Terminal/Output */}
+              {/* Terminal + Problems */}
               <Panel defaultSize={30} minSize={15}>
-                <TerminalPanel />
+                <BottomPanelTabs />
               </Panel>
             </PanelGroup>
           </Panel>

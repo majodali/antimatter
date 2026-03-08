@@ -20,6 +20,7 @@ import type {
   WorkflowInvocationResult,
   WorkflowLogEntry,
   WorkflowRuntimeConfig,
+  ProjectError,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,9 @@ export class WorkflowRuntime<S> {
       },
       log: (message, level) => {
         this.logs.push({ message, level: level ?? 'info', timestamp: new Date().toISOString() });
+      },
+      reportErrors: (toolId: string, errors: ProjectError[]) => {
+        options.config?.onReportErrors?.(toolId, errors);
       },
     };
 

@@ -22,6 +22,7 @@ import { useBuildStore } from './buildStore';
 import { useFileStore } from './fileStore';
 import { useEditorStore } from './editorStore';
 import { usePipelineStore } from './pipelineStore';
+import { useErrorStore } from './errorStore';
 
 export type ConnectionState =
   | 'disconnected'
@@ -287,6 +288,13 @@ function handleWsMessage(
       case 'workflow-result':
         if (msg.result) {
           usePipelineStore.getState().handleWorkflowResult(msg.result, msg.state);
+        }
+        break;
+
+      // Project error snapshot from server-side ErrorStore
+      case 'project-errors-snapshot':
+        if (msg.errors) {
+          useErrorStore.getState().handleSnapshot(msg.errors);
         }
         break;
 

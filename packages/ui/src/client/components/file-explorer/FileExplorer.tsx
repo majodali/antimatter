@@ -6,6 +6,7 @@ import { FileTree } from './FileTree';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useProjectStore } from '@/stores/projectStore';
+import { useErrorStore } from '@/stores/errorStore';
 import { fetchFileTree, saveFile, createFolder } from '@/lib/api';
 import { eventLog } from '@/lib/eventLog';
 import type { WorkspacePath } from '@antimatter/filesystem';
@@ -22,6 +23,7 @@ export function FileExplorer() {
 
   const openFile = useEditorStore((s) => s.openFile);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const errorCounts = useErrorStore((s) => s.getErrorCountsByFile)();
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -180,6 +182,7 @@ export function FileExplorer() {
               selectedFile={selectedFile}
               onSelectFile={selectFile}
               onToggleFolder={toggleFolder}
+              errorCounts={errorCounts}
             />
           )}
         </div>

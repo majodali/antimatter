@@ -17,6 +17,19 @@ interface FileTreeProps {
   selectedFile: WorkspacePath | null;
   onSelectFile: (path: WorkspacePath) => void;
   onToggleFolder: (path: WorkspacePath) => void;
+  /** Error counts per file path — used to show error badges. */
+  errorCounts?: Map<string, number>;
+}
+
+/** Count errors for a directory node by summing child file errors. */
+function countDirectoryErrors(node: FileNode, errorCounts?: Map<string, number>): number {
+  if (!errorCounts) return 0;
+  if (!node.isDirectory) return errorCounts.get(node.path) ?? 0;
+  let total = 0;
+  for (const child of node.children ?? []) {
+    total += countDirectoryErrors(child, errorCounts);
+  }
+  return total;
 }
 
 export function FileTree({
@@ -26,6 +39,7 @@ export function FileTree({
   selectedFile,
   onSelectFile,
   onToggleFolder,
+  errorCounts,
 }: FileTreeProps) {
   return (
     <div className="select-none">
@@ -34,6 +48,10 @@ export function FileTree({
         const isSelected = selectedFile === node.path;
         const Icon = getFileIcon(node.name, node.isDirectory, isExpanded);
         const color = getFileColor(node.name, node.isDirectory);
+
+        const errCount = node.isDirectory
+          ? countDirectoryErrors(node, errorCounts)
+          : (errorCounts?.get(node.path) ?? 0);
 
         return (
           <div key={node.path}>
@@ -64,6 +82,11 @@ export function FileTree({
               {!node.isDirectory && <span className="w-4" />}
               <Icon className={cn('h-4 w-4 flex-shrink-0', color)} />
               <span className="truncate">{node.name}</span>
+              {errCount > 0 && (
+                <span className="ml-auto text-[10px] font-medium text-red-500 bg-red-500/10 rounded px-1 flex-shrink-0">
+                  {errCount}
+                </span>
+              )}
             </div>
 
             {node.isDirectory && isExpanded && node.children && (
@@ -74,6 +97,7 @@ export function FileTree({
                 selectedFile={selectedFile}
                 onSelectFile={onSelectFile}
                 onToggleFolder={onToggleFolder}
+                errorCounts={errorCounts}
               />
             )}
           </div>

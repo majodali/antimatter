@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import type { WorkflowManager } from '../services/workflow-manager.js';
+import type { ErrorStore } from '../services/error-store.js';
 
-export function createWorkflowRouter(workflowManager: WorkflowManager): Router {
+export function createWorkflowRouter(
+  workflowManager: WorkflowManager,
+  errorStore?: ErrorStore,
+): Router {
   const router = Router();
 
   // GET /state — current workflow state
@@ -76,6 +80,55 @@ export function createWorkflowRouter(workflowManager: WorkflowManager): Router {
     } catch (error) {
       res.status(500).json({
         error: 'Failed to reload workflow',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // GET /errors — returns all project errors
+  router.get('/errors', (_req, res) => {
+    try {
+      const errors = errorStore ? errorStore.getAllErrors() : [];
+      res.json({ errors });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to get project errors',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // POST /errors — set errors from a tool: { toolId, errors }
+  router.post('/errors', async (req, res) => {
+    try {
+      if (!errorStore) {
+        return res.status(503).json({ error: 'Error store not available' });
+      }
+      const { toolId, errors } = req.body as { toolId?: string; errors?: unknown[] };
+      if (!toolId) {
+        return res.status(400).json({ error: 'toolId is required' });
+      }
+      await errorStore.setErrors(toolId, (errors ?? []) as any[]);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to set project errors',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // DELETE /errors/:toolId — clear all errors from a tool
+  router.delete('/errors/:toolId', async (req, res) => {
+    try {
+      if (!errorStore) {
+        return res.status(503).json({ error: 'Error store not available' });
+      }
+      await errorStore.clearTool(req.params.toolId);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to clear tool errors',
         message: error instanceof Error ? error.message : String(error),
       });
     }

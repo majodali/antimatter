@@ -88,7 +88,7 @@ export function MonacoEditor({
       folding: true,
       lineDecorationsWidth: 10,
       lineNumbersMinChars: 3,
-      glyphMargin: false,
+      glyphMargin: true,
     });
 
     // Add keyboard shortcuts

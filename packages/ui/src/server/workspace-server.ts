@@ -58,6 +58,7 @@ import { createEventsRouter } from './routes/events.js';
 import { createWorkflowRouter } from './routes/workflow.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { WorkflowManager } from './services/workflow-manager.js';
+import { ErrorStore } from './services/error-store.js';
 import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
 
 // ---------------------------------------------------------------------------
@@ -105,7 +106,7 @@ eventLogger.startPeriodicFlush(10_000);
 //                    WebSocket broadcasts) but STILL reach the workflow engine.
 // Defaults are sensible for most projects; can be overridden via .antimatter/config.json.
 
-const DEFAULT_WATCHER_IGNORE = ['.git/'];
+const DEFAULT_WATCHER_IGNORE = ['.git/', '.vite-temp/'];
 const DEFAULT_EXPLORER_IGNORE = [
   'node_modules/', '.antimatter-cache/', 'dist/', '.next/', '__pycache__/', '.git/',
 ];
@@ -614,10 +615,14 @@ function broadcastToClients(msg: object): void {
   }
 }
 
+// Error store — server-side project error storage, broadcast to all clients
+const errorStore = new ErrorStore(env, broadcastToClients);
+
 // Workflow manager — event-driven rule engine
 const workflowManager = new WorkflowManager({
   env,
   broadcast: broadcastToClients,
+  errorStore,
   onExecStart: () => connectionManager.holdShutdown(),
   onExecEnd: () => connectionManager.releaseShutdown(),
 });
@@ -806,7 +811,7 @@ app.use('/api/environments', createEnvironmentRouter(workspace));
 app.use('/api/activity', createActivityRouter(workspace));
 app.use('/api/git', createGitRouter(workspace));
 app.use('/api/events', createEventsRouter(s3Client, PROJECTS_BUCKET, PROJECT_ID));
-app.use('/api/workflow', createWorkflowRouter(workflowManager));
+app.use('/api/workflow', createWorkflowRouter(workflowManager, errorStore));
 
 // ---------------------------------------------------------------------------
 // HTTP + WebSocket server
@@ -1077,6 +1082,9 @@ async function startup() {
 
   // Start PTY
   ptyManager.start(projectPath);
+
+  // Initialize error store (load persisted errors from disk)
+  await errorStore.initialize();
 
   // Start workflow manager (loads definition + state, fires project:initialize if first run)
   await workflowManager.start();

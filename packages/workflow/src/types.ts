@@ -91,6 +91,61 @@ export interface WorkflowRule<S = unknown> {
 }
 
 // ----------------------------------------------------------------------------
+// Errors — project error types for IDE display
+// ----------------------------------------------------------------------------
+
+/**
+ * Describes a category of project error — controls display in the IDE.
+ * Build scripts use built-in types (ErrorTypes) or define custom ones.
+ */
+export interface ErrorType {
+  /** Human-readable name, e.g. 'SyntaxError', 'BundleError'. */
+  readonly name: string;
+  /** Lucide icon name for the editor margin glyph and Problems panel. */
+  readonly icon: string;
+  /** CSS color for icon, badge, and underline. */
+  readonly color: string;
+  /** Underline style in the editor. */
+  readonly highlightStyle: 'squiggly' | 'dotted' | 'solid' | 'double';
+}
+
+/** Built-in error types — covers the common cases. Build scripts can define custom ones. */
+export const ErrorTypes = {
+  SyntaxError:  { name: 'SyntaxError',  icon: 'circle-x',           color: '#ef4444', highlightStyle: 'squiggly' } as ErrorType,
+  TypeError:    { name: 'TypeError',    icon: 'circle-alert',       color: '#f97316', highlightStyle: 'squiggly' } as ErrorType,
+  TestFailure:  { name: 'TestFailure',  icon: 'test-tube-diagonal', color: '#ef4444', highlightStyle: 'dotted'   } as ErrorType,
+  Warning:      { name: 'Warning',      icon: 'triangle-alert',     color: '#eab308', highlightStyle: 'squiggly' } as ErrorType,
+  Info:         { name: 'Info',         icon: 'info',               color: '#3b82f6', highlightStyle: 'dotted'   } as ErrorType,
+} as const satisfies Record<string, ErrorType>;
+
+/**
+ * A project error reported by a build tool, displayed in the IDE.
+ *
+ * Errors are keyed by (toolId, file) — calling `wf.reportErrors(toolId, errors)`
+ * replaces all previous errors from that tool.
+ */
+export interface ProjectError {
+  /** The category of error — controls display (icon, color, underline style). */
+  readonly errorType: ErrorType;
+  /** Identifier of the tool that reported this error (e.g. 'tsc', 'eslint', 'workflow'). */
+  readonly toolId: string;
+  /** Workspace-relative file path. */
+  readonly file: string;
+  /** Short error message. */
+  readonly message: string;
+  /** Additional details — supports limited HTML for styling and links. Shown on hover / expander. */
+  readonly detail?: string;
+  /** 1-based line number. */
+  readonly line?: number;
+  /** 1-based column number. */
+  readonly column?: number;
+  /** 1-based end line number for range highlighting. */
+  readonly endLine?: number;
+  /** 1-based end column number for range highlighting. */
+  readonly endColumn?: number;
+}
+
+// ----------------------------------------------------------------------------
 // Command Execution
 // ----------------------------------------------------------------------------
 
@@ -247,6 +302,14 @@ export interface Workflow<S> {
    * The runtime captures these for display.
    */
   log(message: string, level?: 'info' | 'warn' | 'error'): void;
+
+  /**
+   * Report errors from a tool. Replaces all previous errors from this toolId.
+   * Errors are persisted server-side and broadcast to all connected IDE clients.
+   *
+   * Pass an empty array to clear previous errors from this tool.
+   */
+  reportErrors(toolId: string, errors: ProjectError[]): void;
 }
 
 // ----------------------------------------------------------------------------
@@ -324,6 +387,8 @@ export interface WorkflowRuntimeConfig {
   readonly maxCycles?: number;
   /** Debounce window in ms for batching file events. Default: 300. */
   readonly debounceMs?: number;
+  /** Callback invoked when a rule calls wf.reportErrors(). */
+  readonly onReportErrors?: (toolId: string, errors: ProjectError[]) => void;
 }
 
 /** A log message captured during workflow execution. */

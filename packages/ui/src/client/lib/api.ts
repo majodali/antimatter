@@ -870,3 +870,9 @@ export async function runWorkflowRule(
     method: 'POST',
   });
 }
+
+export async function fetchWorkflowErrors(
+  projectId?: string,
+): Promise<{ errors: any[] }> {
+  return apiFetch<{ errors: any[] }>(`${workflowBase(projectId)}/errors`);
+}

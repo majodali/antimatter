@@ -3,8 +3,9 @@
 // Workflow scripts import from this module:
 //   import { defineWorkflow, type Workflow, type WorkflowEvent } from '@antimatter/workflow';
 
-export { defineWorkflow } from './types.js';
+export { defineWorkflow, ErrorTypes } from './types.js';
 export { WorkflowRuntime } from './runtime.js';
+export { parseTscErrors, parseEsbuildErrors, parseToolOutput } from './parsers.js';
 
 export type {
   // Events
@@ -18,6 +19,10 @@ export type {
   WorkflowAction,
   WorkflowRule,
   RuleOptions,
+
+  // Errors
+  ErrorType,
+  ProjectError,
 
   // Execution
   ExecOptions,

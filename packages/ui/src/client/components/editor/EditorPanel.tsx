@@ -7,7 +7,7 @@ import { Button } from '../ui/button';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore, scheduleAutoSave } from '@/stores/editorStore';
 import { useProjectStore } from '@/stores/projectStore';
-import { useBuildStore } from '@/stores/buildStore';
+import { useErrorStore } from '@/stores/errorStore';
 import { detectLanguage } from '@/lib/languageDetection';
 import { fetchFileContent } from '@/lib/api';
 import { eventLog } from '@/lib/eventLog';
@@ -25,8 +25,8 @@ export function EditorPanel() {
   const [error, setError] = useState<string | null>(null);
   const editorInstanceRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
-  const results = useBuildStore((s) => s.results);
-  const getDiagnosticsForFile = useBuildStore((s) => s.getDiagnosticsForFile);
+  const decorationsRef = useRef<string[]>([]);
+  const projectErrors = useErrorStore((s) => s.errors);
 
   useEffect(() => {
     if (selectedFile && !openFiles.has(selectedFile)) {
@@ -74,7 +74,7 @@ export function EditorPanel() {
     return () => window.removeEventListener('keydown', handler);
   }, [currentProjectId, saveActiveFile]);
 
-  // Set Monaco markers from build diagnostics
+  // Set Monaco decorations + markers from project errors (errorStore)
   useEffect(() => {
     const monaco = monacoRef.current;
     const editor = editorInstanceRef.current;
@@ -83,30 +83,72 @@ export function EditorPanel() {
     const model = editor.getModel();
     if (!model) return;
 
-    const diagnostics = getDiagnosticsForFile(activeFile);
-    const markers: monacoEditor.IMarkerData[] = diagnostics.map((d) => ({
+    const fileErrors = useErrorStore.getState().getErrorsForFile(activeFile);
+
+    // Map highlight styles to Monaco CSS classes
+    const styleToClass: Record<string, string> = {
+      squiggly: 'squiggly-error',
+      dotted: 'dotted-underline',
+      solid: 'solid-underline',
+      double: 'double-underline',
+    };
+
+    // Create decorations for custom error rendering
+    const decorations: monacoEditor.IModelDeltaDecoration[] = fileErrors.map((err) => {
+      const startLine = err.line ?? 1;
+      const startCol = err.column ?? 1;
+      const endLine = err.endLine ?? startLine;
+      const endCol = err.endColumn ?? (startCol + 1);
+      const cssClass = styleToClass[err.errorType.highlightStyle] ?? 'squiggly-error';
+
+      return {
+        range: new monaco.Range(startLine, startCol, endLine, endCol),
+        options: {
+          className: cssClass,
+          glyphMarginClassName: 'error-glyph-margin',
+          hoverMessage: {
+            value: err.detail
+              ? `**${err.errorType.name}**: ${err.message}\n\n${err.detail}`
+              : `**${err.errorType.name}**: ${err.message}`,
+          },
+          overviewRuler: {
+            color: err.errorType.color,
+            position: monaco.editor.OverviewRulerLane.Right,
+          },
+        },
+      };
+    });
+
+    decorationsRef.current = editor.deltaDecorations(decorationsRef.current, decorations);
+
+    // Also set markers for the problems widget (F8 navigation, etc.)
+    const markers: monacoEditor.IMarkerData[] = fileErrors.map((err) => ({
       severity:
-        d.severity === 'error'
-          ? monaco.MarkerSeverity.Error
-          : d.severity === 'warning'
-            ? monaco.MarkerSeverity.Warning
-            : monaco.MarkerSeverity.Info,
-      message: d.message,
-      startLineNumber: d.line ?? 1,
-      startColumn: d.column ?? 1,
-      endLineNumber: d.line ?? 1,
-      endColumn: (d.column ?? 1) + 1,
-      source: 'Build',
+        err.errorType.name === 'Warning' || err.errorType.name === 'Info'
+          ? err.errorType.name === 'Info'
+            ? monaco.MarkerSeverity.Info
+            : monaco.MarkerSeverity.Warning
+          : monaco.MarkerSeverity.Error,
+      message: err.message,
+      startLineNumber: err.line ?? 1,
+      startColumn: err.column ?? 1,
+      endLineNumber: err.endLine ?? (err.line ?? 1),
+      endColumn: err.endColumn ?? ((err.column ?? 1) + 1),
+      source: err.toolId,
     }));
 
-    monaco.editor.setModelMarkers(model, 'build-diagnostics', markers);
+    monaco.editor.setModelMarkers(model, 'project-errors', markers);
 
     return () => {
       if (model && !model.isDisposed()) {
-        monaco.editor.setModelMarkers(model, 'build-diagnostics', []);
+        monaco.editor.setModelMarkers(model, 'project-errors', []);
+      }
+      // Clear decorations on cleanup
+      if (editor && decorationsRef.current.length > 0) {
+        decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
       }
     };
-  }, [activeFile, results, getDiagnosticsForFile]);
+  }, [activeFile, projectErrors]);
 
   const handleEditorReady = useCallback(
     (editor: monacoEditor.IStandaloneCodeEditor, monaco: typeof import('monaco-editor')) => {

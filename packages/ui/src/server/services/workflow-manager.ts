@@ -18,6 +18,8 @@
 import { createHash } from 'node:crypto';
 import {
   WorkflowRuntime,
+  ErrorTypes,
+  parseEsbuildErrors,
   type WorkflowDefinition,
   type WorkflowDeclarations,
   type WorkflowEvent,
@@ -26,9 +28,11 @@ import {
   type PersistedRuleResult,
   type ExecOptions,
   type ExecResult,
+  type ProjectError,
 } from '@antimatter/workflow';
 import type { WorkspaceEnvironment, ExecuteOptions } from '@antimatter/workspace';
 import type { WatchEvent } from '@antimatter/filesystem';
+import type { ErrorStore } from './error-store.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,6 +43,8 @@ export interface WorkflowManagerOptions {
   readonly env: WorkspaceEnvironment;
   /** Callback to broadcast messages to WebSocket clients. */
   readonly broadcast: (msg: object) => void;
+  /** Server-side error store for persisting and broadcasting project errors. */
+  readonly errorStore?: ErrorStore;
   /** Pre-loaded definition (for testing — skips file loading). */
   readonly definition?: WorkflowDefinition<any>;
   /** Directory containing automation `.ts` files. Default: '.antimatter' */
@@ -73,6 +79,7 @@ export class WorkflowManager {
 
   private readonly env: WorkspaceEnvironment;
   private readonly broadcast: (msg: object) => void;
+  private readonly errorStore?: ErrorStore;
   private readonly preloadedDefinition?: WorkflowDefinition<any>;
   private readonly automationDir: string;
   private readonly statePath: string;
@@ -89,6 +96,7 @@ export class WorkflowManager {
   constructor(options: WorkflowManagerOptions) {
     this.env = options.env;
     this.broadcast = options.broadcast;
+    this.errorStore = options.errorStore;
     this.preloadedDefinition = options.definition;
     this.automationDir = options.automationDir ?? '.antimatter';
     this.statePath = options.statePath ?? '.antimatter/workflow-state.json';
@@ -107,6 +115,7 @@ export class WorkflowManager {
       // Testing path — use pre-loaded definition directly
       this.runtime = new WorkflowRuntime(this.preloadedDefinition, {
         executor: this.createExecutor(),
+        config: { onReportErrors: this.handleReportErrors.bind(this) },
       });
     } else {
       // Production path — load tagged definitions and build runtime with source tracking
@@ -121,6 +130,7 @@ export class WorkflowManager {
       // definitions with source file tracking.
       this.runtime = new WorkflowRuntime(() => {}, {
         executor: this.createExecutor(),
+        config: { onReportErrors: this.handleReportErrors.bind(this) },
       });
 
       // Now register all definitions with source file tracking
@@ -439,20 +449,12 @@ export class WorkflowManager {
 
       if (this.reloading) return;
       this.reloading = true;
-
-      const changedFiles = [...this.changedAutomationFiles];
       this.changedAutomationFiles.clear();
 
       try {
-        if (!this.runtime || changedFiles.length === 0) {
-          // No runtime or no changed files — do a full reload
-          console.log('[workflow-manager] Workflow definition changed — full reload');
-          await this.start();
-        } else {
-          // Incremental reload: only re-run changed files
-          console.log(`[workflow-manager] Incremental reload: ${changedFiles.map(f => f.split('/').pop()).join(', ')}`);
-          await this.incrementalReload(changedFiles);
-        }
+        // Always do a full refresh — delete state, reinitialize, re-emit all files.
+        // This is aggressive but safe: workflow state is a cache, not source of truth.
+        await this.fullRefresh();
 
         this.broadcast({
           type: 'workflow-reloaded',
@@ -461,9 +463,9 @@ export class WorkflowManager {
           files: this.loadedFiles,
         });
 
-        console.log('[workflow-manager] Auto-reload complete');
+        console.log('[workflow-manager] Full refresh complete');
       } catch (err) {
-        console.error('[workflow-manager] Auto-reload failed:', err);
+        console.error('[workflow-manager] Full refresh failed:', err);
         this.broadcast({
           type: 'workflow-reload-error',
           error: err instanceof Error ? err.message : String(err),
@@ -673,6 +675,12 @@ export class WorkflowManager {
       }
 
       this.loadedFiles = loaded;
+
+      // If all files loaded successfully, clear any previous workflow errors
+      if (loaded.length === tsFiles.length && this.errorStore) {
+        this.errorStore.clearTool('workflow').catch(() => {});
+      }
+
       return tagged.length > 0 ? tagged : null;
     } catch (err) {
       console.error('[workflow-manager] Failed to scan automation directory:', err);
@@ -719,6 +727,11 @@ export class WorkflowManager {
     });
 
     if (buildResult.errors.length > 0) {
+      // Parse structured esbuild errors into ProjectErrors for the IDE
+      if (this.errorStore) {
+        const projectErrors = parseEsbuildErrors(buildResult);
+        await this.errorStore.setErrors('workflow', projectErrors);
+      }
       throw new Error(`esbuild: ${buildResult.errors.map(e => e.text).join(', ')}`);
     }
 
@@ -761,6 +774,65 @@ export class WorkflowManager {
   }
 
   // ---- Private: Executor ----
+
+  /**
+   * Handle wf.reportErrors() calls from build scripts.
+   * Routes errors to the ErrorStore for persistence and broadcast.
+   */
+  private handleReportErrors(toolId: string, errors: ProjectError[]): void {
+    if (!this.errorStore) return;
+    // Fire and forget — don't block the rule action on persistence
+    this.errorStore.setErrors(toolId, errors).catch(err => {
+      console.error(`[workflow-manager] Failed to report errors for ${toolId}:`, err);
+    });
+  }
+
+  /**
+   * Full workflow refresh — deletes all persisted state, reloads definitions
+   * from disk, fires project:initialize, then emits file:change for every
+   * workspace file so rules can react to the current state of the project.
+   *
+   * Called when automation files change — intentionally aggressive to ensure
+   * stale state from old code is fully replaced.
+   */
+  private async fullRefresh(): Promise<void> {
+    console.log('[workflow-manager] Full refresh — deleting state and reinitializing');
+
+    // 1. Delete persisted state file
+    try {
+      const exists = await this.env.exists(this.statePath);
+      if (exists) await this.env.deleteFile(this.statePath);
+    } catch { /* ignore */ }
+
+    // 2. Clear in-memory state
+    this.persisted = null;
+    this.state = {} as any;
+    this.loadedDefinitions.clear();
+    this.loadedFiles = [];
+    this.runtime = null;
+
+    // 3. Clear stale workflow compilation errors
+    if (this.errorStore) {
+      await this.errorStore.clearTool('workflow');
+    }
+
+    // 4. Call start() — reloads definitions from disk, fires project:initialize (since no state)
+    await this.start();
+
+    // 5. Emit file:change for every workspace file so rules can react
+    const manifest = await this.computeFileManifest();
+    const now = new Date().toISOString();
+    const events: WorkflowEvent[] = Object.keys(manifest).map(path => ({
+      type: 'file:change' as const,
+      path,
+      timestamp: now,
+    }));
+
+    if (events.length > 0) {
+      console.log(`[workflow-manager] Full refresh: emitting file:change for ${events.length} file(s)`);
+      await this.processEvents(events);
+    }
+  }
 
   /**
    * Create the executor function that bridges workflow ExecOptions
