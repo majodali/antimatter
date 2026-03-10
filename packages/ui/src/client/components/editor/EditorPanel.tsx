@@ -176,7 +176,7 @@ export function EditorPanel() {
 
   if (!activeFile || !activeFileContent) {
     return (
-      <div className="h-full flex items-center justify-center bg-background">
+      <div className="h-full flex items-center justify-center bg-background" data-testid="editor-empty">
         <div className="text-center">
           <FileText className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
           <p className="text-muted-foreground">
@@ -209,7 +209,7 @@ export function EditorPanel() {
   }
 
   return (
-    <div className="h-full flex flex-col bg-background">
+    <div className="h-full flex flex-col bg-background" data-testid="editor-panel">
       {/* Tabs */}
       <div className="flex items-center gap-px bg-border overflow-x-auto">
         {openFilesList.map((file) => {
@@ -227,17 +227,21 @@ export function EditorPanel() {
                     : 'bg-muted text-muted-foreground hover:bg-muted/80'
                 }
               `}
+              data-testid={`editor-tab-${fileName}`}
+              data-path={file.path}
+              data-active={isActive ? 'true' : 'false'}
               onClick={() => useEditorStore.getState().setActiveFile(file.path)}
             >
               <FileText className="h-3.5 w-3.5" />
               <span className="whitespace-nowrap">{fileName}</span>
               {file.isDirty && (
-                <Circle className="h-2 w-2 fill-current text-amber-400" />
+                <Circle className="h-2 w-2 fill-current text-amber-400" data-testid={`editor-tab-dirty-${fileName}`} />
               )}
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-4 w-4 p-0 hover:bg-background/20"
+                data-testid={`editor-tab-close-${fileName}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   closeFile(file.path);
@@ -282,7 +286,7 @@ export function EditorPanel() {
             {activeFileContent.content.split('\n').length} lines
           </span>
         </div>
-        <div className={statusColor}>{statusText}</div>
+        <div className={statusColor} data-testid="editor-save-status">{statusText}</div>
       </div>
     </div>
   );

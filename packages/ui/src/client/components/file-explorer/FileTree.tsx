@@ -3,6 +3,11 @@ import { cn } from '@/lib/utils';
 import { getFileIcon, getFileColor } from '@/lib/fileIcons';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
+/** Encode a file path for use in data-testid attributes. Replaces / with -- */
+function encodePathForTestId(path: string): string {
+  return path.replace(/\//g, '--');
+}
+
 interface FileNode {
   name: string;
   path: WorkspacePath;
@@ -53,6 +58,8 @@ export function FileTree({
           ? countDirectoryErrors(node, errorCounts)
           : (errorCounts?.get(node.path) ?? 0);
 
+        const pathTestId = encodePathForTestId(node.path);
+
         return (
           <div key={node.path}>
             <div
@@ -62,6 +69,10 @@ export function FileTree({
                 !isSelected && 'text-foreground/90'
               )}
               style={{ paddingLeft: `${level * 12 + 8}px` }}
+              data-testid={`file-tree-item-${pathTestId}`}
+              data-path={node.path}
+              data-type={node.isDirectory ? 'directory' : 'file'}
+              data-expanded={node.isDirectory ? (isExpanded ? 'true' : 'false') : undefined}
               onClick={() => {
                 if (node.isDirectory) {
                   onToggleFolder(node.path);
@@ -71,7 +82,7 @@ export function FileTree({
               }}
             >
               {node.isDirectory && (
-                <span className="flex-shrink-0">
+                <span className="flex-shrink-0" data-testid={`file-tree-toggle-${pathTestId}`}>
                   {isExpanded ? (
                     <ChevronDown className="h-4 w-4" />
                   ) : (

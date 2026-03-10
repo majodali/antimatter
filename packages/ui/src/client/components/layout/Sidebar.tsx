@@ -24,6 +24,7 @@ export function Sidebar() {
           variant="ghost"
           size="icon"
           title="Explorer"
+          data-testid="sidebar-explorer-btn"
           className={cn(
             activeView === 'files' && 'bg-accent text-accent-foreground'
           )}
@@ -35,6 +36,7 @@ export function Sidebar() {
           variant="ghost"
           size="icon"
           title="Chat"
+          data-testid="sidebar-chat-btn"
           className={cn(
             chatPanelVisible && 'bg-accent text-accent-foreground'
           )}
@@ -46,6 +48,7 @@ export function Sidebar() {
           variant="ghost"
           size="icon"
           title="Build"
+          data-testid="sidebar-build-btn"
           className={cn(
             activeView === 'build' && 'bg-accent text-accent-foreground'
           )}
@@ -57,6 +60,7 @@ export function Sidebar() {
           variant="ghost"
           size="icon"
           title="Deploy"
+          data-testid="sidebar-deploy-btn"
           className={cn(
             activeView === 'deploy' && 'bg-accent text-accent-foreground'
           )}
@@ -68,6 +72,7 @@ export function Sidebar() {
           variant="ghost"
           size="icon"
           title="Git"
+          data-testid="sidebar-git-btn"
           className={cn(
             activeView === 'git' && 'bg-accent text-accent-foreground'
           )}
@@ -79,6 +84,7 @@ export function Sidebar() {
           variant="ghost"
           size="icon"
           title="Activity"
+          data-testid="sidebar-activity-btn"
           className={cn(
             activeView === 'activity' && 'bg-accent text-accent-foreground'
           )}

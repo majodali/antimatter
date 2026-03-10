@@ -1,60 +1,53 @@
 /**
  * BrowserActionContext — ActionContext implementation for in-browser testing.
  *
- * Drives the UI through a combination of:
- * - Zustand store actions (same code path as user clicks)
- * - Client API calls (for operations that go through HTTP)
+ * Drives the UI EXCLUSIVELY through DOM interactions via data-testid selectors.
+ * This ensures tests verify real UI behavior, not internal state.
  *
- * Includes configurable delay between actions for observability —
- * watching tests execute in real-time.
+ * When a required DOM element doesn't exist (i.e. the UI hasn't implemented
+ * that capability yet), a UINotSupportedError is thrown — distinct from a
+ * test failure. This surfaces as an amber "unsupported" indicator in the
+ * Test Results panel.
  */
 
-import type { WorkspacePath } from '@antimatter/filesystem';
 import type { ActionContext, GitStatusResult } from '../../shared/action-context.js';
-import { useFileStore } from '../stores/fileStore.js';
-import { useEditorStore } from '../stores/editorStore.js';
-import { useGitStore } from '../stores/gitStore.js';
-import { useBuildStore } from '../stores/buildStore.js';
-import { useApplicationStore } from '../stores/applicationStore.js';
-import { detectLanguage } from './languageDetection.js';
-import { getAccessToken } from './auth.js';
 import {
-  fetchFileTree,
-  fetchFileContent,
-  saveFile,
-  createFolder,
-  fetchBuildConfig,
-  saveBuildConfig as saveBuildConfigApi,
-  fetchDeployConfig,
-  saveDeployConfig as saveDeployConfigApi,
-  fetchDeployResults,
-  executeDeployStreaming,
-  fetchGitStatus,
-  gitStage,
-  gitUnstage,
-  gitCommit as apiGitCommit,
-  gitPush as apiGitPush,
-  gitPull as apiGitPull,
-  emitWorkflowEvent as apiEmitWorkflowEvent,
-  runWorkflowRule as apiRunWorkflowRule,
-  sendChatMessage,
-  clearChatHistory,
-} from './api.js';
+  UINotSupportedError,
+  findElement,
+  queryElement,
+  elementExists,
+  clickElement,
+  typeIntoElement,
+  pressEnter,
+  waitForElement,
+  waitForElementGone,
+  waitFor,
+  findAllByTestIdPrefix,
+  encodePathForTestId,
+  getTextContent,
+  expandAllFolders,
+  ensureParentFoldersExpanded,
+} from './dom-helpers.js';
 
 export interface BrowserActionContextOptions {
   /** Delay in ms between actions (default: 200). Set to 0 for full speed. */
   delayMs?: number;
-  /** Project ID for API calls (optional, uses active project if not set). */
-  projectId?: string;
+}
+
+// ---- Monaco bridge typings ----
+
+declare global {
+  interface Window {
+    __monacoEditor?: import('monaco-editor').editor.IStandaloneCodeEditor;
+    __monacoInstance?: typeof import('monaco-editor');
+  }
 }
 
 export class BrowserActionContext implements ActionContext {
   private readonly delayMs: number;
-  private readonly projectId?: string;
 
   constructor(options: BrowserActionContextOptions = {}) {
     this.delayMs = options.delayMs ?? 200;
-    this.projectId = options.projectId;
   }
 
   private async delay(): Promise<void> {
@@ -63,401 +56,418 @@ export class BrowserActionContext implements ActionContext {
     }
   }
 
+  /** Small extra settle time for React to process after DOM interaction. */
+  private async settle(ms = 150): Promise<void> {
+    await new Promise((r) => setTimeout(r, ms));
+  }
+
   // ---- Files ----
-  // Use API calls (same as UI file operations) + refresh file store
 
   async writeFile(path: string, content: string): Promise<void> {
-    await saveFile(path, content, this.projectId);
-    // Refresh file tree in store so UI updates
-    const tree = await fetchFileTree('/', this.projectId);
-    useFileStore.getState().setFiles(tree);
+    // Click the "New File" button in the file explorer
+    await clickElement('file-explorer-new-file-btn', 'writeFile');
+
+    // Wait for the creation input to appear
+    await waitForElement('file-explorer-create-input', { timeoutMs: 3000 });
+
+    // Type the filename (supports nested paths like "src/index.ts" —
+    // FileExplorer passes the full string to saveFile which handles it)
+    await typeIntoElement('file-explorer-create-input', path, 'writeFile');
+
+    // Press Enter to confirm creation
+    await pressEnter('file-explorer-create-input');
+
+    // Wait for the tree to refresh, then expand parent folders if path is nested
+    await this.settle(300);
+    if (path.includes('/')) {
+      await ensureParentFoldersExpanded(path);
+    }
+
+    // Wait for the file to appear in the tree
+    const pathTestId = `file-tree-item-${encodePathForTestId(path)}`;
+    await waitForElement(pathTestId, { timeoutMs: 5000 });
+
+    // Wait for the file to open in the editor (the FileExplorer auto-opens new files)
+    await this.settle(300);
+
+    // Set content via Monaco bridge
+    if (content && window.__monacoEditor) {
+      window.__monacoEditor.setValue(content);
+      await this.settle(100);
+
+      // Trigger save via Ctrl+S keyboard shortcut
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 's',
+          code: 'KeyS',
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await this.settle(300);
+    }
+
     await this.delay();
   }
 
   async readFile(path: string): Promise<string> {
-    return fetchFileContent(path, this.projectId);
+    // Open the file by clicking on it in the file tree
+    await this.openFileInEditor(path);
+
+    // Read content from Monaco editor
+    if (!window.__monacoEditor) {
+      throw new Error('Monaco editor not available — cannot read file content');
+    }
+
+    await this.settle(200);
+    return window.__monacoEditor.getValue();
   }
 
-  async deleteFile(path: string): Promise<void> {
-    // No dedicated delete API function in client — call directly
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/files`
-      : '/api/files';
-    const res = await fetch(`${base}/delete?path=${encodeURIComponent(path)}`, {
-      method: 'DELETE',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(body.message ?? body.error ?? `Delete failed: ${res.status}`);
-    }
-    // Refresh file tree + close editor tab if open
-    const tree = await fetchFileTree('/', this.projectId);
-    useFileStore.getState().setFiles(tree);
-    const editorState = useEditorStore.getState();
-    if (editorState.openFiles.has(path as WorkspacePath)) {
-      editorState.closeFile(path as WorkspacePath);
-    }
-    await this.delay();
+  async deleteFile(_path: string): Promise<void> {
+    // The UI does not have a delete button — throw UINotSupportedError
+    throw new UINotSupportedError(
+      'deleteFile',
+      'file-tree-context-delete',
+      'UI does not support file deletion — no delete button or context menu exists',
+    );
   }
 
   async mkdir(path: string): Promise<void> {
-    await createFolder(path, this.projectId);
-    const tree = await fetchFileTree('/', this.projectId);
-    useFileStore.getState().setFiles(tree);
+    // Click the "New Folder" button
+    await clickElement('file-explorer-new-folder-btn', 'mkdir');
+
+    // Wait for creation input
+    await waitForElement('file-explorer-create-input', { timeoutMs: 3000 });
+
+    // Type folder name (supports nested paths like "src/components")
+    await typeIntoElement('file-explorer-create-input', path, 'mkdir');
+
+    // Press Enter
+    await pressEnter('file-explorer-create-input');
+
+    // Wait for the tree to refresh, then expand parent folders if nested
+    await this.settle(300);
+    if (path.includes('/')) {
+      await ensureParentFoldersExpanded(path);
+    }
+
+    // Wait for the folder to appear in the tree
+    const pathTestId = `file-tree-item-${encodePathForTestId(path)}`;
+    await waitForElement(pathTestId, { timeoutMs: 5000 });
+
     await this.delay();
   }
 
-  async getFileTree(path?: string): Promise<any[]> {
-    return fetchFileTree(path ?? '/', this.projectId);
+  async getFileTree(_path?: string): Promise<any[]> {
+    // Expand all collapsed folders first so we can see the full tree
+    await expandAllFolders();
+
+    // Scrape all file-tree-item-* elements from the DOM
+    const items = findAllByTestIdPrefix('file-tree-item-');
+    const result: any[] = [];
+
+    for (const el of items) {
+      const filePath = el.getAttribute('data-path');
+      if (filePath) {
+        const isDir = el.getAttribute('data-type') === 'directory';
+        result.push({
+          name: filePath.split('/').pop() || filePath,
+          path: filePath,
+          type: isDir ? 'directory' : 'file',
+        });
+      }
+    }
+
+    return result;
   }
 
   // ---- Build ----
+  // These operations have no direct UI representation — throw UINotSupportedError
 
-  async saveBuildConfig(config: { rules: any[]; targets: any[] }): Promise<void> {
-    await saveBuildConfigApi(config as any, this.projectId);
-    useBuildStore.getState().setRules(config.rules);
-    await this.delay();
+  async saveBuildConfig(_config: { rules: any[]; targets: any[] }): Promise<void> {
+    throw new UINotSupportedError('saveBuildConfig', 'build-config-save', 'Build config editing not available via DOM');
   }
 
   async loadBuildConfig(): Promise<{ rules: any[]; targets: any[] }> {
-    const config = await fetchBuildConfig(this.projectId);
-    return { rules: config.rules ?? [], targets: (config as any).targets ?? [] };
+    throw new UINotSupportedError('loadBuildConfig', 'build-config-load', 'Build config loading not available via DOM');
   }
 
   async executeBuild(): Promise<any[]> {
-    // Trigger build via workflow event (same as Build All button)
-    const result = await apiRunWorkflowRule('build', this.projectId);
+    // Look for a build button in the sidebar
+    if (!elementExists('sidebar-build-btn')) {
+      throw new UINotSupportedError('executeBuild', 'sidebar-build-btn');
+    }
+    // Click the build sidebar, then look for a run button
+    await clickElement('sidebar-build-btn', 'executeBuild');
+    await this.settle(300);
+
+    // Try to find a build-run-all button
+    const buildRunBtn = queryElement('build-run-all-btn');
+    if (!buildRunBtn) {
+      throw new UINotSupportedError('executeBuild', 'build-run-all-btn', 'Build panel does not have a Run All button accessible via DOM');
+    }
+    buildRunBtn.click();
+    await this.settle(500);
     await this.delay();
-    return result?.results ?? [];
+    return [];
   }
 
   async getBuildResults(): Promise<any[]> {
-    return Array.from(useBuildStore.getState().results.values());
+    throw new UINotSupportedError('getBuildResults', 'build-results', 'Build results not accessible via DOM');
   }
 
   async clearBuildResults(): Promise<void> {
-    useBuildStore.getState().clearResults();
-    await this.delay();
+    throw new UINotSupportedError('clearBuildResults', 'build-results-clear', 'Build results clearing not available via DOM');
   }
 
-  async clearBuildCache(targetId?: string): Promise<void> {
-    // Call API directly
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/build`
-      : '/api/build';
-    const qs = targetId ? `?targetId=${encodeURIComponent(targetId)}` : '';
-    await fetch(`${base}/cache${qs}`, {
-      method: 'DELETE',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    await this.delay();
+  async clearBuildCache(_targetId?: string): Promise<void> {
+    throw new UINotSupportedError('clearBuildCache', 'build-cache-clear', 'Build cache clearing not available via DOM');
   }
 
   async getStaleTargets(): Promise<string[]> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/build`
-      : '/api/build';
-    const res = await fetch(`${base}/changes`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    const body = await res.json();
-    return body.staleTargetIds ?? [];
+    throw new UINotSupportedError('getStaleTargets', 'build-stale-targets', 'Stale targets not accessible via DOM');
   }
 
   // ---- Deploy ----
 
-  async saveDeployConfig(config: { modules: any[]; packaging: any[]; targets: any[] }): Promise<void> {
-    await saveDeployConfigApi(config as any, this.projectId);
-    await this.delay();
+  async saveDeployConfig(_config: { modules: any[]; packaging: any[]; targets: any[] }): Promise<void> {
+    throw new UINotSupportedError('saveDeployConfig', 'deploy-config-save', 'Deploy config editing not available via DOM');
   }
 
   async loadDeployConfig(): Promise<{ modules: any[]; packaging: any[]; targets: any[] }> {
-    return fetchDeployConfig(this.projectId) as any;
+    throw new UINotSupportedError('loadDeployConfig', 'deploy-config-load', 'Deploy config loading not available via DOM');
   }
 
-  async executeDeploy(options?: { targetIds?: string[]; dryRun?: boolean }): Promise<any[]> {
-    // Use streaming deploy API, collect results
-    const results: any[] = [];
-    await executeDeployStreaming(
-      options?.targetIds,
-      (event) => {
-        if (event.type === 'deploy-complete' && event.results) {
-          results.push(...event.results);
-        }
-      },
-      this.projectId,
-      options?.dryRun,
-    );
-    await this.delay();
-    return results;
+  async executeDeploy(_options?: { targetIds?: string[]; dryRun?: boolean }): Promise<any[]> {
+    throw new UINotSupportedError('executeDeploy', 'deploy-run-btn', 'Deploy execution not available via DOM');
   }
 
   async getDeployResults(): Promise<any[]> {
-    return fetchDeployResults(this.projectId);
+    throw new UINotSupportedError('getDeployResults', 'deploy-results', 'Deploy results not accessible via DOM');
   }
 
   async clearDeployResults(): Promise<void> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/deploy`
-      : '/api/deploy';
-    await fetch(`${base}/results`, {
-      method: 'DELETE',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    await this.delay();
+    throw new UINotSupportedError('clearDeployResults', 'deploy-results-clear', 'Deploy results clearing not available via DOM');
   }
 
   // ---- Environments ----
 
-  async saveEnvironmentConfig(config: { pipeline: any; environments: any[]; transitions: any[] }): Promise<void> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/environments`
-      : '/api/environments';
-    await fetch(`${base}/config`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(config),
-    });
-    await this.delay();
+  async saveEnvironmentConfig(_config: { pipeline: any; environments: any[]; transitions: any[] }): Promise<void> {
+    throw new UINotSupportedError('saveEnvironmentConfig', 'env-config-save', 'Environment config not available via DOM');
   }
 
   async loadEnvironmentConfig(): Promise<{ pipeline: any; environments: any[]; transitions: any[] }> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/environments`
-      : '/api/environments';
-    const res = await fetch(`${base}/config`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    return res.json();
+    throw new UINotSupportedError('loadEnvironmentConfig', 'env-config-load', 'Environment config not available via DOM');
   }
 
-  async createEnvironment(name: string, stageId?: string): Promise<any> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/environments`
-      : '/api/environments';
-    const res = await fetch(base, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ name, stageId }),
-    });
-    await this.delay();
-    return res.json();
+  async createEnvironment(_name: string, _stageId?: string): Promise<any> {
+    throw new UINotSupportedError('createEnvironment', 'env-create-btn', 'Environment creation not available via DOM');
   }
 
   async listEnvironments(): Promise<any[]> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/environments`
-      : '/api/environments';
-    const res = await fetch(base, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    const body = await res.json();
-    return body.environments ?? [];
+    throw new UINotSupportedError('listEnvironments', 'env-list', 'Environment listing not available via DOM');
   }
 
-  async getEnvironment(envId: string): Promise<any> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/environments`
-      : '/api/environments';
-    const res = await fetch(`${base}/${envId}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    return res.json();
+  async getEnvironment(_envId: string): Promise<any> {
+    throw new UINotSupportedError('getEnvironment', 'env-detail', 'Environment detail not available via DOM');
   }
 
-  async destroyEnvironment(envId: string): Promise<void> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/environments`
-      : '/api/environments';
-    await fetch(`${base}/${envId}`, {
-      method: 'DELETE',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    await this.delay();
+  async destroyEnvironment(_envId: string): Promise<void> {
+    throw new UINotSupportedError('destroyEnvironment', 'env-destroy-btn', 'Environment destruction not available via DOM');
   }
 
   // ---- Agent ----
 
-  async sendChat(message: string): Promise<{ response: string }> {
-    const result = await sendChatMessage(message, this.projectId);
-    await this.delay();
-    return result;
+  async sendChat(_message: string): Promise<{ response: string }> {
+    throw new UINotSupportedError('sendChat', 'chat-input', 'Chat not available via DOM automation');
   }
 
   async getHistory(): Promise<any[]> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/agent`
-      : '/api/agent';
-    const res = await fetch(`${base}/history`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    const body = await res.json();
-    return body.history ?? [];
+    throw new UINotSupportedError('getHistory', 'chat-history', 'Chat history not available via DOM');
   }
 
   async clearHistory(): Promise<void> {
-    await clearChatHistory(this.projectId);
-    await this.delay();
+    throw new UINotSupportedError('clearHistory', 'chat-clear-btn', 'Chat history clearing not available via DOM');
   }
 
   async getCustomTools(): Promise<any[]> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/agent`
-      : '/api/agent';
-    const res = await fetch(`${base}/tools`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    const body = await res.json();
-    return body.tools ?? [];
+    throw new UINotSupportedError('getCustomTools', 'agent-tools', 'Agent tools not available via DOM');
   }
 
-  async saveCustomTools(tools: any[]): Promise<void> {
-    const token = await this.getToken();
-    const base = this.projectId
-      ? `/api/projects/${this.projectId}/agent`
-      : '/api/agent';
-    await fetch(`${base}/tools`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ tools }),
-    });
-    await this.delay();
+  async saveCustomTools(_tools: any[]): Promise<void> {
+    throw new UINotSupportedError('saveCustomTools', 'agent-tools-save', 'Agent tools saving not available via DOM');
   }
 
-  // ---- Editor (via Zustand store — same code path as UI) ----
+  // ---- Editor (via DOM + Monaco bridge) ----
 
   async openFileInEditor(path: string): Promise<void> {
-    const content = await this.readFile(path);
-    const language = detectLanguage(path);
-    const editorStore = useEditorStore.getState();
-    editorStore.openFile(path as WorkspacePath, content, language);
-    // Also select in file store for tree highlight
-    useFileStore.getState().selectFile(path as WorkspacePath);
+    const pathTestId = `file-tree-item-${encodePathForTestId(path)}`;
+
+    // Make sure the explorer sidebar is active
+    if (elementExists('sidebar-explorer-btn')) {
+      await clickElement('sidebar-explorer-btn', 'openFileInEditor');
+      await this.settle(100);
+    }
+
+    // For nested paths, expand parent folders so the target item is in the DOM
+    if (path.includes('/')) {
+      await ensureParentFoldersExpanded(path);
+    }
+
+    // Click the file in the tree to open it
+    await clickElement(pathTestId, 'openFileInEditor');
+    await this.settle(300);
+
     await this.delay();
   }
 
   async getActiveFile(): Promise<string | null> {
-    return useEditorStore.getState().activeFile;
+    // Find the editor tab with data-active="true"
+    const tabs = findAllByTestIdPrefix('editor-tab-');
+    for (const tab of tabs) {
+      // Skip close buttons (editor-tab-close-*) and dirty indicators (editor-tab-dirty-*)
+      const testId = tab.getAttribute('data-testid') ?? '';
+      if (testId.includes('-close-') || testId.includes('-dirty-')) continue;
+
+      if (tab.getAttribute('data-active') === 'true') {
+        return tab.getAttribute('data-path') ?? null;
+      }
+    }
+    return null;
   }
 
   async getOpenTabs(): Promise<string[]> {
-    return Array.from(useEditorStore.getState().openFiles.keys());
+    const tabs = findAllByTestIdPrefix('editor-tab-');
+    const paths: string[] = [];
+    for (const tab of tabs) {
+      const testId = tab.getAttribute('data-testid') ?? '';
+      // Skip close buttons and dirty indicators
+      if (testId.includes('-close-') || testId.includes('-dirty-')) continue;
+
+      const path = tab.getAttribute('data-path');
+      if (path) {
+        paths.push(path);
+      }
+    }
+    return paths;
   }
 
   async closeTab(path: string): Promise<void> {
-    useEditorStore.getState().closeFile(path as WorkspacePath);
+    const fileName = path.split('/').pop() ?? path;
+    const closeTestId = `editor-tab-close-${fileName}`;
+
+    await clickElement(closeTestId, 'closeTab');
+    await this.settle(200);
     await this.delay();
   }
 
   async editFileContent(path: string, content: string): Promise<void> {
-    useEditorStore.getState().updateFileContent(path as WorkspacePath, content);
+    // Open the file first
+    await this.openFileInEditor(path);
+    await this.settle(200);
+
+    // Set content via Monaco bridge
+    if (!window.__monacoEditor) {
+      throw new Error('Monaco editor not available — cannot edit file content');
+    }
+
+    window.__monacoEditor.setValue(content);
+    await this.settle(100);
+
+    // Trigger save via Ctrl+S
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 's',
+        code: 'KeyS',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await this.settle(300);
+
     await this.delay();
   }
 
   async saveActiveFile(): Promise<void> {
-    await useEditorStore.getState().saveActiveFile(this.projectId);
+    // Dispatch Ctrl+S keyboard event
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 's',
+        code: 'KeyS',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await this.settle(300);
     await this.delay();
   }
 
-  // ---- Git (via client API — triggers store updates through UI refresh) ----
+  // ---- Git (via DOM interaction with Git panel) ----
 
   async getGitStatus(): Promise<GitStatusResult> {
-    const status = await fetchGitStatus(this.projectId);
-    // Update git store so UI reflects
-    // Note: gitStore.loadStatus does the same but we already have the data
-    return {
-      initialized: status.initialized,
-      branch: status.branch,
-      staged: status.staged.map((f) => ({ path: f.path, status: f.status })),
-      unstaged: status.unstaged.map((f) => ({ path: f.path, status: f.status })),
-      untracked: status.untracked,
-    };
+    throw new UINotSupportedError('getGitStatus', 'git-status', 'Git status not fully accessible via DOM');
   }
 
-  async stageFiles(files: string[]): Promise<void> {
-    await gitStage(files, this.projectId);
-    await useGitStore.getState().loadStatus(this.projectId);
-    await this.delay();
+  async stageFiles(_files: string[]): Promise<void> {
+    throw new UINotSupportedError('stageFiles', 'git-stage', 'Git staging not available via DOM');
   }
 
-  async unstageFiles(files: string[]): Promise<void> {
-    await gitUnstage(files, this.projectId);
-    await useGitStore.getState().loadStatus(this.projectId);
-    await this.delay();
+  async unstageFiles(_files: string[]): Promise<void> {
+    throw new UINotSupportedError('unstageFiles', 'git-unstage', 'Git unstaging not available via DOM');
   }
 
-  async gitCommit(message: string): Promise<void> {
-    await apiGitCommit(message, this.projectId);
-    await useGitStore.getState().loadStatus(this.projectId);
+  async gitCommit(_message: string): Promise<void> {
+    // Try to use the Git panel UI
+    if (!elementExists('git-commit-input')) {
+      throw new UINotSupportedError('gitCommit', 'git-commit-input', 'Git commit input not found in DOM');
+    }
+
+    await typeIntoElement('git-commit-input', _message, 'gitCommit');
+    await clickElement('git-commit-btn', 'gitCommit');
+    await this.settle(500);
     await this.delay();
   }
 
   async gitPush(): Promise<void> {
-    await apiGitPush(undefined, undefined, this.projectId);
+    if (!elementExists('git-push-btn')) {
+      throw new UINotSupportedError('gitPush', 'git-push-btn', 'Git push button not found in DOM');
+    }
+    await clickElement('git-push-btn', 'gitPush');
+    await this.settle(500);
     await this.delay();
   }
 
   async gitPull(): Promise<void> {
-    await apiGitPull(undefined, undefined, this.projectId);
-    await useGitStore.getState().loadStatus(this.projectId);
+    if (!elementExists('git-pull-btn')) {
+      throw new UINotSupportedError('gitPull', 'git-pull-btn', 'Git pull button not found in DOM');
+    }
+    await clickElement('git-pull-btn', 'gitPull');
+    await this.settle(500);
     await this.delay();
   }
 
-  // ---- Workflow (via client API + application store) ----
+  // ---- Workflow (no direct DOM representation) ----
 
-  async emitWorkflowEvent(event: { type: string; [key: string]: unknown }): Promise<any> {
-    const result = await apiEmitWorkflowEvent(event, this.projectId);
-    await this.delay();
-    return result;
+  async emitWorkflowEvent(_event: { type: string; [key: string]: unknown }): Promise<any> {
+    throw new UINotSupportedError('emitWorkflowEvent', 'workflow-event', 'Workflow events not available via DOM');
   }
 
-  async runWorkflowRule(ruleId: string): Promise<any> {
-    const result = await useApplicationStore.getState().runRule(ruleId, this.projectId);
-    await this.delay();
-    return result;
+  async runWorkflowRule(_ruleId: string): Promise<any> {
+    throw new UINotSupportedError('runWorkflowRule', 'workflow-rule-run', 'Workflow rule execution not available via DOM');
   }
 
   async getWorkflowState(): Promise<unknown> {
-    return useApplicationStore.getState().getWorkflowState();
+    throw new UINotSupportedError('getWorkflowState', 'workflow-state', 'Workflow state not accessible via DOM');
   }
 
   async getWorkflowDeclarations(): Promise<any> {
-    return useApplicationStore.getState().getDeclarations();
+    throw new UINotSupportedError('getWorkflowDeclarations', 'workflow-declarations', 'Workflow declarations not accessible via DOM');
   }
 
   async getProjectErrors(): Promise<any[]> {
-    return useApplicationStore.getState().getErrors();
-  }
-
-  // ---- Auth helper ----
-
-  private async getToken(): Promise<string | null> {
-    try {
-      return await getAccessToken();
-    } catch {
-      return null;
-    }
+    throw new UINotSupportedError('getProjectErrors', 'project-errors', 'Project errors not accessible via DOM');
   }
 }

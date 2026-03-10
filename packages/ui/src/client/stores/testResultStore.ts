@@ -23,6 +23,10 @@ export interface TestResultFilters {
   readonly fixture: 'all' | 'api' | 'service' | 'browser';
 }
 
+// ---- Tab status for cross-tab test lifecycle ----
+
+export type TestTabStatus = 'idle' | 'creating' | 'loading' | 'ready' | 'running' | 'cleaning';
+
 // ---- Store interface ----
 
 interface TestResultState {
@@ -33,6 +37,10 @@ interface TestResultState {
   currentTestId: string | null;
   filters: TestResultFilters;
   expandedAreas: Set<string>;
+  /** ID of the disposable test project (cross-tab mode). */
+  testProjectId: string | null;
+  /** Lifecycle status of the cross-tab test executor. */
+  testTabStatus: TestTabStatus;
 
   // Actions — mutators
   setResults: (results: StoredTestResult[]) => void;
@@ -45,11 +53,13 @@ interface TestResultState {
   expandAll: () => void;
   collapseAll: () => void;
   clearResults: () => void;
+  setTestProjectId: (id: string | null) => void;
+  setTestTabStatus: (status: TestTabStatus) => void;
 
   // Selectors
   getFilteredResults: () => StoredTestResult[];
   getResultsByArea: () => Map<string, StoredTestResult[]>;
-  getSummary: () => { total: number; passed: number; failed: number; notRun: number };
+  getSummary: () => { total: number; passed: number; failed: number; unsupported: number; notRun: number };
   getResultForTest: (testId: string) => StoredTestResult | undefined;
 }
 
@@ -61,6 +71,8 @@ export const useTestResultStore = create<TestResultState>()((set, get) => ({
   currentTestId: null,
   filters: { status: 'all', area: 'all', fixture: 'all' },
   expandedAreas: new Set<string>(),
+  testProjectId: null,
+  testTabStatus: 'idle',
 
   // ---- Actions ----
 
@@ -117,6 +129,10 @@ export const useTestResultStore = create<TestResultState>()((set, get) => ({
 
   clearResults: () => set({ results: [], runs: [], currentTestId: null }),
 
+  setTestProjectId: (id) => set({ testProjectId: id }),
+
+  setTestTabStatus: (status) => set({ testTabStatus: status }),
+
   // ---- Selectors ----
 
   getFilteredResults: () => {
@@ -144,11 +160,13 @@ export const useTestResultStore = create<TestResultState>()((set, get) => ({
   getSummary: () => {
     const { results } = get();
     const passed = results.filter((r) => r.pass).length;
-    const failed = results.filter((r) => !r.pass).length;
+    const unsupported = results.filter((r) => r.status === 'unsupported').length;
+    const failed = results.filter((r) => !r.pass && r.status !== 'unsupported').length;
     return {
       total: results.length,
       passed,
       failed,
+      unsupported,
       notRun: 0, // Will be calculated when we know total test count
     };
   },

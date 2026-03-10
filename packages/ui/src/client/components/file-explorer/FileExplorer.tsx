@@ -109,6 +109,7 @@ export function FileExplorer() {
             className="h-6 w-6"
             onClick={loadFiles}
             disabled={isLoading}
+            data-testid="file-explorer-refresh-btn"
           >
             <RefreshCw
               className={cn('h-3.5 w-3.5', isLoading && 'animate-spin')}
@@ -119,6 +120,7 @@ export function FileExplorer() {
             size="icon"
             className="h-6 w-6"
             onClick={() => { cancelCreation(); setCreatingType('file'); }}
+            data-testid="file-explorer-new-file-btn"
           >
             <FilePlus className="h-3.5 w-3.5" />
           </Button>
@@ -127,10 +129,11 @@ export function FileExplorer() {
             size="icon"
             className="h-6 w-6"
             onClick={() => { cancelCreation(); setCreatingType('folder'); }}
+            data-testid="file-explorer-new-folder-btn"
           >
             <FolderPlus className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-6 w-6">
+          <Button variant="ghost" size="icon" className="h-6 w-6" data-testid="file-explorer-more-btn">
             <MoreVertical className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -152,6 +155,7 @@ export function FileExplorer() {
                 type="text"
                 className="flex-1 bg-background border border-primary rounded px-1 py-0.5 text-xs outline-none"
                 placeholder={creatingType === 'file' ? 'file name...' : 'folder name...'}
+                data-testid="file-explorer-create-input"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => {
@@ -164,7 +168,7 @@ export function FileExplorer() {
           )}
 
           {isLoading ? (
-            <div className="px-4 py-2 text-xs text-muted-foreground">
+            <div className="px-4 py-2 text-xs text-muted-foreground" data-testid="file-explorer-loading">
               Loading files...
             </div>
           ) : error ? (
@@ -172,7 +176,7 @@ export function FileExplorer() {
               {error}
             </div>
           ) : files.length === 0 && !creatingType ? (
-            <div className="px-4 py-2 text-xs text-muted-foreground">
+            <div className="px-4 py-2 text-xs text-muted-foreground" data-testid="file-explorer-empty">
               No files found
             </div>
           ) : (

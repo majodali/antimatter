@@ -42,8 +42,20 @@ export function MonacoEditor({
   filePathRef.current = filePath;
   languageRef.current = language;
 
+  // Expose editor instance on window for test automation (Monaco has no data-testid support)
+  useEffect(() => {
+    return () => {
+      delete (window as any).__monacoEditor;
+      delete (window as any).__monacoInstance;
+    };
+  }, []);
+
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+
+    // Expose for test automation
+    (window as any).__monacoEditor = editor;
+    (window as any).__monacoInstance = monaco;
 
     // Configure TypeScript/JavaScript language defaults
     const tsDefaults = monaco.languages.typescript.typescriptDefaults;

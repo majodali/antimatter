@@ -38,8 +38,9 @@ export function Header() {
             className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
             onClick={handleSwitchProject}
             title="Switch project"
+            data-testid="header-project-switch"
           >
-            <span>/ {currentProject.name}</span>
+            <span data-testid="header-project-name">/ {currentProject.name}</span>
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
         )}

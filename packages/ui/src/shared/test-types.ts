@@ -59,6 +59,13 @@ export interface StoredTestResult {
   readonly runId: string;
   readonly fixture: 'api' | 'service' | 'browser';
   readonly timestamp: string;
+  /**
+   * Result classification:
+   * - 'tested' — test ran to completion (pass or fail)
+   * - 'unsupported' — UI capability doesn't exist (UINotSupportedError)
+   * - 'error' — uncaught error during test execution
+   */
+  readonly status?: 'tested' | 'unsupported' | 'error';
 }
 
 /** Summary of a complete test run. */

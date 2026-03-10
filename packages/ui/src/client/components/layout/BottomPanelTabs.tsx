@@ -27,6 +27,7 @@ export function BottomPanelTabs() {
         <TabButton
           active={activeTab === 'terminal'}
           onClick={() => setActiveTab('terminal')}
+          testId="bottom-panel-terminal-tab"
         >
           <TerminalIcon className="h-3.5 w-3.5" />
           Terminal
@@ -35,6 +36,7 @@ export function BottomPanelTabs() {
           active={activeTab === 'problems'}
           onClick={() => setActiveTab('problems')}
           badge={errorCount > 0 ? errorCount : undefined}
+          testId="bottom-panel-problems-tab"
         >
           <AlertCircle className="h-3.5 w-3.5" />
           Problems
@@ -43,6 +45,7 @@ export function BottomPanelTabs() {
           active={activeTab === 'tests'}
           onClick={() => setActiveTab('tests')}
           badge={failedTests > 0 ? failedTests : undefined}
+          testId="bottom-panel-tests-tab"
         >
           <TestTube2 className="h-3.5 w-3.5" />
           Tests
@@ -69,11 +72,13 @@ function TabButton({
   active,
   onClick,
   badge,
+  testId,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   badge?: number;
+  testId?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -87,6 +92,7 @@ function TabButton({
         }
       `}
       onClick={onClick}
+      data-testid={testId}
     >
       {children}
       {badge !== undefined && badge > 0 && (

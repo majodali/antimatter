@@ -30,7 +30,7 @@ export function MainLayout() {
   }, [currentProjectId]);
 
   return (
-    <div className="h-screen flex flex-col bg-background">
+    <div className="h-screen flex flex-col bg-background" data-testid="main-layout">
       <Header />
       <Separator />
       <div className="flex-1 overflow-hidden">

@@ -105,7 +105,7 @@ export function ProjectPicker() {
       : 0;
 
   return (
-    <div className="h-screen flex items-center justify-center bg-background">
+    <div className="h-screen flex items-center justify-center bg-background" data-testid="project-picker">
       <div className="w-full max-w-md mx-auto p-6">
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-foreground mb-2">Antimatter IDE</h1>
@@ -140,8 +140,9 @@ export function ProjectPicker() {
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
             className="flex-1 bg-secondary text-foreground rounded-md px-3 py-2 text-sm border border-border focus:outline-none focus:ring-2 focus:ring-ring"
             disabled={isBusy}
+            data-testid="project-picker-name-input"
           />
-          <Button onClick={handleCreate} disabled={isBusy || !newName.trim()}>
+          <Button onClick={handleCreate} disabled={isBusy || !newName.trim()} data-testid="project-picker-create-btn">
             <Plus className="h-4 w-4 mr-1" />
             Create
           </Button>
@@ -206,6 +207,7 @@ export function ProjectPicker() {
                   key={project.id}
                   className="flex items-center gap-3 px-4 py-3 rounded-md border border-border hover:bg-secondary/50 cursor-pointer transition-colors"
                   onClick={() => selectProject(project.id)}
+                  data-testid={`project-picker-item-${project.id}`}
                 >
                   <FolderOpen className="h-5 w-5 text-primary shrink-0" />
                   <div className="flex-1 min-w-0">
@@ -222,6 +224,7 @@ export function ProjectPicker() {
                     className="h-7 w-7 shrink-0"
                     onClick={(e) => handleDelete(project.id, e)}
                     title="Delete project"
+                    data-testid={`project-picker-item-delete-${project.id}`}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>

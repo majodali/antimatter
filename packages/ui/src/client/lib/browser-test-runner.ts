@@ -16,7 +16,11 @@ import type { TestModule, StoredTestResult, TestRunSummary, FeatureArea } from '
 import { allTestModules } from '../../shared/test-modules/index.js';
 import { BrowserActionContext } from './browser-action-context.js';
 import type { BrowserActionContextOptions } from './browser-action-context.js';
+import { UINotSupportedError } from './dom-helpers.js';
 import { useTestResultStore } from '../stores/testResultStore.js';
+import { useProjectStore } from '../stores/projectStore.js';
+import { getAccessToken } from './auth.js';
+import { getActiveWorkspace } from './api.js';
 
 export interface RunOptions {
   /** Only run tests matching these IDs. */
@@ -80,14 +84,22 @@ export async function runBrowserTests(
 
       let pass = false;
       let detail = '';
+      let status: 'tested' | 'unsupported' | 'error' = 'tested';
 
       try {
         const result = await test.run(ctx);
         pass = result.pass;
         detail = result.detail;
       } catch (err) {
-        pass = false;
-        detail = `Uncaught error: ${err instanceof Error ? err.message : String(err)}`;
+        if (err instanceof UINotSupportedError) {
+          pass = false;
+          detail = `UI NOT SUPPORTED: ${err.message}`;
+          status = 'unsupported';
+        } else {
+          pass = false;
+          detail = `Uncaught error: ${err instanceof Error ? err.message : String(err)}`;
+          status = 'error';
+        }
       }
 
       const storedResult: StoredTestResult = {
@@ -100,42 +112,62 @@ export async function runBrowserTests(
         runId,
         fixture: 'browser',
         timestamp: new Date().toISOString(),
+        status,
       };
 
       results.push(storedResult);
       store.addResult(storedResult);
     }
+
+    // Build summary
+    const summary: TestRunSummary = {
+      runId,
+      fixture: 'browser',
+      timestamp: new Date().toISOString(),
+      total: results.length,
+      passed: results.filter((r) => r.pass).length,
+      failed: results.filter((r) => !r.pass).length,
+      durationMs: Date.now() - startTime,
+      results,
+    };
+
+    store.addRun(summary);
+
+    // POST results to server (best-effort, inside try/finally to prevent hanging)
+    await postTestResults(summary, results);
+
+    return summary;
   } finally {
     store.setCurrentTest(null);
     store.setRunning(false);
   }
+}
 
-  // Build summary
-  const summary: TestRunSummary = {
-    runId,
-    fixture: 'browser',
-    timestamp: new Date().toISOString(),
-    total: results.length,
-    passed: results.filter((r) => r.pass).length,
-    failed: results.filter((r) => !r.pass).length,
-    durationMs: Date.now() - startTime,
-    results,
+/**
+ * POST test results + errors to the workspace/Lambda server (best-effort).
+ */
+async function postTestResults(summary: TestRunSummary, results: StoredTestResult[]): Promise<void> {
+  const token = await getAccessToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+  const projectId = useProjectStore.getState().currentProjectId;
+  const wsProjectId = getActiveWorkspace();
+  const urlBase = projectId && wsProjectId === projectId
+    ? `/workspace/${projectId}/api`
+    : '/api';
 
-  store.addRun(summary);
-
-  // POST results to workspace server (best-effort)
   try {
-    await fetch('/api/test-results', {
+    await fetch(`${urlBase}/test-results`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(summary),
     });
   } catch {
     console.warn('[test-runner] Failed to POST test results to server');
   }
 
-  // Report failures as ProjectErrors → appears in Problems panel
   try {
     const failedErrors = results
       .filter((r) => !r.pass)
@@ -146,16 +178,14 @@ export async function runBrowserTests(
         message: `${r.id}: ${r.name} — ${r.detail}`,
       }));
 
-    await fetch('/api/workflow/errors', {
+    await fetch(`${urlBase}/workflow/errors`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ toolId: 'test-runner', errors: failedErrors }),
     });
   } catch {
     console.warn('[test-runner] Failed to POST test errors to workflow');
   }
-
-  return summary;
 }
 
 /**
