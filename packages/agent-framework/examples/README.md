@@ -104,4 +104,4 @@ Claude: Hello! It's nice to meet you...
 
 - Check out the [main README](../README.md) for API documentation
 - Review the [test files](../src/__tests__/) for more usage patterns
-- See [IMPLEMENTATION_SUMMARY.md](../IMPLEMENTATION_SUMMARY.md) for architecture details
+- See [docs/architecture.md](../../../docs/architecture.md) for system architecture details
