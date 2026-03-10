@@ -1,5 +1,5 @@
 /**
- * S3 ↔ EFS synchronization engine.
+ * S3 ↔ Local synchronization engine.
  *
  * Operates on raw S3Client + node:fs — no dependency on WorkspaceEnvironment.
  * Uses a content-hash manifest stored on the local side to enable incremental

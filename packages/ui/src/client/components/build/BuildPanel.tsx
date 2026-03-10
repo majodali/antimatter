@@ -1,27 +1,26 @@
-import { useEffect } from 'react';
 import { Hammer, Play, Settings, CheckCircle, XCircle, Loader2, Clock } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
-import { usePipelineStore, type RuleExecutionState } from '@/stores/pipelineStore';
+import { WidgetBar } from '../widgets/WidgetRenderer';
+import { useApplicationStore, type RuleExecutionState } from '@/stores/applicationStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { cn } from '@/lib/utils';
+import type { WidgetState } from '@antimatter/workflow';
 
 export function BuildPanel() {
-  const {
-    declarations,
-    ruleResults,
-    loaded,
-    loadDeclarations,
-    runRule,
-  } = usePipelineStore();
+  const declarations = useApplicationStore((s) => s.getDeclarations());
+  const ruleResults = useApplicationStore((s) => s.getRuleExecutionStates());
+  const workflowState = useApplicationStore((s) => s.getWorkflowState()) as any;
+  const loaded = useApplicationStore((s) => s.loaded);
+  const runRule = useApplicationStore((s) => s.runRule);
+  const emitEvent = useApplicationStore((s) => s.emitEvent);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
-  // Load declarations on mount
-  useEffect(() => {
-    loadDeclarations(currentProjectId ?? undefined);
-  }, [currentProjectId]);
+  // No useEffect needed — state arrives via WebSocket on connect
 
   const rules = declarations.rules ?? [];
+  const buildWidgets = (declarations.widgets ?? []).filter((w) => w.section === 'build');
+  const uiState: Record<string, WidgetState | undefined> = workflowState?._ui ?? {};
 
   const handleRunRule = async (ruleId: string) => {
     try {
@@ -29,6 +28,10 @@ export function BuildPanel() {
     } catch {
       // Error already handled by store
     }
+  };
+
+  const handleWidgetEvent = (event: { type: string; [key: string]: unknown }) => {
+    emitEvent(event, currentProjectId ?? undefined);
   };
 
   const handleOpenConfig = () => {
@@ -66,9 +69,14 @@ export function BuildPanel() {
         </div>
       </div>
 
+      {/* Widgets */}
+      {buildWidgets.length > 0 && (
+        <WidgetBar widgets={buildWidgets} widgetStates={uiState} onEvent={handleWidgetEvent} />
+      )}
+
       {/* Rules list */}
       <ScrollArea className="flex-1">
-        {rules.length === 0 ? (
+        {rules.length === 0 && buildWidgets.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-4">
             <Hammer className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
             <p className="text-sm text-muted-foreground">No workflow rules loaded</p>

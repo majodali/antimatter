@@ -7,7 +7,6 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as efs from 'aws-cdk-lib/aws-efs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -16,27 +15,21 @@ import * as path from 'path';
  * Props for a reusable Antimatter environment stack.
  *
  * Each environment gets its own S3 buckets, Lambda functions, API Gateway,
- * CloudFront distribution, ECS cluster, and ALB while sharing the VPC and
- * EFS from the production stack.
+ * CloudFront distribution, and EC2/ALB while sharing the VPC from the
+ * production stack.
  */
 export interface AntimatterEnvStackProps extends cdk.StackProps {
   /** Unique environment identifier — used in all resource names (e.g. 'e1', 'feat-auth', 'v2') */
   readonly envId: string;
   /** Shared VPC from the production stack */
   readonly vpc: ec2.IVpc;
-  /** Shared EFS from the production stack */
-  readonly projectEfs: efs.IFileSystem;
-  /** Shared EFS access point from the production stack */
-  readonly efsAccessPoint: efs.IAccessPoint;
-  /** Security group ID of the shared EFS (for adding NFS ingress) */
-  readonly efsSecurityGroupId: string;
 }
 
 export class AntimatterEnvStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: AntimatterEnvStackProps) {
     super(scope, id, props);
 
-    const { envId, vpc, efsAccessPoint, efsSecurityGroupId } = props;
+    const { envId, vpc } = props;
 
     // ==========================================
     // Frontend - S3 + CloudFront
@@ -121,53 +114,6 @@ export class AntimatterEnvStack extends cdk.Stack {
     });
 
     dataBucket.grantReadWrite(apiFunction);
-
-    // ==========================================
-    // Command Execution - Lambda with shared VPC + EFS
-    // ==========================================
-
-    const commandFunction = new lambda.Function(this, 'CommandFunction', {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'command.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../../packages/ui/dist-lambda')),
-      timeout: cdk.Duration.minutes(15),
-      memorySize: 2048,
-      vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-      },
-      filesystem: lambda.FileSystem.fromEfsAccessPoint(efsAccessPoint, '/mnt/projects'),
-      environment: {
-        NODE_ENV: 'production',
-        HOME: '/tmp',
-        EFS_MOUNT_PATH: '/mnt/projects',
-        PROJECTS_BUCKET: dataBucket.bucketName,
-      },
-    });
-
-    dataBucket.grantReadWrite(commandFunction);
-    commandFunction.grantInvoke(apiFunction);
-    apiFunction.addEnvironment('COMMAND_FUNCTION_NAME', commandFunction.functionName);
-
-    // Direct HTTPS endpoint for the Command Lambda, bypassing API Gateway's
-    // 29-second integration timeout.
-    // No CORS config here — the Express CORS middleware in the Command Lambda
-    // handles it. Configuring CORS on both causes duplicate headers that
-    // browsers reject.
-    const commandFunctionUrl = commandFunction.addFunctionUrl({
-      authType: lambda.FunctionUrlAuthType.NONE,
-    });
-    apiFunction.addEnvironment('COMMAND_FUNCTION_URL', commandFunctionUrl.url);
-
-    // Allow the environment's Command Lambda NFS access to the shared EFS.
-    // Created here (not in the prod stack) so the prod stack template is untouched.
-    new ec2.CfnSecurityGroupIngress(this, 'EfsAccess', {
-      groupId: efsSecurityGroupId,
-      ipProtocol: 'tcp',
-      fromPort: 2049,
-      toPort: 2049,
-      sourceSecurityGroupId: commandFunction.connections.securityGroups[0].securityGroupId,
-    });
 
     // ==========================================
     // Workspace Instances - EC2 + ALB
@@ -351,27 +297,11 @@ export class AntimatterEnvStack extends cdk.Stack {
     });
 
     const apiIntegration = new apigateway.LambdaIntegration(apiFunction, { proxy: true });
-    const commandIntegration = new apigateway.LambdaIntegration(commandFunction, { proxy: true });
 
-    // Route structure (same as production)
+    // Route structure — all routes go to the API Lambda
     const apiResource = api.root.addResource('api');
-
-    const apiCommandsResource = apiResource.addResource('commands');
-    apiCommandsResource.addMethod('ANY', commandIntegration);
-    apiCommandsResource.addProxy({
-      defaultIntegration: commandIntegration,
-      anyMethod: true,
-    });
-
     apiResource.addProxy({
       defaultIntegration: apiIntegration,
-      anyMethod: true,
-    });
-
-    const commandsResource = api.root.addResource('commands');
-    commandsResource.addMethod('ANY', commandIntegration);
-    commandsResource.addProxy({
-      defaultIntegration: commandIntegration,
       anyMethod: true,
     });
 
@@ -427,11 +357,6 @@ export class AntimatterEnvStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DataBucketName', {
       value: dataBucket.bucketName,
       description: `Data bucket for environment ${envId}`,
-    });
-
-    new cdk.CfnOutput(this, 'CommandFunctionArn', {
-      value: commandFunction.functionArn,
-      description: `Command Lambda function ARN for environment ${envId}`,
     });
 
     new cdk.CfnOutput(this, 'WorkspaceLaunchTemplateId', {

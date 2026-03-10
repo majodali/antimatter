@@ -615,11 +615,18 @@ function broadcastToClients(msg: object): void {
   }
 }
 
-// Error store — server-side project error storage, broadcast to all clients
-const errorStore = new ErrorStore(env, broadcastToClients);
+// Error store — server-side project error storage.
+// onChange callback broadcasts error patches via workflowManager.
+// Uses a lazy reference because workflowManager isn't created yet.
+let workflowManager: WorkflowManager;
+const errorStore = new ErrorStore(env, () => {
+  workflowManager.broadcastStatePatch({
+    errors: errorStore.getAllErrors(),
+  });
+});
 
 // Workflow manager — event-driven rule engine
-const workflowManager = new WorkflowManager({
+workflowManager = new WorkflowManager({
   env,
   broadcast: broadcastToClients,
   errorStore,
@@ -868,6 +875,13 @@ wss.on('connection', (ws: WebSocket) => {
 
   // Send status
   ws.send(JSON.stringify({ type: 'status', state: 'ready' }));
+
+  // Send full application state snapshot — eliminates REST race condition
+  ws.send(JSON.stringify({
+    type: 'application-state',
+    full: true,
+    state: workflowManager.getApplicationState(),
+  }));
 
   // Server-side proactive heartbeat — sends every 20s to keep the connection
   // alive through CloudFront/ALB proxies that have idle timeouts.

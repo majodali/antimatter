@@ -17,15 +17,12 @@ const prodStack = new AntimatterStack(app, 'AntimatterStack', {
 });
 
 // First dev environment for self-hosting verification.
-// Shares VPC and EFS with prod; gets its own S3, Lambda, API Gateway, CloudFront.
+// Shares VPC with prod; gets its own S3, Lambda, API Gateway, CloudFront.
 new AntimatterEnvStack(app, 'AntimatterEnv-e1', {
   env,
   envId: 'e1',
   description: 'Antimatter IDE - Environment e1',
   vpc: prodStack.vpc,
-  projectEfs: prodStack.projectEfs,
-  efsAccessPoint: prodStack.efsAccessPoint,
-  efsSecurityGroupId: prodStack.projectEfs.connections.securityGroups[0].securityGroupId,
 });
 
 app.synth();

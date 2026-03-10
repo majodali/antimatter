@@ -26,6 +26,53 @@ interface DeployState {
 
 export default defineWorkflow<DeployState>((wf) => {
 
+  // ---- Widget declarations ----
+
+  // Status indicators — show bundle and deploy progress
+  wf.widget('api-bundle-status', {
+    type: 'status',
+    label: 'API Lambda',
+    section: 'deploy',
+  });
+
+  wf.widget('frontend-bundle-status', {
+    type: 'status',
+    label: 'Frontend',
+    section: 'deploy',
+  });
+
+  wf.widget('workspace-bundle-status', {
+    type: 'status',
+    label: 'Workspace Server',
+    section: 'deploy',
+  });
+
+  wf.widget('deploy-status', {
+    type: 'status',
+    label: 'Deploy',
+    section: 'deploy',
+    icon: 'rocket',
+  });
+
+  // Action buttons
+  wf.widget('bundle-all', {
+    type: 'button',
+    label: 'Build All',
+    section: 'deploy',
+    icon: 'hammer',
+    variant: 'default',
+    event: { type: 'build:full' },
+  });
+
+  wf.widget('deploy-prod', {
+    type: 'button',
+    label: 'Deploy',
+    section: 'deploy',
+    icon: 'rocket',
+    variant: 'primary',
+    event: { type: 'deploy:promote' },
+  });
+
   // ---- Target declarations ----
 
   wf.target('api-lambda-deploy', {
@@ -58,10 +105,27 @@ export default defineWorkflow<DeployState>((wf) => {
 
   // ---- Bundle rules (triggered by explicit events) ----
 
+  /** Helper: update a widget's state. */
+  function setWidgetState(state: DeployState, widgetId: string, ws: Record<string, unknown>) {
+    const ui = ((state as any)._ui ?? {});
+    ui[widgetId] = { ...(ui[widgetId] ?? {}), ...ws };
+    (state as any)._ui = ui;
+  }
+
+  /** Helper: update deploy button enabled state based on bundle statuses. */
+  function updateDeployButton(state: DeployState) {
+    const { apiLambda, workspaceServer, frontend } = state.bundle;
+    const allSuccess = apiLambda.status === 'success'
+      && workspaceServer.status === 'success'
+      && frontend.status === 'success';
+    setWidgetState(state, 'deploy-prod', { enabled: allSuccess });
+  }
+
   wf.rule('Bundle API Lambda',
     (e) => e.type === 'build:bundle-api-lambda',
     async (_events, state) => {
       state.bundle.apiLambda = { status: 'running' };
+      setWidgetState(state, 'api-bundle-status', { value: 'bundling' });
       wf.log('Bundling API Lambda...');
 
       const result = await wf.exec('node packages/ui/scripts/build-lambda.mjs', {
@@ -71,11 +135,14 @@ export default defineWorkflow<DeployState>((wf) => {
       if (result.exitCode === 0) {
         state.bundle.apiLambda.status = 'success';
         state.bundle.apiLambda.lastRun = new Date().toISOString();
+        setWidgetState(state, 'api-bundle-status', { value: 'success' });
         wf.log(`API Lambda bundled (${(result.durationMs / 1000).toFixed(1)}s)`);
       } else {
         state.bundle.apiLambda.status = 'failed';
+        setWidgetState(state, 'api-bundle-status', { value: 'failed' });
         wf.log(`API Lambda bundle failed (exit ${result.exitCode})`, 'error');
       }
+      updateDeployButton(state);
     },
   );
 
@@ -83,6 +150,7 @@ export default defineWorkflow<DeployState>((wf) => {
     (e) => e.type === 'build:bundle-workspace',
     async (_events, state) => {
       state.bundle.workspaceServer = { status: 'running' };
+      setWidgetState(state, 'workspace-bundle-status', { value: 'bundling' });
       wf.log('Bundling workspace server...');
 
       const result = await wf.exec('node packages/ui/scripts/build-workspace-server.mjs', {
@@ -92,11 +160,14 @@ export default defineWorkflow<DeployState>((wf) => {
       if (result.exitCode === 0) {
         state.bundle.workspaceServer.status = 'success';
         state.bundle.workspaceServer.lastRun = new Date().toISOString();
+        setWidgetState(state, 'workspace-bundle-status', { value: 'success' });
         wf.log(`Workspace server bundled (${(result.durationMs / 1000).toFixed(1)}s)`);
       } else {
         state.bundle.workspaceServer.status = 'failed';
+        setWidgetState(state, 'workspace-bundle-status', { value: 'failed' });
         wf.log(`Workspace server bundle failed (exit ${result.exitCode})`, 'error');
       }
+      updateDeployButton(state);
     },
   );
 
@@ -104,6 +175,7 @@ export default defineWorkflow<DeployState>((wf) => {
     (e) => e.type === 'build:bundle-frontend',
     async (_events, state) => {
       state.bundle.frontend = { status: 'running' };
+      setWidgetState(state, 'frontend-bundle-status', { value: 'bundling' });
       wf.log('Bundling frontend...');
 
       const result = await wf.exec('cd packages/ui && npx vite build', {
@@ -113,11 +185,14 @@ export default defineWorkflow<DeployState>((wf) => {
       if (result.exitCode === 0) {
         state.bundle.frontend.status = 'success';
         state.bundle.frontend.lastRun = new Date().toISOString();
+        setWidgetState(state, 'frontend-bundle-status', { value: 'success' });
         wf.log(`Frontend bundled (${(result.durationMs / 1000).toFixed(1)}s)`);
       } else {
         state.bundle.frontend.status = 'failed';
+        setWidgetState(state, 'frontend-bundle-status', { value: 'failed' });
         wf.log(`Frontend bundle failed (exit ${result.exitCode})`, 'error');
       }
+      updateDeployButton(state);
     },
   );
 
@@ -186,6 +261,9 @@ export default defineWorkflow<DeployState>((wf) => {
     (e) => e.type === 'deploy:cdk',
     async (_events, state) => {
       state.deploy = { status: 'deploying' };
+      setWidgetState(state, 'deploy-status', { value: 'deploying' });
+      setWidgetState(state, 'deploy-prod', { enabled: false });
+      setWidgetState(state, 'bundle-all', { enabled: false });
       wf.log('Starting CDK deploy...');
 
       const result = await wf.exec(
@@ -196,11 +274,15 @@ export default defineWorkflow<DeployState>((wf) => {
       if (result.exitCode === 0) {
         state.deploy.status = 'success';
         state.deploy.lastRun = new Date().toISOString();
+        setWidgetState(state, 'deploy-status', { value: 'success' });
         wf.log('CDK deploy complete');
       } else {
         state.deploy.status = 'failed';
+        setWidgetState(state, 'deploy-status', { value: 'failed' });
         wf.log(`CDK deploy failed (exit ${result.exitCode})`, 'error');
       }
+      setWidgetState(state, 'bundle-all', { enabled: true });
+      updateDeployButton(state);
     },
     { manual: false },
   );
@@ -239,6 +321,13 @@ export default defineWorkflow<DeployState>((wf) => {
         frontend: { status: 'pending' },
       };
       state.deploy = { status: 'idle' };
+      (state as any)._ui = {
+        'api-bundle-status': { value: 'pending' },
+        'frontend-bundle-status': { value: 'pending' },
+        'workspace-bundle-status': { value: 'pending' },
+        'deploy-status': { value: 'idle' },
+        'deploy-prod': { enabled: false },
+      };
     },
     { manual: false },
   );

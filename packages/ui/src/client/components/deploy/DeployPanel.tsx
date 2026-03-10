@@ -1,32 +1,34 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Rocket, Play, Trash2, Settings, Hammer, Pause, Globe } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
+import { WidgetBar } from '../widgets/WidgetRenderer';
 import { SecretsPanel } from './SecretsPanel';
-import { usePipelineStore } from '@/stores/pipelineStore';
+import { useApplicationStore } from '@/stores/applicationStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { cn } from '@/lib/utils';
 import type { EnvironmentActionDeclaration } from '@/lib/api';
+import type { WidgetState } from '@antimatter/workflow';
 
 type DeployView = 'deploy' | 'secrets';
 
 export function DeployPanel() {
   const [view, setView] = useState<DeployView>('deploy');
-  const {
-    declarations,
-    workflowState,
-    loaded,
-    loadDeclarations,
-    emitEvent,
-  } = usePipelineStore();
+  const declarations = useApplicationStore((s) => s.getDeclarations());
+  const workflowState = useApplicationStore((s) => s.getWorkflowState()) as any;
+  const loaded = useApplicationStore((s) => s.loaded);
+  const emitEvent = useApplicationStore((s) => s.emitEvent);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
-  // Load declarations on mount
-  useEffect(() => {
-    loadDeclarations(currentProjectId ?? undefined);
-  }, [currentProjectId]);
+  // No useEffect needed — state arrives via WebSocket on connect
 
   const environments = declarations.environments ?? [];
+  const deployWidgets = (declarations.widgets ?? []).filter((w) => w.section === 'deploy');
+  const uiState: Record<string, WidgetState | undefined> = workflowState?._ui ?? {};
+
+  const handleWidgetEvent = (event: { type: string; [key: string]: unknown }) => {
+    emitEvent(event, currentProjectId ?? undefined);
+  };
 
   const handleOpenConfig = () => {
     const { openFile } = (window as any).__editorActions ?? {};
@@ -85,35 +87,42 @@ export function DeployPanel() {
       {view === 'secrets' ? (
         <SecretsPanel />
       ) : (
-        <ScrollArea className="flex-1">
-          {environments.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center p-4">
-              <Rocket className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
-              <p className="text-sm text-muted-foreground">No deployment configuration</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {loaded
-                  ? 'Add environments to .antimatter/*.ts files'
-                  : 'Loading workflow definitions...'}
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border">
-              {environments.map((env) => (
-                <EnvironmentItem
-                  key={env.name}
-                  name={env.name}
-                  stackName={env.stackName}
-                  url={env.url}
-                  actions={env.actions}
-                  workflowState={workflowState}
-                  onAction={(action) => {
-                    emitEvent(action.event, currentProjectId ?? undefined);
-                  }}
-                />
-              ))}
-            </div>
+        <>
+          {/* Deploy widgets */}
+          {deployWidgets.length > 0 && (
+            <WidgetBar widgets={deployWidgets} widgetStates={uiState} onEvent={handleWidgetEvent} />
           )}
-        </ScrollArea>
+
+          <ScrollArea className="flex-1">
+            {environments.length === 0 && deployWidgets.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-center p-4">
+                <Rocket className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
+                <p className="text-sm text-muted-foreground">No deployment configuration</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {loaded
+                    ? 'Add environments to .antimatter/*.ts files'
+                    : 'Loading workflow definitions...'}
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {environments.map((env) => (
+                  <EnvironmentItem
+                    key={env.name}
+                    name={env.name}
+                    stackName={env.stackName}
+                    url={env.url}
+                    actions={env.actions}
+                    workflowState={workflowState}
+                    onAction={(action) => {
+                      emitEvent(action.event, currentProjectId ?? undefined);
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </>
       )}
     </div>
   );

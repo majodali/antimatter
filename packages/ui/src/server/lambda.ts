@@ -113,7 +113,6 @@ apiRouter.get('/health', (_req, res) => {
 // Config endpoint — serves runtime URLs to the frontend
 apiRouter.get('/config', (_req, res) => {
   res.json({
-    commandUrl: null, // Legacy — commands now run on EC2 workspace instances
     wsBaseUrl: process.env.WORKSPACE_ALB_DNS
       ? `wss://${process.env.WORKSPACE_ALB_DNS}`
       : null,

@@ -20,6 +20,7 @@ import {
   WorkflowRuntime,
   ErrorTypes,
   parseEsbuildErrors,
+  type ApplicationState,
   type WorkflowDefinition,
   type WorkflowDeclarations,
   type WorkflowEvent,
@@ -311,6 +312,37 @@ export class WorkflowManager {
     return this.runtime.declarations;
   }
 
+  /** Assemble full application state snapshot — all state in one object. */
+  getApplicationState(): ApplicationState {
+    return {
+      version: 1,
+      declarations: this.getDeclarations(),
+      workflowState: this.state ?? {},
+      ruleResults: this.persisted?.ruleResults ?? {},
+      errors: this.errorStore?.getAllErrors() ?? [],
+      lastInvocation: this.persisted?.lastInvocation ?? null,
+      loadedFiles: this.loadedFiles,
+      updatedAt: this.persisted?.updatedAt ?? new Date().toISOString(),
+    };
+  }
+
+  /** Broadcast a partial state update to all connected clients. */
+  broadcastStatePatch(patch: Partial<ApplicationState>): void {
+    this.broadcast({
+      type: 'application-state',
+      state: { ...patch, updatedAt: new Date().toISOString() },
+    });
+  }
+
+  /** Broadcast full application state (used on WS connect). */
+  broadcastFullState(): void {
+    this.broadcast({
+      type: 'application-state',
+      full: true,
+      state: this.getApplicationState(),
+    });
+  }
+
   // ---- Private: Event Processing ----
 
   /**
@@ -388,11 +420,11 @@ export class WorkflowManager {
     };
     await this.saveState();
 
-    // Broadcast to connected clients
-    this.broadcast({
-      type: 'workflow-result',
-      result,
-      state: this.state,
+    // Broadcast partial state patch to connected clients
+    this.broadcastStatePatch({
+      workflowState: this.state,
+      ruleResults: this.persisted!.ruleResults ?? {},
+      lastInvocation: lastInvocation ?? undefined,
     });
 
     // Log summary
@@ -405,16 +437,14 @@ export class WorkflowManager {
     }
   }
 
-  /** If declarations changed during execution, broadcast workflow-reloaded. */
+  /** If declarations changed during execution, broadcast declaration patch. */
   private broadcastIfDeclarationsChanged(declBefore: string): void {
     if (!this.runtime) return;
     const declAfter = JSON.stringify(this.runtime.declarations);
     if (declBefore !== declAfter) {
-      this.broadcast({
-        type: 'workflow-reloaded',
-        ruleCount: this.runtime.ruleCount,
+      this.broadcastStatePatch({
         declarations: this.runtime.declarations,
-        files: this.loadedFiles,
+        loadedFiles: this.loadedFiles,
       });
     }
   }
@@ -456,20 +486,27 @@ export class WorkflowManager {
         // This is aggressive but safe: workflow state is a cache, not source of truth.
         await this.fullRefresh();
 
-        this.broadcast({
-          type: 'workflow-reloaded',
-          ruleCount: this.runtime?.ruleCount ?? 0,
+        // Broadcast full state after refresh — declarations, state, rules, etc. all changed
+        this.broadcastStatePatch({
           declarations: this.getDeclarations(),
-          files: this.loadedFiles,
+          loadedFiles: this.loadedFiles,
+          workflowState: this.state ?? {},
+          ruleResults: this.persisted?.ruleResults ?? {},
+          lastInvocation: this.persisted?.lastInvocation ?? null,
         });
 
         console.log('[workflow-manager] Full refresh complete');
       } catch (err) {
         console.error('[workflow-manager] Full refresh failed:', err);
-        this.broadcast({
-          type: 'workflow-reload-error',
-          error: err instanceof Error ? err.message : String(err),
-        });
+        // Report reload errors via errorStore → triggers error patch
+        if (this.errorStore) {
+          this.errorStore.setErrors('workflow-reload', [{
+            errorType: { name: 'Reload Error', icon: '🔄', color: '#ef4444', highlightStyle: 'squiggly' as const },
+            toolId: 'workflow-reload',
+            file: '.antimatter/',
+            message: err instanceof Error ? err.message : String(err),
+          }]).catch(() => {});
+        }
       } finally {
         this.reloading = false;
       }
@@ -515,11 +552,15 @@ export class WorkflowManager {
         }
       } catch (err) {
         console.error(`[workflow-manager] Failed to reload ${filePath}:`, err);
-        this.broadcast({
-          type: 'workflow-load-error',
-          file: filePath,
-          error: err instanceof Error ? err.message : String(err),
-        });
+        // Report load errors via errorStore → triggers error patch
+        if (this.errorStore) {
+          this.errorStore.setErrors('workflow', [{
+            errorType: { name: 'Build Error', icon: '🔨', color: '#ef4444', highlightStyle: 'squiggly' as const },
+            toolId: 'workflow',
+            file: filePath,
+            message: err instanceof Error ? err.message : String(err),
+          }]).catch(() => {});
+        }
       }
     }
 
@@ -666,11 +707,15 @@ export class WorkflowManager {
           }
         } catch (err) {
           console.error(`[workflow-manager] Failed to load ${filePath} — skipping:`, err);
-          this.broadcast({
-            type: 'workflow-load-error',
-            file: filePath,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          // Report load errors via errorStore → triggers error patch
+          if (this.errorStore) {
+            this.errorStore.setErrors('workflow', [{
+              errorType: { name: 'Build Error', icon: '🔨', color: '#ef4444', highlightStyle: 'squiggly' as const },
+              toolId: 'workflow',
+              file: filePath,
+              message: err instanceof Error ? err.message : String(err),
+            }]).catch(() => {});
+          }
         }
       }
 

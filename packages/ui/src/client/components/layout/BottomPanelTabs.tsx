@@ -9,13 +9,13 @@ import { useState } from 'react';
 import { Terminal as TerminalIcon, AlertCircle } from 'lucide-react';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { ProblemsPanel } from '../problems/ProblemsPanel';
-import { useErrorStore } from '@/stores/errorStore';
+import { useApplicationStore } from '@/stores/applicationStore';
 
 type BottomTab = 'terminal' | 'problems';
 
 export function BottomPanelTabs() {
   const [activeTab, setActiveTab] = useState<BottomTab>('terminal');
-  const errorCount = useErrorStore((s) => s.errors.length);
+  const errorCount = useApplicationStore((s) => s.getErrorCount());
 
   return (
     <div className="h-full flex flex-col bg-background">

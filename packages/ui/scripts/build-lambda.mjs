@@ -33,12 +33,4 @@ await build({
   outfile: resolve(outDir, 'index.js'),
 });
 
-// Build Command Lambda
-console.log('Bundling Command Lambda...');
-await build({
-  ...sharedConfig,
-  entryPoints: [resolve(uiRoot, 'src/server/command-lambda.ts')],
-  outfile: resolve(outDir, 'command.js'),
-});
-
-console.log('Lambda bundles written to dist-lambda/index.js and dist-lambda/command.js');
+console.log('Lambda bundle written to dist-lambda/index.js');

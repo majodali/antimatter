@@ -12,22 +12,21 @@ import { ChatPanel } from '../chat/ChatPanel';
 import { Separator } from '../ui/separator';
 import { useProjectStore } from '@/stores/projectStore';
 import { useTerminalStore } from '@/stores/terminalStore';
-import { useErrorStore } from '@/stores/errorStore';
 import { useUIStore } from '@/stores/uiStore';
 
 export function MainLayout() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const chatPanelVisible = useUIStore((s) => s.chatPanelVisible);
 
-  // Auto-connect to workspace when project opens
+  // Auto-connect to workspace when project opens.
+  // Application state (declarations, errors, etc.) arrives via WebSocket
+  // on connect — no separate REST loading needed.
   useEffect(() => {
     if (!currentProjectId) return;
     const { connectionState, projectId, connect } = useTerminalStore.getState();
     if (connectionState === 'disconnected' || connectionState === 'error' || projectId !== currentProjectId) {
       connect(currentProjectId);
     }
-    // Load project errors from REST API
-    useErrorStore.getState().loadErrors(currentProjectId);
   }, [currentProjectId]);
 
   return (

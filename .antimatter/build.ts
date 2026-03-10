@@ -23,6 +23,31 @@ interface BuildState {
 
 export default defineWorkflow<BuildState>((wf) => {
 
+  // ---- Widget declarations ----
+
+  wf.widget('deps-status', {
+    type: 'status',
+    label: 'Dependencies',
+    section: 'build',
+    icon: 'shield',
+  });
+
+  wf.widget('compile-status', {
+    type: 'status',
+    label: 'Type-check',
+    section: 'build',
+    icon: 'check',
+  });
+
+  wf.widget('run-typecheck', {
+    type: 'button',
+    label: 'Type-check',
+    section: 'build',
+    icon: 'play',
+    variant: 'default',
+    event: { type: 'build:typecheck' },
+  });
+
   // ---- Module declarations ----
 
   wf.module('frontend', {
@@ -57,6 +82,11 @@ export default defineWorkflow<BuildState>((wf) => {
     async (_events, state) => {
       state.deps = { status: 'installing' };
       state.compile = { status: 'pending' };
+      (state as any)._ui = {
+        ...((state as any)._ui ?? {}),
+        'deps-status': { value: 'installing' },
+        'compile-status': { value: 'pending' },
+      };
 
       wf.log('Installing dependencies (npm ci)...');
       const result = await wf.exec('npm ci', {
@@ -66,10 +96,12 @@ export default defineWorkflow<BuildState>((wf) => {
       if (result.exitCode === 0) {
         state.deps.status = 'ready';
         state.deps.lastRun = new Date().toISOString();
+        (state as any)._ui['deps-status'] = { value: 'ready' };
         wf.log(`Dependencies installed (${(result.durationMs / 1000).toFixed(1)}s)`);
         wf.emit({ type: 'build:deps-ready' });
       } else {
         state.deps.status = 'failed';
+        (state as any)._ui['deps-status'] = { value: 'failed' };
         wf.log(`npm ci failed (exit ${result.exitCode})`, 'error');
         if (result.stderr) {
           wf.log(result.stderr.slice(0, 500), 'error');
@@ -97,6 +129,10 @@ export default defineWorkflow<BuildState>((wf) => {
     },
     async (events, state) => {
       state.compile.status = 'running';
+      (state as any)._ui = {
+        ...((state as any)._ui ?? {}),
+        'compile-status': { value: 'running' },
+      };
       wf.log(`Type-checking (${events.length} file(s) changed)...`);
 
       const result = await wf.exec('npx tsc --build', {
@@ -105,6 +141,7 @@ export default defineWorkflow<BuildState>((wf) => {
 
       state.compile.status = result.exitCode === 0 ? 'success' : 'failed';
       state.compile.lastRun = new Date().toISOString();
+      (state as any)._ui['compile-status'] = { value: state.compile.status };
 
       if (result.exitCode === 0) {
         wf.log(`Type-check passed (${(result.durationMs / 1000).toFixed(1)}s)`);
@@ -117,5 +154,39 @@ export default defineWorkflow<BuildState>((wf) => {
         }
       }
     },
+  );
+
+  /**
+   * build:typecheck — manual trigger for type-checking (from the widget button).
+   */
+  wf.rule('Manual type-check',
+    (e) => e.type === 'build:typecheck',
+    async (_events, state) => {
+      state.compile.status = 'running';
+      (state as any)._ui = {
+        ...((state as any)._ui ?? {}),
+        'compile-status': { value: 'running' },
+      };
+      wf.log('Running type-check (manual trigger)...');
+
+      const result = await wf.exec('npx tsc --build', {
+        timeout: 120_000,
+      });
+
+      state.compile.status = result.exitCode === 0 ? 'success' : 'failed';
+      state.compile.lastRun = new Date().toISOString();
+      (state as any)._ui['compile-status'] = { value: state.compile.status };
+
+      if (result.exitCode === 0) {
+        wf.log(`Type-check passed (${(result.durationMs / 1000).toFixed(1)}s)`);
+      } else {
+        wf.log('Type-check failed', 'error');
+        const lines = result.stdout.split('\n').filter(l => l.includes('error'));
+        for (const line of lines.slice(0, 10)) {
+          wf.log(line, 'error');
+        }
+      }
+    },
+    { manual: false },
   );
 });

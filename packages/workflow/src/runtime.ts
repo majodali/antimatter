@@ -12,6 +12,7 @@ import type {
   ModuleDeclaration,
   TargetDeclaration,
   EnvironmentDeclaration,
+  WidgetDeclaration,
   WorkflowDeclarations,
   Workflow,
   WorkflowAction,
@@ -67,6 +68,7 @@ export class WorkflowRuntime<S> {
   private readonly _modules = new Map<string, ModuleDeclaration>();
   private readonly _targets = new Map<string, TargetDeclaration>();
   private readonly _environments = new Map<string, EnvironmentDeclaration>();
+  private readonly _widgets = new Map<string, WidgetDeclaration>();
 
   // Source file tracking — which file declared each element.
   private _currentSourceFile: string | null = null;
@@ -108,6 +110,10 @@ export class WorkflowRuntime<S> {
         this._environments.set(name, { name, ...opts });
         this.trackDeclaration(name);
       },
+      widget: (id, opts) => {
+        this._widgets.set(id, { id, ...opts });
+        this.trackDeclaration(id);
+      },
       exec: (command, opts) => {
         return this.executor(command, opts);
       },
@@ -141,6 +147,7 @@ export class WorkflowRuntime<S> {
       targets: Array.from(this._targets.values()),
       environments: Array.from(this._environments.values()),
       rules: this.rules.map(r => ({ id: r.id, name: r.name, manual: r.manual, sourceFile: r.sourceFile })),
+      widgets: Array.from(this._widgets.values()),
     };
   }
 
@@ -189,6 +196,7 @@ export class WorkflowRuntime<S> {
       this._modules.delete(id);
       this._targets.delete(id);
       this._environments.delete(id);
+      this._widgets.delete(id);
     }
     this._fileDeclarations.delete(filePath);
   }

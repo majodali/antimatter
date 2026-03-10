@@ -8,6 +8,18 @@ export function createWorkflowRouter(
 ): Router {
   const router = Router();
 
+  // GET /application-state — full unified application state snapshot (for debugging)
+  router.get('/application-state', (_req, res) => {
+    try {
+      res.json(workflowManager.getApplicationState());
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to get application state',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   // GET /state — current workflow state
   router.get('/state', (_req, res) => {
     try {

@@ -38,6 +38,13 @@ export type {
   S3TargetConfig,
   WorkflowDeclarations,
 
+  // Widgets
+  WidgetDeclaration,
+  WidgetState,
+  WidgetType,
+  WidgetVariant,
+  WidgetSection,
+
   // Workflow handle
   Workflow,
   WorkflowDefinition,
@@ -48,4 +55,7 @@ export type {
   WorkflowInvocationResult,
   PersistedWorkflowState,
   PersistedRuleResult,
+
+  // Unified application state
+  ApplicationState,
 } from './types.js';

@@ -7,7 +7,7 @@ import { Button } from '../ui/button';
 import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore, scheduleAutoSave } from '@/stores/editorStore';
 import { useProjectStore } from '@/stores/projectStore';
-import { useErrorStore } from '@/stores/errorStore';
+import { useApplicationStore } from '@/stores/applicationStore';
 import { detectLanguage } from '@/lib/languageDetection';
 import { fetchFileContent } from '@/lib/api';
 import { eventLog } from '@/lib/eventLog';
@@ -26,7 +26,7 @@ export function EditorPanel() {
   const editorInstanceRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
   const decorationsRef = useRef<string[]>([]);
-  const projectErrors = useErrorStore((s) => s.errors);
+  const projectErrors = useApplicationStore((s) => s.getErrors());
 
   useEffect(() => {
     if (selectedFile && !openFiles.has(selectedFile)) {
@@ -83,7 +83,7 @@ export function EditorPanel() {
     const model = editor.getModel();
     if (!model) return;
 
-    const fileErrors = useErrorStore.getState().getErrorsForFile(activeFile);
+    const fileErrors = useApplicationStore.getState().getErrorsForFile(activeFile);
 
     // Map highlight styles to Monaco CSS classes
     const styleToClass: Record<string, string> = {

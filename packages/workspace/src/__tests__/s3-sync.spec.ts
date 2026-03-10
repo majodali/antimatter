@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hashContent } from '@antimatter/filesystem';
-import { syncFromS3, syncToS3, readManifest } from '../s3-efs-sync.js';
+import { syncFromS3, syncToS3, readManifest } from '../s3-sync.js';
 
 // ---------------------------------------------------------------------------
 // Helpers: mock S3Client

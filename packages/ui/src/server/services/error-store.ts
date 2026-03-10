@@ -1,9 +1,9 @@
 /**
  * ErrorStore — server-side project error storage.
  *
- * Persists errors to disk (.antimatter-cache/errors.json) and broadcasts
- * snapshots to all connected WebSocket clients. All clients see the same
- * errors, and errors persist across browser sessions.
+ * Persists errors to disk (.antimatter-cache/errors.json) and notifies
+ * via onChange callback when errors change. The callback is used by
+ * WorkflowManager to broadcast error patches to WebSocket clients.
  *
  * Errors are keyed by toolId — calling setErrors(toolId, errors) replaces
  * ALL previous errors from that tool.
@@ -18,7 +18,7 @@ export class ErrorStore {
 
   constructor(
     private readonly env: WorkspaceEnvironment,
-    private readonly broadcast: (msg: object) => void,
+    private readonly onChange?: () => void,
     private readonly storagePath: string = '.antimatter-cache/errors.json',
   ) {}
 
@@ -52,7 +52,7 @@ export class ErrorStore {
   /**
    * Set all errors from a tool. Replaces ALL previous errors from this toolId.
    * Pass an empty array to clear errors from a tool.
-   * Persists to disk and broadcasts snapshot to all clients.
+   * Persists to disk and notifies via onChange callback.
    */
   async setErrors(toolId: string, errors: ProjectError[]): Promise<void> {
     if (errors.length === 0) {
@@ -62,23 +62,23 @@ export class ErrorStore {
     }
 
     await this.persist();
-    this.broadcastSnapshot();
+    this.onChange?.();
   }
 
-  /** Clear all errors from a specific tool. Persists + broadcasts. */
+  /** Clear all errors from a specific tool. Persists + notifies. */
   async clearTool(toolId: string): Promise<void> {
     if (!this.errors.has(toolId)) return;
     this.errors.delete(toolId);
     await this.persist();
-    this.broadcastSnapshot();
+    this.onChange?.();
   }
 
-  /** Clear all errors from all tools. Persists + broadcasts. */
+  /** Clear all errors from all tools. Persists + notifies. */
   async clearAll(): Promise<void> {
     if (this.errors.size === 0) return;
     this.errors.clear();
     await this.persist();
-    this.broadcastSnapshot();
+    this.onChange?.();
   }
 
   /** Get all errors as a flat array. */
@@ -128,13 +128,5 @@ export class ErrorStore {
     } catch (err) {
       console.error('[error-store] Failed to persist errors:', err);
     }
-  }
-
-  /** Broadcast full error snapshot to all connected WebSocket clients. */
-  private broadcastSnapshot(): void {
-    this.broadcast({
-      type: 'project-errors-snapshot',
-      errors: this.getAllErrors(),
-    });
   }
 }

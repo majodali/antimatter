@@ -7,7 +7,6 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as efs from 'aws-cdk-lib/aws-efs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
@@ -19,8 +18,6 @@ import * as path from 'path';
 
 export class AntimatterStack extends cdk.Stack {
   public readonly vpc: ec2.Vpc;
-  public readonly projectEfs: efs.FileSystem;
-  public readonly efsAccessPoint: efs.AccessPoint;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -179,48 +176,15 @@ export class AntimatterStack extends cdk.Stack {
     });
 
     // ==========================================
-    // Network - VPC for Lambda + EFS + EC2
+    // Network - VPC for EC2 Workspace Instances
     // ==========================================
 
-    // VPC with private subnets for Lambda, EFS, and EC2 workspace instances.
+    // VPC with private subnets for EC2 workspace instances.
     // NAT Gateway required for internet access (S3, npm registry, etc.).
     // Cost: ~$32/month for NAT Gateway. Acceptable for dev.
     this.vpc = new ec2.Vpc(this, 'Vpc', {
       maxAzs: 2,
       natGateways: 1,
-    });
-
-    // ==========================================
-    // Storage - EFS for project working trees
-    // ==========================================
-
-    // EFS provides the POSIX file system that build tools need.
-    // S3 remains the durable source of truth; EFS is a working copy
-    // for command execution (synced on demand in Step 3).
-    this.projectEfs = new efs.FileSystem(this, 'ProjectEfs', {
-      vpc: this.vpc,
-      performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
-      throughputMode: efs.ThroughputMode.ELASTIC,
-      removalPolicy: cdk.RemovalPolicy.DESTROY, // WARNING: For dev only
-      encrypted: true,
-      lifecyclePolicy: efs.LifecyclePolicy.AFTER_30_DAYS,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-      },
-    });
-
-    // Access point creates /projects with non-root uid/gid
-    this.efsAccessPoint = this.projectEfs.addAccessPoint('LambdaAccess', {
-      path: '/projects',
-      createAcl: {
-        ownerGid: '1001',
-        ownerUid: '1001',
-        permissions: '755',
-      },
-      posixUser: {
-        gid: '1001',
-        uid: '1001',
-      },
     });
 
     // ==========================================
@@ -265,61 +229,6 @@ export class AntimatterStack extends cdk.Stack {
       actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter'],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/antimatter/secrets/*`],
     }));
-
-    // ==========================================
-    // Command Execution - Lambda with EFS
-    // ==========================================
-
-    // Command Lambda runs build tools, tests, and other commands against
-    // a POSIX file system (EFS). Lives in VPC for EFS access.
-    // Higher memory and timeout than API Lambda for build workloads.
-    const commandFunction = new lambda.Function(this, 'CommandFunction', {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'command.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../../packages/ui/dist-lambda')),
-      timeout: cdk.Duration.minutes(15),
-      memorySize: 2048,
-      vpc: this.vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-      },
-      filesystem: lambda.FileSystem.fromEfsAccessPoint(this.efsAccessPoint, '/mnt/projects'),
-      environment: {
-        NODE_ENV: 'production',
-        HOME: '/tmp',
-        EFS_MOUNT_PATH: '/mnt/projects',
-        PROJECTS_BUCKET: dataBucket.bucketName,
-      },
-    });
-
-    // Grant Command Lambda access to data bucket (needed for S3↔EFS sync)
-    dataBucket.grantReadWrite(commandFunction);
-
-    // Grant Command Lambda SSM read access for secrets
-    commandFunction.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ssm:GetParameter'],
-      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/antimatter/secrets/*`],
-    }));
-
-    // Grant API Lambda permission to invoke Command Lambda (Step 4).
-    // Build/test/lint execution on the API Lambda is routed to the Command
-    // Lambda via direct Lambda invoke (CommandLambdaEnvironment).
-    commandFunction.grantInvoke(apiFunction);
-
-    // Pass Command Lambda function name to the API Lambda so it can
-    // create a CommandLambdaEnvironment pointing at the right function.
-    apiFunction.addEnvironment('COMMAND_FUNCTION_NAME', commandFunction.functionName);
-
-    // Direct HTTPS endpoint for the Command Lambda, bypassing API Gateway's
-    // 29-second integration timeout. Used by the frontend for interactive
-    // command execution (npm install, builds, etc.) that can take minutes.
-    // No CORS config here — the Express CORS middleware in the Command Lambda
-    // handles it. Configuring CORS on both causes duplicate headers that
-    // browsers reject.
-    const commandFunctionUrl = commandFunction.addFunctionUrl({
-      authType: lambda.FunctionUrlAuthType.NONE,
-    });
-    apiFunction.addEnvironment('COMMAND_FUNCTION_URL', commandFunctionUrl.url);
 
     // ==========================================
     // Workspace Instances - EC2 + ALB
@@ -521,49 +430,21 @@ export class AntimatterStack extends cdk.Stack {
       },
     });
 
-    // API Lambda integration (handles all routes except commands)
+    // API Lambda integration (handles all routes)
     const apiIntegration = new apigateway.LambdaIntegration(apiFunction, {
       proxy: true,
     });
 
-    // Command Lambda integration (handles command execution routes)
-    const commandIntegration = new apigateway.LambdaIntegration(commandFunction, {
-      proxy: true,
-    });
-
     // ---- Route structure ----
-    // CloudFront sends /api/* paths to API Gateway, so the path the gateway
-    // sees is /api/commands/health, /api/files/tree, etc.  We need explicit
-    // /api/commands/* routes so they reach the Command Lambda instead of
-    // falling through to the API Lambda catch-all.
+    // CloudFront sends /api/* paths to API Gateway. All routes go to the API Lambda.
     //
-    // API Gateway REST API precedence: explicit resources > {proxy+}.
-    //
-    //   /api/commands/*  → Command Lambda  (CloudFront path)
-    //   /api/{proxy+}    → API Lambda      (CloudFront path, everything else)
-    //   /commands/*       → Command Lambda  (direct API Gateway access)
-    //   /{proxy+}         → API Lambda      (direct API Gateway access)
+    //   /api/{proxy+}    → API Lambda  (CloudFront path)
+    //   /{proxy+}         → API Lambda  (direct API Gateway access)
 
     // -- CloudFront paths (under /api) --
     const apiResource = api.root.addResource('api');
-
-    const apiCommandsResource = apiResource.addResource('commands');
-    apiCommandsResource.addMethod('ANY', commandIntegration);
-    apiCommandsResource.addProxy({
-      defaultIntegration: commandIntegration,
-      anyMethod: true,
-    });
-
     apiResource.addProxy({
       defaultIntegration: apiIntegration,
-      anyMethod: true,
-    });
-
-    // -- Direct API Gateway paths (under /commands) --
-    const commandsResource = api.root.addResource('commands');
-    commandsResource.addMethod('ANY', commandIntegration);
-    commandsResource.addProxy({
-      defaultIntegration: commandIntegration,
       anyMethod: true,
     });
 
@@ -640,17 +521,7 @@ export class AntimatterStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'VpcId', {
       value: this.vpc.vpcId,
-      description: 'VPC ID for Command Lambda',
-    });
-
-    new cdk.CfnOutput(this, 'EfsId', {
-      value: this.projectEfs.fileSystemId,
-      description: 'EFS file system ID for project working trees',
-    });
-
-    new cdk.CfnOutput(this, 'CommandFunctionArn', {
-      value: commandFunction.functionArn,
-      description: 'Command Lambda function ARN',
+      description: 'VPC ID for workspace instances',
     });
 
     new cdk.CfnOutput(this, 'WorkspaceLaunchTemplateId', {

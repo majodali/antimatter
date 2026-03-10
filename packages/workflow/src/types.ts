@@ -234,12 +234,62 @@ export interface RuleDeclaration {
   readonly sourceFile?: string;
 }
 
+// ----------------------------------------------------------------------------
+// Widgets — UI elements declared by build scripts
+// ----------------------------------------------------------------------------
+
+/** Widget types supported by the Build and Deploy panels. */
+export type WidgetType = 'button' | 'toggle' | 'status';
+
+/** Visual variant for button/status widgets. */
+export type WidgetVariant = 'primary' | 'danger' | 'default';
+
+/** Which IDE panel should render this widget. */
+export type WidgetSection = 'build' | 'deploy';
+
+/**
+ * A UI widget declared by a build script.
+ *
+ * Static declaration (serializable) — the shape, label, and event are fixed.
+ * Dynamic state (enabled, visible, value) comes from `workflowState._ui[widgetId]`.
+ */
+export interface WidgetDeclaration {
+  readonly id: string;
+  readonly type: WidgetType;
+  readonly label: string;
+  readonly section: WidgetSection;
+  /** Lucide icon name (e.g. 'rocket', 'check-circle', 'toggle-left'). */
+  readonly icon?: string;
+  /** Visual variant for the widget. Default: 'default'. */
+  readonly variant?: WidgetVariant;
+  /** Event emitted on button click or toggle change. */
+  readonly event?: { readonly type: string; readonly [key: string]: unknown };
+}
+
+/**
+ * Dynamic state for a widget, stored at `workflowState._ui[widgetId]`.
+ * Build scripts set these values in rule actions to control widget behavior.
+ */
+export interface WidgetState {
+  /** Whether the widget is interactive. Default: true. */
+  readonly enabled?: boolean;
+  /** Whether the widget is visible. Default: true. */
+  readonly visible?: boolean;
+  /** Current value — toggle boolean, status text, etc. */
+  readonly value?: unknown;
+  /** Override the static label text. */
+  readonly label?: string;
+  /** Override the static variant. */
+  readonly variant?: WidgetVariant;
+}
+
 /** All declarations collected from workflow files. */
 export interface WorkflowDeclarations {
   readonly modules: readonly ModuleDeclaration[];
   readonly targets: readonly TargetDeclaration[];
   readonly environments: readonly EnvironmentDeclaration[];
   readonly rules: readonly RuleDeclaration[];
+  readonly widgets: readonly WidgetDeclaration[];
 }
 
 // ----------------------------------------------------------------------------
@@ -284,6 +334,9 @@ export interface Workflow<S> {
 
   /** Declare an environment. */
   environment(name: string, opts: Omit<EnvironmentDeclaration, 'name'>): void;
+
+  /** Declare a UI widget (button, toggle, or status indicator). */
+  widget(id: string, opts: Omit<WidgetDeclaration, 'id'>): void;
 
   // --- Execution utilities (called from within actions) ---
 
@@ -445,4 +498,19 @@ export interface PersistedWorkflowState<S = unknown> {
   readonly fileManifest?: Readonly<Record<string, string>>;
   /** Accumulated rule execution results — persisted across invocations. */
   readonly ruleResults?: Readonly<Record<string, PersistedRuleResult>>;
+}
+
+/**
+ * Complete application state — identical on server and client.
+ * Sent as full snapshot on WebSocket connect, then partial patches on mutations.
+ */
+export interface ApplicationState {
+  readonly version: 1;
+  readonly declarations: WorkflowDeclarations;
+  readonly workflowState: unknown;
+  readonly ruleResults: Readonly<Record<string, PersistedRuleResult>>;
+  readonly errors: readonly ProjectError[];
+  readonly lastInvocation: WorkflowInvocationResult | null;
+  readonly loadedFiles: readonly string[];
+  readonly updatedAt: string;
 }

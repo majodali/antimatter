@@ -811,46 +811,6 @@ export interface EnvironmentActionDeclaration {
   icon?: string;
 }
 
-export interface PipelineDeclarations {
-  modules: {
-    name: string;
-    type: string;
-    build: string;
-    test?: string;
-    cwd?: string;
-    output: string;
-    outputType: string;
-  }[];
-  targets: {
-    name: string;
-    module: string;
-    type: string;
-    config: Record<string, unknown>;
-  }[];
-  environments: {
-    name: string;
-    stackName?: string;
-    url?: string;
-    actions?: Record<string, EnvironmentActionDeclaration>;
-  }[];
-  rules: {
-    id: string;
-    name: string;
-    manual: boolean;
-    sourceFile?: string;
-  }[];
-  ruleResults?: Record<string, {
-    status: 'success' | 'failed';
-    lastRunAt: string;
-    durationMs?: number;
-    error?: string;
-  }>;
-}
-
-export async function fetchPipelineDeclarations(projectId?: string): Promise<PipelineDeclarations> {
-  return apiFetch<PipelineDeclarations>(`${workflowBase(projectId)}/declarations`);
-}
-
 export async function emitWorkflowEvent(
   event: { type: string; [key: string]: unknown },
   projectId?: string,
@@ -871,8 +831,3 @@ export async function runWorkflowRule(
   });
 }
 
-export async function fetchWorkflowErrors(
-  projectId?: string,
-): Promise<{ errors: any[] }> {
-  return apiFetch<{ errors: any[] }>(`${workflowBase(projectId)}/errors`);
-}

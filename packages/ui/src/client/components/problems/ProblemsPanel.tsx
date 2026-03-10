@@ -19,7 +19,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
-import { useErrorStore, type ProjectError } from '@/stores/errorStore';
+import { useApplicationStore, type ProjectError } from '@/stores/applicationStore';
 import { useFileStore } from '@/stores/fileStore';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
@@ -93,7 +93,7 @@ function ErrorRow({
 }
 
 export function ProblemsPanel() {
-  const errors = useErrorStore((s) => s.errors);
+  const errors = useApplicationStore((s) => s.getErrors());
   const selectFile = useFileStore((s) => s.selectFile);
 
   // Group errors by file

@@ -21,8 +21,7 @@ import { eventLog } from '@/lib/eventLog';
 import { useBuildStore } from './buildStore';
 import { useFileStore } from './fileStore';
 import { useEditorStore } from './editorStore';
-import { usePipelineStore } from './pipelineStore';
-import { useErrorStore } from './errorStore';
+import { useApplicationStore } from './applicationStore';
 
 export type ConnectionState =
   | 'disconnected'
@@ -278,24 +277,10 @@ function handleWsMessage(
         }
         break;
 
-      // Workflow engine events
-      case 'workflow-reloaded':
-        if (msg.declarations) {
-          usePipelineStore.getState().setDeclarations(msg.declarations);
-        }
-        break;
-
-      case 'workflow-result':
-        if (msg.result) {
-          usePipelineStore.getState().handleWorkflowResult(msg.result, msg.state);
-        }
-        break;
-
-      // Project error snapshot from server-side ErrorStore
-      case 'project-errors-snapshot':
-        if (msg.errors) {
-          useErrorStore.getState().handleSnapshot(msg.errors);
-        }
+      // Unified application state — replaces workflow-reloaded, workflow-result,
+      // and project-errors-snapshot with a single message type.
+      case 'application-state':
+        useApplicationStore.getState().handleStateMessage(msg);
         break;
 
       default:
