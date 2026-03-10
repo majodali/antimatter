@@ -56,6 +56,7 @@ import { createActivityRouter } from './routes/activity.js';
 import { createGitRouter } from './routes/git.js';
 import { createEventsRouter } from './routes/events.js';
 import { createWorkflowRouter } from './routes/workflow.js';
+import { createTestResultsRouter } from './routes/test-results.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { WorkflowManager } from './services/workflow-manager.js';
 import { ErrorStore } from './services/error-store.js';
@@ -819,6 +820,7 @@ app.use('/api/activity', createActivityRouter(workspace));
 app.use('/api/git', createGitRouter(workspace));
 app.use('/api/events', createEventsRouter(s3Client, PROJECTS_BUCKET, PROJECT_ID));
 app.use('/api/workflow', createWorkflowRouter(workflowManager, errorStore));
+app.use('/api/test-results', createTestResultsRouter());
 
 // ---------------------------------------------------------------------------
 // HTTP + WebSocket server

@@ -267,6 +267,7 @@ All routes are project-scoped: `/api/{route}` with project context from headers 
 | `/api/events` | `routes/events.ts` | recent system events |
 | `/api/workspace` | `routes/workspace.ts` | start, status, stop EC2 instance |
 | `/api/tests` | `routes/tests.ts` | run smoke/functional/workspace tests |
+| `/api/test-results` | `routes/test-results.ts` | store/retrieve functional test run results |
 | `/api/activity` | `routes/activity.ts` | load/save activity log |
 
 ### Workspace Server Routes
@@ -287,24 +288,47 @@ Same Express routers as Lambda, plus:
 |-------|----------|---------|---------|
 | Unit tests | `packages/*/src/__tests__/*.spec.ts` | Local (Vitest) | Component-level behavior |
 | Smoke tests | `packages/ui/src/server/tests/smoke-tests.ts` | Lambda | 17 tests: health, files, projects, commands, frontend |
-| Functional tests | `packages/ui/src/server/tests/functional-tests.ts` | Lambda | Feature behavior (currently 2 placeholder tests) |
+| Functional tests | `packages/ui/src/shared/test-modules/*.ts` | Vitest + Browser | Feature behavior via ActionContext abstraction |
 | Workspace tests | `packages/ui/src/server/tests/workspace-tests.ts` | Lambda (EC2) | Workspace-dependent tests (excluded from default suite) |
+
+### Functional Test Framework
+
+Tests are framework-agnostic `TestModule` objects in `packages/ui/src/shared/test-modules/`. Each test is an async function that takes an `ActionContext` and returns `{ pass, detail }`.
+
+**Test modules** (organized by area):
+- `file-explorer-tests.ts` — FT-FILE-001 through FT-FILE-007
+- `editor-tests.ts` — FT-EDIT-001 through FT-EDIT-004
+- `index.ts` — barrel export of all test modules
+
+**Key types** (`packages/ui/src/shared/test-types.ts`):
+- `TestModule` — id, name, area, run function
+- `StoredTestResult` — result with timing, fixture, runId
+- `TestRunSummary` — aggregated run results
 
 ### ActionContext Abstraction
 
-File: `packages/ui/src/server/tests/action-context.ts`
+Expanded interface: `packages/ui/src/shared/action-context.ts`
+Base interface: `packages/ui/src/server/tests/action-context.ts`
 
-Common interface for test operations. Two implementations:
-- **FetchActionContext** — HTTP calls to deployed API (for Lambda/deployed tests)
-- **ServiceActionContext** — Direct service method calls (for local/fast tests)
+Three implementations:
+- **FetchActionContext** — HTTP calls to deployed API (Lambda/deployed tests)
+- **ServiceActionContext** — Direct service method calls (Vitest/local, uses MemoryFileSystem)
+- **BrowserActionContext** — Zustand store actions + API calls (in-browser, with configurable delay)
 
-This enables writing test logic once and running it in both contexts.
+All three implement the same interface: file, build, deploy, environment, agent, editor, git, and workflow operations.
 
 ### Test Execution
 
-- **CLI**: `npm test` (Vitest, runs unit tests across all packages)
+- **CLI**: `npm test` (Vitest discovers functional tests via `functional.spec.ts`)
 - **Lambda**: `POST /api/tests/run?suite=smoke|functional|workspace|all`
-- **Browser**: Navigate to `/tests` for test runner dashboard
+- **Browser**: Tests tab in bottom panel (Run All, Run Failed, filter by area/status)
+- **Console**: `window.__runTests()` runs all functional tests via BrowserActionContext
+
+### Test Results API
+
+- `POST/GET/DELETE /api/test-results` — store and retrieve test run summaries
+- `testResultStore.ts` — Zustand store for results, filters, running state
+- `TestResultsPanel.tsx` — bottom panel tab grouped by area with pass/fail, duration, expandable detail
 
 ---
 

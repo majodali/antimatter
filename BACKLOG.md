@@ -35,10 +35,10 @@ A feature becomes `done` when ALL its test cases are `test-passing`.
 | ID | Feature / Test Case | Status | Description |
 |----|---------------------|--------|-------------|
 | F-EDIT-001 | **Monaco Editor** | in-progress | Multi-tab code editor with syntax highlighting, diagnostics overlay, auto-save, unsaved indicators |
-| | FT-EDIT-001: Open file in tab | defined | Selecting a file in explorer opens it in an editor tab with correct content |
-| | FT-EDIT-002: Switch between tabs | defined | Clicking a tab switches the active editor to that file |
-| | FT-EDIT-003: Close tab | defined | Closing a tab removes it; if active, switches to adjacent tab |
-| | FT-EDIT-004: Auto-save on edit | defined | Editing a file triggers auto-save after 1.5s debounce; file is persisted |
+| | FT-EDIT-001: Open file in tab | test-passing | Selecting a file in explorer opens it in an editor tab with correct content |
+| | FT-EDIT-002: Switch between tabs | test-passing | Clicking a tab switches the active editor to that file |
+| | FT-EDIT-003: Close tab | test-passing | Closing a tab removes it; if active, switches to adjacent tab |
+| | FT-EDIT-004: Auto-save on edit | test-passing | Editing a file triggers auto-save after 1.5s debounce; file is persisted |
 | | FT-EDIT-005: Unsaved indicator | defined | Editing a file shows amber dot on tab until save completes |
 | | FT-EDIT-006: Diagnostics overlay | defined | Errors reported by build tools appear as inline markers in the editor |
 | | FT-EDIT-007: Manual save (Ctrl+S) | defined | Ctrl+S immediately saves the file without waiting for debounce |
@@ -48,13 +48,13 @@ A feature becomes `done` when ALL its test cases are `test-passing`.
 | ID | Feature / Test Case | Status | Description |
 |----|---------------------|--------|-------------|
 | F-FILE-001 | **File Explorer** | in-progress | Tree view with file/folder CRUD, selection opens in editor |
-| | FT-FILE-001: Display file tree | defined | File explorer shows project directory structure as expandable tree |
-| | FT-FILE-002: Create file | defined | Creating a new file via UI adds it to the tree and opens it in editor |
-| | FT-FILE-003: Create folder | defined | Creating a new folder via UI adds it to the tree |
-| | FT-FILE-004: Delete file | defined | Deleting a file removes it from tree and closes its editor tab |
-| | FT-FILE-005: Rename file | defined | Renaming a file updates tree, editor tab title, and persisted path |
-| | FT-FILE-006: Move file | defined | Moving a file to another folder updates tree and persisted path |
-| | FT-FILE-007: Select file opens editor | defined | Clicking a file in the tree opens it in a new or existing editor tab |
+| | FT-FILE-001: Display file tree | test-passing | File explorer shows project directory structure as expandable tree |
+| | FT-FILE-002: Create file | test-passing | Creating a new file via UI adds it to the tree and opens it in editor |
+| | FT-FILE-003: Create folder | test-passing | Creating a new folder via UI adds it to the tree |
+| | FT-FILE-004: Delete file | test-passing | Deleting a file removes it from tree and closes its editor tab |
+| | FT-FILE-005: Rename file | test-passing | Renaming a file updates tree, editor tab title, and persisted path |
+| | FT-FILE-006: Move file | test-passing | Moving a file to another folder updates tree and persisted path |
+| | FT-FILE-007: Select file opens editor | test-passing | Clicking a file in the tree opens it in a new or existing editor tab |
 
 ### Problems Panel
 
@@ -244,7 +244,7 @@ A feature becomes `done` when ALL its test cases are `test-passing`.
 | F-SEARCH-001 | **Full-Text File Search** | planned | Search across all project files with results panel (Cmd+Shift+F) |
 | F-TRUN-001 | **In-IDE Test Runner** | planned | Run and view test results in a dedicated panel without using terminal |
 | F-PULL-001 | **Git Pull API Endpoint** | planned | Lambda endpoint to trigger git pull, streamlining self-hosting update cycle |
-| F-DIFF-001 | **Git Diff Viewer** | planned | Side-by-side or inline diff view for uncommitted changes |
+| F-DIFF-001 | **Git Diff Viewer** | planned | Side-by-side or inline diff view for uncommitted changes. See also F-DIFFMERGE-001 and F-GITADV-001 for full diff/merge. |
 
 ---
 
@@ -255,6 +255,21 @@ A feature becomes `done` when ALL its test cases are `test-passing`.
 
 | ID | Feature | Status | Description |
 |----|---------|--------|-------------|
+| F-EDADV-001 | **Editor In-Browser Type Checking** | planned | Investigate solutions for type checking and linting within Monaco independent of save (current diagnostics rely on workspace-server compile step with multi-second delay) |
+| F-EDADV-002 | **Editor Context Menu** | planned | Fix non-functional context menu items in Monaco editor |
+| F-EDADV-003 | **Editor Tab Overflow** | planned | Replace horizontal scrollbar on tab panel with left/right navigation buttons when too many tabs are open |
+| F-FILEADV-001 | **File Explorer Indicators** | planned | Show error-in-file and source-changed indicators on file tree nodes |
+| F-FILEADV-002 | **File Explorer Multi-Select** | planned | Multi-select for bulk delete, drag-and-drop reordering/moving, cut/copy/paste operations |
+| F-DIFFMERGE-001 | **File Diff/Merge** | planned | File explorer and source control panels support file diff/merge in panel or open content diff/merge view |
+| F-WKFLADV-001 | **Workflow Type Checking** | planned | .antimatter/*.ts files are only transpiled via esbuild, not type-checked. Add type checking for workflow definition files. |
+| F-WKFLADV-002 | **Workflow Terminal Execution** | planned | wf.exec() should run commands in the terminal (visible output) rather than a hidden subprocess. Configurable to use primary or secondary terminal. |
+| F-TERMADV-001 | **Multiple Terminal Sessions** | planned | Support multiple terminal tabs — opened manually or automatically for build/deploy output |
+| F-GITADV-001 | **Git Diff/Merge UI** | planned | Manual diff/merge interface for conflict resolution when merges aren't automatic |
+| F-GITADV-002 | **Git History/Version View** | planned | Browse commit history with diff view per commit |
+| F-GITADV-003 | **Git Branch & Tag Management** | planned | Create, switch, delete, and merge branches; create and manage tags |
+| F-DEPLOYADV-001 | **Deploy Panel Per-Environment Actions** | planned | Remove hardcoded "Build all" and "Deploy" buttons. Projects define actions per environment or as specific widgets. Deployment status is per environment. |
+| F-DEPLOYADV-002 | **Deploy Output Streaming to Terminal** | planned | Deploy output should stream to a terminal session rather than a custom panel |
+| F-S3ADV-001 | **S3 Fallback for Inactive Workspace** | planned | UI actions should fall back to S3-only operation when workspace server is inactive — file operations, current workflow state, logging, etc. |
 | F-ENTITY-001 | **Structured Entity Database** | planned | Requirements, Examples, Domain Types, Components, Modules as first-class entities with typed links |
 | F-NAV-001 | **Project Navigator** | planned | Browse project as an information bundle — navigate by entity type, follow links, search |
 | F-LITED-001 | **Literate Editor** | planned | CodeMirror 6 editor with embedded code blocks, entity links, model DSLs |

@@ -13,6 +13,7 @@ import { createActivityRouter } from './routes/activity.js';
 import { createGitRouter } from './routes/git.js';
 import { createEventsRouter } from './routes/events.js';
 import { createSecretsRouter } from './routes/secrets.js';
+import { createTestResultsRouter } from './routes/test-results.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { EventLogger } from './services/event-logger.js';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
@@ -147,6 +148,7 @@ apiRouter.use('/projects', createProjectRouter(s3Client, projectsBucket));
 
 // Test runner
 apiRouter.use('/tests', createTestRouter());
+apiRouter.use('/test-results', createTestResultsRouter());
 
 // Deployed environment registry — system-level (not project-scoped)
 const envRegistry = new EnvironmentRegistryService({

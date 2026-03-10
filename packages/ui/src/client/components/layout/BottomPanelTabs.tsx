@@ -1,21 +1,24 @@
 /**
- * BottomPanelTabs — tabbed bottom panel with Terminal and Problems tabs.
+ * BottomPanelTabs — tabbed bottom panel with Terminal, Problems, and Tests tabs.
  *
- * Both panels stay mounted (CSS visibility toggle) so terminal state
- * and xterm.js instances are preserved when switching tabs.
+ * All panels stay mounted (CSS visibility toggle) so terminal state,
+ * xterm.js instances, and test results are preserved when switching tabs.
  */
 
 import { useState } from 'react';
-import { Terminal as TerminalIcon, AlertCircle } from 'lucide-react';
+import { Terminal as TerminalIcon, AlertCircle, TestTube2 } from 'lucide-react';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { ProblemsPanel } from '../problems/ProblemsPanel';
+import { TestResultsPanel } from '../tests/TestResultsPanel';
 import { useApplicationStore } from '@/stores/applicationStore';
+import { useTestResultStore } from '@/stores/testResultStore';
 
-type BottomTab = 'terminal' | 'problems';
+type BottomTab = 'terminal' | 'problems' | 'tests';
 
 export function BottomPanelTabs() {
   const [activeTab, setActiveTab] = useState<BottomTab>('terminal');
   const errorCount = useApplicationStore((s) => s.getErrorCount());
+  const failedTests = useTestResultStore((s) => s.results.filter((r) => !r.pass).length);
 
   return (
     <div className="h-full flex flex-col bg-background">
@@ -36,15 +39,26 @@ export function BottomPanelTabs() {
           <AlertCircle className="h-3.5 w-3.5" />
           Problems
         </TabButton>
+        <TabButton
+          active={activeTab === 'tests'}
+          onClick={() => setActiveTab('tests')}
+          badge={failedTests > 0 ? failedTests : undefined}
+        >
+          <TestTube2 className="h-3.5 w-3.5" />
+          Tests
+        </TabButton>
       </div>
 
-      {/* Panel content — both stay mounted, toggled with CSS */}
+      {/* Panel content — all stay mounted, toggled with CSS */}
       <div className="flex-1 overflow-hidden relative">
         <div className={activeTab === 'terminal' ? 'h-full' : 'h-0 overflow-hidden'}>
           <TerminalPanel />
         </div>
         <div className={activeTab === 'problems' ? 'h-full' : 'h-0 overflow-hidden'}>
           <ProblemsPanel />
+        </div>
+        <div className={activeTab === 'tests' ? 'h-full' : 'h-0 overflow-hidden'}>
+          <TestResultsPanel />
         </div>
       </div>
     </div>

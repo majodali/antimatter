@@ -1,6 +1,12 @@
+import type { ActionContext as ExpandedActionContext, GitStatusResult } from '../../shared/action-context.js';
+
 /** High-level UI operations abstracted over transport.
  *  FetchActionContext calls REST endpoints.
- *  A future BrowserActionContext can drive a real browser with the same interface. */
+ *  A future BrowserActionContext can drive a real browser with the same interface.
+ *
+ *  NOTE: The expanded ActionContext in shared/action-context.ts is the canonical
+ *  interface for new functional tests. This base interface is kept for backward
+ *  compatibility with existing smoke/workspace tests. */
 
 export interface ActionContext {
   // File operations (project-scoped)
@@ -42,7 +48,7 @@ export interface ActionContext {
   saveCustomTools(tools: any[]): Promise<void>;
 }
 
-export class FetchActionContext implements ActionContext {
+export class FetchActionContext implements ExpandedActionContext {
   private api: string;
   private frontend: string;
   private projectId: string;
@@ -269,5 +275,136 @@ export class FetchActionContext implements ActionContext {
       body: JSON.stringify({ tools }),
     });
     await this.json(res);
+  }
+
+  // ---- Editor (no-ops for API context — no browser present) ----
+
+  private _openTabs: string[] = [];
+  private _activeFile: string | null = null;
+
+  async openFileInEditor(path: string): Promise<void> {
+    // Ensure the file exists by reading it; track as "open"
+    await this.readFile(path);
+    if (!this._openTabs.includes(path)) this._openTabs.push(path);
+    this._activeFile = path;
+  }
+
+  async getActiveFile(): Promise<string | null> {
+    return this._activeFile;
+  }
+
+  async getOpenTabs(): Promise<string[]> {
+    return [...this._openTabs];
+  }
+
+  async closeTab(path: string): Promise<void> {
+    this._openTabs = this._openTabs.filter(p => p !== path);
+    if (this._activeFile === path) {
+      this._activeFile = this._openTabs.length > 0 ? this._openTabs[this._openTabs.length - 1] : null;
+    }
+  }
+
+  async editFileContent(path: string, content: string): Promise<void> {
+    // In API context, editing = writing the file
+    await this.writeFile(path, content);
+  }
+
+  async saveActiveFile(): Promise<void> {
+    // In API context, files are saved immediately on write — no-op
+  }
+
+  // ---- Git ----
+
+  async getGitStatus(): Promise<GitStatusResult> {
+    const res = await fetch(this.url('/git/status'));
+    const body = await this.json(res);
+    return {
+      initialized: body.initialized ?? false,
+      branch: body.branch,
+      staged: body.staged ?? [],
+      unstaged: body.unstaged ?? [],
+      untracked: body.untracked ?? [],
+    };
+  }
+
+  async stageFiles(files: string[]): Promise<void> {
+    const res = await fetch(this.url('/git/stage'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files }),
+    });
+    await this.json(res);
+  }
+
+  async unstageFiles(files: string[]): Promise<void> {
+    const res = await fetch(this.url('/git/unstage'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files }),
+    });
+    await this.json(res);
+  }
+
+  async gitCommit(message: string): Promise<void> {
+    const res = await fetch(this.url('/git/commit'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+    await this.json(res);
+  }
+
+  async gitPush(): Promise<void> {
+    const res = await fetch(this.url('/git/push'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    await this.json(res);
+  }
+
+  async gitPull(): Promise<void> {
+    const res = await fetch(this.url('/git/pull'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    await this.json(res);
+  }
+
+  // ---- Workflow ----
+
+  async emitWorkflowEvent(event: { type: string; [key: string]: unknown }): Promise<any> {
+    const res = await fetch(this.url('/workflow/emit'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event }),
+    });
+    return this.json(res);
+  }
+
+  async runWorkflowRule(ruleId: string): Promise<any> {
+    const res = await fetch(this.url(`/workflow/run-rule/${encodeURIComponent(ruleId)}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    return this.json(res);
+  }
+
+  async getWorkflowState(): Promise<unknown> {
+    const res = await fetch(this.url('/workflow/state'));
+    return this.json(res);
+  }
+
+  async getWorkflowDeclarations(): Promise<any> {
+    const res = await fetch(this.url('/workflow/declarations'));
+    return this.json(res);
+  }
+
+  async getProjectErrors(): Promise<any[]> {
+    const res = await fetch(this.url('/workflow/errors'));
+    const body = await this.json(res);
+    return body.errors ?? [];
   }
 }
