@@ -175,7 +175,8 @@ export async function clickElement(
 
 /**
  * Type text into an input element by data-testid.
- * Clears existing value first, then sets value and dispatches input/change events.
+ * Uses React's internal value setter to properly trigger state updates
+ * on controlled inputs (React ignores native DOM value changes).
  */
 export async function typeIntoElement(
   testId: string,
@@ -184,13 +185,31 @@ export async function typeIntoElement(
 ): Promise<void> {
   const el = findElement(testId, operation) as HTMLInputElement;
   el.focus();
-  // Clear existing value
-  el.value = '';
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  // Set new value
-  el.value = text;
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
+
+  // React controlled inputs require using the native setter from the
+  // HTMLInputElement prototype, then dispatching an event so React picks it up.
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )?.set;
+
+  if (nativeSetter) {
+    // Clear existing value
+    nativeSetter.call(el, '');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    // Set new value
+    nativeSetter.call(el, text);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    // Fallback: direct assignment (won't work with React controlled inputs)
+    el.value = '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.value = text;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
   await settle();
 }
 

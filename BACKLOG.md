@@ -188,6 +188,7 @@ A feature becomes `done` when ALL its test cases are `test-passing`.
 | | FT-WKSP-003: S3 periodic sync | defined | File changes sync to S3 on 30s interval |
 | | FT-WKSP-004: Workflow engine loads | defined | Workflow engine loads .antimatter/*.ts files on startup |
 | | FT-WKSP-005: Idle detection respects running commands | defined | Long-running commands prevent workspace auto-stop |
+| | FT-WKSP-006: S3/refresh race condition | defined | Workspace restart re-downloads stale files from S3 before local deletions (e.g. git clean) can sync. Fix: run syncToS3 before downloading on restart, or accept local filesystem as authoritative after git operations |
 
 ### S3 Project Storage
 
