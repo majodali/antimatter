@@ -218,7 +218,11 @@ export async function typeIntoElement(
  */
 export async function pressEnter(testId: string): Promise<void> {
   const el = queryElement(testId);
-  if (!el) return;
+  if (!el) {
+    throw new Error(
+      `pressEnter: element [data-testid="${testId}"] not found — creation input may have been cancelled by blur`,
+    );
+  }
   el.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }),
   );

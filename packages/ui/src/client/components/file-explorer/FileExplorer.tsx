@@ -30,6 +30,7 @@ export function FileExplorer() {
   const [creatingType, setCreatingType] = useState<'file' | 'folder' | null>(null);
   const [newName, setNewName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const isSubmittingRef = useRef(false);
 
   // Load files on mount and when project changes
   // File tree auto-refreshes via fileStore.handleExternalChanges (WebSocket notifications)
@@ -71,6 +72,7 @@ export function FileExplorer() {
       return;
     }
 
+    isSubmittingRef.current = true;
     const pid = currentProjectId ?? undefined;
     try {
       if (creatingType === 'file') {
@@ -93,6 +95,8 @@ export function FileExplorer() {
       }
     } catch (err) {
       eventLog.error('file', `Failed to create ${creatingType}: ${name}`, String(err));
+    } finally {
+      isSubmittingRef.current = false;
     }
     cancelCreation();
   }
@@ -162,7 +166,7 @@ export function FileExplorer() {
                   if (e.key === 'Enter') submitCreation();
                   if (e.key === 'Escape') cancelCreation();
                 }}
-                onBlur={cancelCreation}
+                onBlur={() => { if (!isSubmittingRef.current) cancelCreation(); }}
               />
             </div>
           )}
