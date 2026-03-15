@@ -9,11 +9,13 @@ import type { TestModule } from '../test-types.js';
 
 import { fileExplorerTests } from './file-explorer-tests.js';
 import { editorTests } from './editor-tests.js';
+import { crossTabTests } from './cross-tab-tests.js';
 
 /** All registered functional test modules. */
 export const allTestModules: readonly TestModule[] = [
   ...fileExplorerTests,
   ...editorTests,
+  ...crossTabTests,
 ];
 
 /** Test modules grouped by area. */
@@ -30,3 +32,4 @@ export function getTestsByArea(): Map<string, readonly TestModule[]> {
 // Re-export individual arrays for selective imports
 export { fileExplorerTests } from './file-explorer-tests.js';
 export { editorTests } from './editor-tests.js';
+export { crossTabTests } from './cross-tab-tests.js';

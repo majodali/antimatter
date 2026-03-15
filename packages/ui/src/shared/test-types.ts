@@ -26,6 +26,7 @@ export type FeatureArea =
   | 'infra'
   | 'workspace'
   | 'logging'
+  | 'cross-tab'
   | 'test-infra';
 
 /**
@@ -48,6 +49,19 @@ export interface TestModuleResult {
   readonly detail: string;
 }
 
+/**
+ * Diagnostic trace captured during test execution.
+ * Populated on failure to aid remote debugging without keeping the tab open.
+ */
+export interface TestTrace {
+  /** Console output (log/warn/error) captured during the test. */
+  readonly consoleLogs: readonly string[];
+  /** Snapshot of key DOM state at the moment of failure. */
+  readonly domSnapshot?: string;
+  /** Error stack trace if the test threw. */
+  readonly errorStack?: string;
+}
+
 /** Extended test result with timing and metadata (stored on server). */
 export interface StoredTestResult {
   readonly id: string;
@@ -57,7 +71,7 @@ export interface StoredTestResult {
   readonly durationMs: number;
   readonly detail: string;
   readonly runId: string;
-  readonly fixture: 'api' | 'service' | 'browser';
+  readonly fixture: 'api' | 'service' | 'browser' | 'headless';
   readonly timestamp: string;
   /**
    * Result classification:
@@ -66,6 +80,8 @@ export interface StoredTestResult {
    * - 'error' — uncaught error during test execution
    */
   readonly status?: 'tested' | 'unsupported' | 'error';
+  /** Diagnostic trace captured on failure (console logs, DOM state, stack). */
+  readonly trace?: TestTrace;
 }
 
 /** Summary of a complete test run. */

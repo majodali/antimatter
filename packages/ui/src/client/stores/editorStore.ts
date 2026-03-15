@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { WorkspacePath } from '@antimatter/filesystem';
-import { saveFile as apiSaveFile, fetchFileContent } from '@/lib/api';
+import { saveFile as apiSaveFile, fetchFileContent, fileExists } from '@/lib/api';
 import { eventLog } from '@/lib/eventLog';
 import { createProjectStorage, serializeMap, deserializeMap } from '@/lib/storePersist';
 import type { FileChange } from './fileStore';
@@ -38,6 +38,8 @@ interface EditorStore {
   handleExternalChanges: (changes: FileChange[]) => void;
   /** Accept external version for a conflicted file */
   acceptExternalVersion: (path: WorkspacePath) => void;
+  /** Validate all open tabs — close any whose files no longer exist on the server. */
+  validateOpenTabs: (projectId?: string) => Promise<void>;
 }
 
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -229,6 +231,43 @@ export const useEditorStore = create<EditorStore>()(
             return { openFiles: newOpenFiles };
           });
         }).catch(() => {});
+      },
+
+      validateOpenTabs: async (projectId?) => {
+        const state = get();
+        const openPaths = Array.from(state.openFiles.keys());
+        if (openPaths.length === 0) return;
+
+        // Check each open file in parallel
+        const results = await Promise.allSettled(
+          openPaths.map(async (path) => {
+            const exists = await fileExists(path, projectId);
+            return { path, exists };
+          }),
+        );
+
+        const toClose: WorkspacePath[] = [];
+        for (const result of results) {
+          if (result.status === 'fulfilled' && !result.value.exists) {
+            toClose.push(result.value.path);
+          }
+        }
+
+        if (toClose.length > 0) {
+          set((s) => {
+            const newOpenFiles = new Map(s.openFiles);
+            for (const path of toClose) {
+              newOpenFiles.delete(path);
+            }
+            let newActiveFile = s.activeFile;
+            if (newActiveFile && toClose.includes(newActiveFile)) {
+              const remaining = Array.from(newOpenFiles.keys());
+              newActiveFile = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+            }
+            return { openFiles: newOpenFiles, activeFile: newActiveFile };
+          });
+          eventLog.info('editor', `Closed ${toClose.length} tab(s) for deleted files: ${toClose.join(', ')}`);
+        }
       },
     }),
     {

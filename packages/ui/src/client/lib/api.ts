@@ -109,14 +109,23 @@ export function readBrowserFile(file: File): Promise<string | null> {
 // API calls are routed through /workspace/{projectId}/api/* (EC2 via ALB)
 // instead of /api/projects/{projectId}/* (Lambda via API Gateway).
 
-let activeWorkspaceProjectId: string | null = null;
+const activeWorkspaceProjectIds = new Set<string>();
 
-export function setActiveWorkspace(projectId: string | null) {
-  activeWorkspaceProjectId = projectId;
+export function setActiveWorkspace(projectId: string) {
+  activeWorkspaceProjectIds.add(projectId);
+}
+
+export function clearActiveWorkspace(projectId: string) {
+  activeWorkspaceProjectIds.delete(projectId);
 }
 
 export function getActiveWorkspace(): string | null {
-  return activeWorkspaceProjectId;
+  const first = activeWorkspaceProjectIds.values().next();
+  return first.done ? null : first.value;
+}
+
+export function hasActiveWorkspace(projectId: string): boolean {
+  return activeWorkspaceProjectIds.has(projectId);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +133,7 @@ export function getActiveWorkspace(): string | null {
 // ---------------------------------------------------------------------------
 
 function fileBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectId === projectId) {
+  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
     return `/workspace/${projectId}/api/files`;
   }
   return projectId ? `/api/projects/${projectId}/files` : '/api/files';
@@ -160,12 +169,26 @@ export async function createFolder(path: string, projectId?: string): Promise<vo
   });
 }
 
+export async function deleteFile(path: string, projectId?: string): Promise<void> {
+  await apiFetch<{ success: boolean }>(
+    `${fileBase(projectId)}/delete?path=${encodeURIComponent(path)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function fileExists(path: string, projectId?: string): Promise<boolean> {
+  const { exists } = await apiFetch<{ path: string; exists: boolean }>(
+    `${fileBase(projectId)}/exists?path=${encodeURIComponent(path)}`,
+  );
+  return exists;
+}
+
 // ---------------------------------------------------------------------------
 // Agent/Chat API — project-scoped when projectId is provided
 // ---------------------------------------------------------------------------
 
 function agentBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectId === projectId) {
+  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
     return `/workspace/${projectId}/api/agent`;
   }
   return projectId ? `/api/projects/${projectId}/agent` : '/api/agent';
@@ -249,7 +272,7 @@ export async function sendChatMessageStreaming(
 // ---------------------------------------------------------------------------
 
 function buildBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectId === projectId) {
+  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
     return `/workspace/${projectId}/api/build`;
   }
   return projectId ? `/api/projects/${projectId}/build` : '/api/build';
@@ -354,7 +377,7 @@ export async function clearBuildCache(ruleId?: string, projectId?: string): Prom
 // ---------------------------------------------------------------------------
 
 function deployBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectId === projectId) {
+  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
     return `/workspace/${projectId}/api/deploy`;
   }
   return projectId ? `/api/projects/${projectId}/deploy` : '/api/deploy';
@@ -539,13 +562,6 @@ export async function getWorkspaceStatus(projectId: string): Promise<WorkspaceIn
   );
 }
 
-export async function stopWorkspace(projectId: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(
-    `/api/projects/${encodeURIComponent(projectId)}/workspace/stop`,
-    { method: 'POST' },
-  );
-}
-
 /**
  * Get the WebSocket URL for connecting to a workspace terminal.
  * Uses the CloudFront distribution which proxies /ws/* to the ALB.
@@ -582,7 +598,7 @@ export async function saveChatHistory(messages: any[], projectId?: string): Prom
 // ---------------------------------------------------------------------------
 
 function activityBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectId === projectId) {
+  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
     return `/workspace/${projectId}/api/activity`;
   }
   return projectId ? `/api/projects/${projectId}/activity` : '/api/activity';
@@ -617,7 +633,7 @@ export interface SystemEvent {
 }
 
 function eventsBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectId === projectId) {
+  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
     return `/workspace/${projectId}/api/events`;
   }
   return projectId ? `/api/projects/${projectId}/events` : '/api/events';
@@ -639,7 +655,7 @@ export async function fetchSystemEvents(
 // ---------------------------------------------------------------------------
 
 function gitBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectId === projectId) {
+  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
     return `/workspace/${projectId}/api/git`;
   }
   return projectId ? `/api/projects/${projectId}/git` : '/api/git';
@@ -799,7 +815,7 @@ export async function refreshWorkspace(projectId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function workflowBase(projectId?: string): string {
-  const pid = projectId ?? activeWorkspaceProjectId;
+  const pid = projectId ?? getActiveWorkspace();
   if (pid) {
     return `/workspace/${pid}/api/workflow`;
   }

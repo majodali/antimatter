@@ -1,8 +1,9 @@
 /**
- * Workspace Routes — start, stop, and query EC2 workspace instances.
+ * Workspace Routes — start and query EC2 workspace instances.
  *
  * These routes are called by the frontend to manage the per-project
  * EC2 instances that run the full workspace (terminal, file APIs, build, agent).
+ * Instance shutdown is managed solely by the idle timeout (ConnectionManager).
  */
 
 import { Router } from 'express';
@@ -69,34 +70,6 @@ export function createWorkspaceRouter(
       console.error('[workspace-route] Failed to get workspace status:', error);
       res.status(500).json({
         error: 'Failed to get workspace status',
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  });
-
-  /**
-   * POST /stop — Stop a project's workspace instance.
-   */
-  router.post('/stop', async (req, res) => {
-    const projectId = req.params.projectId;
-    const logger = projectId && eventLoggerFactory ? eventLoggerFactory(projectId) : undefined;
-    try {
-      if (!projectId) {
-        return res.status(400).json({ error: 'projectId is required' });
-      }
-
-      const service = new WorkspaceEc2Service(config, logger);
-      await service.stopWorkspace(projectId);
-      await logger?.flush();
-      res.json({ success: true });
-    } catch (error) {
-      console.error('[workspace-route] Failed to stop workspace:', error);
-      logger?.error('workspace', 'Failed to stop workspace', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await logger?.flush();
-      res.status(500).json({
-        error: 'Failed to stop workspace',
         message: error instanceof Error ? error.message : String(error),
       });
     }

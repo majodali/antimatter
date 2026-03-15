@@ -28,13 +28,17 @@ export function EditorPanel() {
   const decorationsRef = useRef<string[]>([]);
   const projectErrors = useApplicationStore((s) => s.getErrors());
 
+  // Note: File opening is now driven by double-click in FileTree → FileExplorer.handleOpenFile.
+  // The old auto-open on selectedFile change has been removed to support the new
+  // single-click=select, double-click=open interaction model.
+
+  // At startup and when project changes, validate that all open tabs still exist.
+  // Closes tabs for files that were deleted while the browser was closed.
   useEffect(() => {
-    if (selectedFile && !openFiles.has(selectedFile)) {
-      loadFile(selectedFile);
-    } else if (selectedFile) {
-      useEditorStore.getState().setActiveFile(selectedFile);
+    if (currentProjectId && openFiles.size > 0) {
+      useEditorStore.getState().validateOpenTabs(currentProjectId);
     }
-  }, [selectedFile]);
+  }, [currentProjectId]);
 
   async function loadFile(path: WorkspacePath) {
     setIsLoading(true);

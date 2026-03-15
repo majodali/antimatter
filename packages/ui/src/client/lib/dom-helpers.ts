@@ -174,6 +174,40 @@ export async function clickElement(
 }
 
 /**
+ * Double-click an element by data-testid.
+ * Dispatches a realistic click + dblclick sequence.
+ * Throws UINotSupportedError if the element doesn't exist.
+ */
+export async function doubleClickElement(
+  testId: string,
+  operation: string,
+): Promise<void> {
+  const el = findElement(testId, operation);
+  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  await settle();
+}
+
+/**
+ * Dispatch a keyboard event on a specific element or the focused element.
+ */
+export async function pressKeyOnElement(
+  key: string,
+  target?: HTMLElement | null,
+): Promise<void> {
+  const el = target ?? document.activeElement ?? document.body;
+  el.dispatchEvent(
+    new KeyboardEvent('keydown', { key, code: key, bubbles: true, cancelable: true }),
+  );
+  await settle();
+}
+
+/**
  * Type text into an input element by data-testid.
  * Uses React's internal value setter to properly trigger state updates
  * on controlled inputs (React ignores native DOM value changes).
@@ -209,6 +243,51 @@ export async function typeIntoElement(
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
+
+  await settle();
+}
+
+/**
+ * Type text into an input and immediately dispatch Enter keydown,
+ * before any async settle. This prevents the input from being removed
+ * by onBlur between typing and submitting.
+ *
+ * The Enter keydown is dispatched on the SAME element reference used
+ * for typing, so even if React re-renders during settle, the event
+ * targets the correct DOM node.
+ */
+export async function typeAndPressEnter(
+  testId: string,
+  text: string,
+  operation: string,
+): Promise<void> {
+  const el = findElement(testId, operation) as HTMLInputElement;
+  el.focus();
+
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )?.set;
+
+  if (nativeSetter) {
+    nativeSetter.call(el, '');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    nativeSetter.call(el, text);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    el.value = '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.value = text;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  // Immediately dispatch Enter on the SAME element — before any settle
+  // so the element is still in the DOM (onBlur hasn't had a chance to fire)
+  el.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }),
+  );
 
   await settle();
 }

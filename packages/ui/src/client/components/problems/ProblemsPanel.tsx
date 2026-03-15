@@ -21,6 +21,9 @@ import {
 import { ScrollArea } from '../ui/scroll-area';
 import { useApplicationStore, type ProjectError } from '@/stores/applicationStore';
 import { useFileStore } from '@/stores/fileStore';
+import { useEditorStore } from '@/stores/editorStore';
+import { fetchFileContent } from '@/lib/api';
+import { detectLanguage } from '@/lib/languageDetection';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
 /** Map error type icon name to lucide component. */
@@ -110,7 +113,17 @@ export function ProblemsPanel() {
   const fileGroups = Array.from(byFile.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
   function handleNavigate(file: string, _line?: number) {
+    // Select in file tree AND open in editor
     selectFile(file as WorkspacePath);
+    // Directly open/activate in editor (since selectedFile no longer auto-opens)
+    const editorState = useEditorStore.getState();
+    if (editorState.openFiles.has(file as WorkspacePath)) {
+      editorState.setActiveFile(file as WorkspacePath);
+    } else {
+      fetchFileContent(file).then((content) => {
+        editorState.openFile(file as WorkspacePath, content, detectLanguage(file));
+      }).catch(() => {});
+    }
   }
 
   if (errors.length === 0) {

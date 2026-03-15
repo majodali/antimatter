@@ -12,10 +12,93 @@ import {
   type ExecutorMessage,
   type CrossTabRunOptions,
 } from '../../shared/cross-tab-protocol.js';
-import type { StoredTestResult, TestRunSummary } from '../../shared/test-types.js';
+import type { StoredTestResult, TestRunSummary, TestTrace } from '../../shared/test-types.js';
 import { allTestModules } from '../../shared/test-modules/index.js';
 import { BrowserActionContext } from './browser-action-context.js';
 import { UINotSupportedError } from './dom-helpers.js';
+
+// ---------------------------------------------------------------------------
+// Console capture utility
+// ---------------------------------------------------------------------------
+
+interface ConsoleCapture {
+  getLogs(): string[];
+  restore(): void;
+}
+
+/**
+ * Intercept console.log/warn/error to capture output during a test.
+ * Calls are still forwarded to the original console methods.
+ */
+function startConsoleCapture(): ConsoleCapture {
+  const logs: string[] = [];
+  const origLog = console.log;
+  const origWarn = console.warn;
+  const origError = console.error;
+
+  const fmt = (args: unknown[]) =>
+    args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+
+  console.log = (...args: unknown[]) => {
+    logs.push(`[log] ${fmt(args)}`);
+    origLog.apply(console, args);
+  };
+  console.warn = (...args: unknown[]) => {
+    logs.push(`[warn] ${fmt(args)}`);
+    origWarn.apply(console, args);
+  };
+  console.error = (...args: unknown[]) => {
+    logs.push(`[error] ${fmt(args)}`);
+    origError.apply(console, args);
+  };
+
+  return {
+    getLogs: () => [...logs],
+    restore: () => {
+      console.log = origLog;
+      console.warn = origWarn;
+      console.error = origError;
+    },
+  };
+}
+
+/**
+ * Capture a compact DOM snapshot of key IDE areas for diagnostics.
+ */
+function captureDomSnapshot(): string {
+  const parts: string[] = [];
+
+  // File explorer state
+  const fileTree = document.querySelectorAll('[data-testid^="file-tree-item-"]');
+  parts.push(`file-tree: ${fileTree.length} items`);
+
+  // Editor tabs
+  const tabs = document.querySelectorAll('[data-testid^="editor-tab-"]');
+  const tabPaths = Array.from(tabs).map(
+    (t) => (t as HTMLElement).dataset.testid?.replace('editor-tab-', '') ?? '?',
+  );
+  parts.push(`editor-tabs: [${tabPaths.join(', ')}]`);
+
+  // Active file
+  const activeTab = document.querySelector('[data-testid^="editor-tab-"][data-active="true"]');
+  parts.push(`active-tab: ${(activeTab as HTMLElement)?.dataset.path ?? 'none'}`);
+
+  // Main layout present?
+  const mainLayout = document.querySelector('[data-testid="main-layout"]');
+  parts.push(`main-layout: ${mainLayout ? 'present' : 'MISSING'}`);
+
+  // Any visible error banners
+  const errors = document.querySelectorAll('[role="alert"], .error-banner');
+  if (errors.length > 0) {
+    parts.push(
+      `errors: ${Array.from(errors)
+        .map((e) => (e as HTMLElement).textContent?.slice(0, 100))
+        .join('; ')}`,
+    );
+  }
+
+  return parts.join('\n');
+}
 
 export class TestExecutor {
   private channel: BroadcastChannel;
@@ -30,9 +113,26 @@ export class TestExecutor {
 
   /**
    * Signal to the orchestrator that this tab is loaded and ready to run tests.
+   * Waits for the file tree to load before signalling, with a safety timeout.
    */
   signalReady(): void {
-    this.send({ type: 'ready', projectId: this.projectId });
+    const safetyTimeout = setTimeout(() => {
+      clearInterval(checkTimer);
+      console.warn('[test-executor] Safety timeout — signalling ready without file tree');
+      this.send({ type: 'ready', projectId: this.projectId });
+    }, 30000);
+
+    const checkTimer = setInterval(() => {
+      const mainLayout = document.querySelector('[data-testid="main-layout"]');
+      const fileTree = document.querySelector('[data-testid^="file-tree-item-"]')
+                    || document.querySelector('[data-testid="file-explorer-empty"]');
+
+      if (mainLayout && fileTree) {
+        clearInterval(checkTimer);
+        clearTimeout(safetyTimeout);
+        this.send({ type: 'ready', projectId: this.projectId });
+      }
+    }, 200);
   }
 
   /**
@@ -70,6 +170,10 @@ export class TestExecutor {
 
       case 'cleanup':
         this.send({ type: 'closing' });
+        if (msg.keepOpen) {
+          // Keep tab open for manual inspection — don't close or dispose
+          return;
+        }
         this.dispose();
         // Give the message time to be sent before closing
         setTimeout(() => window.close(), 200);
@@ -118,11 +222,23 @@ export class TestExecutor {
       let pass = false;
       let detail = '';
       let status: 'tested' | 'unsupported' | 'error' = 'tested';
+      let trace: TestTrace | undefined;
+
+      // Capture console output during the test
+      const capture = startConsoleCapture();
 
       try {
         const result = await test.run(ctx);
         pass = result.pass;
         detail = result.detail;
+
+        // On failure, capture diagnostics
+        if (!pass) {
+          trace = {
+            consoleLogs: capture.getLogs(),
+            domSnapshot: captureDomSnapshot(),
+          };
+        }
       } catch (err) {
         if (err instanceof UINotSupportedError) {
           pass = false;
@@ -133,6 +249,14 @@ export class TestExecutor {
           detail = `Uncaught error: ${err instanceof Error ? err.message : String(err)}`;
           status = 'error';
         }
+        // Capture diagnostics on error
+        trace = {
+          consoleLogs: capture.getLogs(),
+          domSnapshot: captureDomSnapshot(),
+          errorStack: err instanceof Error ? err.stack : undefined,
+        };
+      } finally {
+        capture.restore();
       }
 
       const storedResult: StoredTestResult = {
@@ -146,6 +270,7 @@ export class TestExecutor {
         fixture: 'browser',
         timestamp: new Date().toISOString(),
         status,
+        trace,
       };
 
       results.push(storedResult);

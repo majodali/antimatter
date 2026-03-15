@@ -135,7 +135,32 @@ function TestRow({
               : 'text-red-400 bg-red-500/5'
           }`}
         >
-          {result.detail}
+          <div>{result.detail}</div>
+          {/* Trace data (console logs, DOM snapshot, stack) */}
+          {result.trace && (
+            <div className="mt-2 space-y-1.5">
+              {result.trace.errorStack && (
+                <details className="text-red-300">
+                  <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground">Stack trace</summary>
+                  <pre className="mt-1 text-[10px] whitespace-pre-wrap opacity-80">{result.trace.errorStack}</pre>
+                </details>
+              )}
+              {result.trace.consoleLogs.length > 0 && (
+                <details className="text-muted-foreground">
+                  <summary className="cursor-pointer text-[10px] hover:text-foreground">Console ({result.trace.consoleLogs.length} lines)</summary>
+                  <pre className="mt-1 text-[10px] whitespace-pre-wrap opacity-80 max-h-40 overflow-y-auto">
+                    {result.trace.consoleLogs.join('\n')}
+                  </pre>
+                </details>
+              )}
+              {result.trace.domSnapshot && (
+                <details className="text-muted-foreground">
+                  <summary className="cursor-pointer text-[10px] hover:text-foreground">DOM snapshot</summary>
+                  <pre className="mt-1 text-[10px] whitespace-pre-wrap opacity-80">{result.trace.domSnapshot}</pre>
+                </details>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -216,6 +241,7 @@ export function TestResultsPanel() {
   const testTabStatus = useTestResultStore((s) => s.testTabStatus);
 
   const [error, setError] = useState<string | null>(null);
+  const [keepTabOpen, setKeepTabOpen] = useState(false);
   const orchestratorRef = useRef<TestOrchestrator | null>(null);
 
   // Build results lookup map
@@ -260,11 +286,11 @@ export function TestResultsPanel() {
       if (!orchestratorRef.current) {
         orchestratorRef.current = new TestOrchestrator();
       }
-      await orchestratorRef.current.runTests();
+      await orchestratorRef.current.runTests({ keepTabOpen });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [keepTabOpen]);
 
   const handleRunFailed = useCallback(async () => {
     setError(null);
@@ -275,7 +301,7 @@ export function TestResultsPanel() {
       const failedIds = results
         .filter((r) => !r.pass && r.status !== 'unsupported')
         .map((r) => r.id);
-      await orchestratorRef.current.runTests({ testIds: failedIds });
+      await orchestratorRef.current.runTests({ testIds: failedIds, keepTabOpen });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -317,6 +343,18 @@ export function TestResultsPanel() {
           <RotateCcw className="h-3 w-3" />
           Run Failed
         </button>
+
+        {/* Keep tab open checkbox */}
+        <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={keepTabOpen}
+            onChange={(e) => setKeepTabOpen(e.target.checked)}
+            className="h-3 w-3"
+            disabled={isRunning}
+          />
+          Keep tab
+        </label>
 
         {/* Tab status indicator */}
         {testTabStatus !== 'idle' && (

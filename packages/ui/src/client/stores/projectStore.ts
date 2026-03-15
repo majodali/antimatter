@@ -8,6 +8,7 @@ import {
   readBrowserFile,
   saveFile,
 } from '@/lib/api';
+import { acquireLock, releaseLock } from '@/lib/tab-lock';
 
 export interface ImportProgress {
   current: number;
@@ -47,6 +48,10 @@ const SKIP_PATTERNS = [
   '.terraform/',
 ];
 
+// Check URL params once at module load — avoids race with sessionStorage in iframes
+const _urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+const _urlProjectId = _urlParams?.get('project') ?? null;
+
 export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: (() => {
     try {
@@ -56,7 +61,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       return [];
     }
   })(),
-  currentProjectId: localStorage.getItem(STORAGE_KEY),
+  // URL ?project= parameter takes priority over sessionStorage.
+  // This prevents iframes (which share sessionStorage with parent) from
+  // loading the parent tab's project.
+  currentProjectId: _urlProjectId ?? sessionStorage.getItem(STORAGE_KEY),
   isLoading: false,
   error: null,
   importProgress: null,
@@ -92,19 +100,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       localStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify(projects));
       const currentProjectId = state.currentProjectId === id ? null : state.currentProjectId;
       if (currentProjectId === null) {
-        localStorage.removeItem(STORAGE_KEY);
+        sessionStorage.removeItem(STORAGE_KEY);
       }
       return { projects, currentProjectId };
     });
   },
 
   selectProject: (id: string) => {
-    localStorage.setItem(STORAGE_KEY, id);
-    set({ currentProjectId: id });
+    if (!acquireLock(id)) {
+      set({ error: 'This project is already open in another tab' });
+      return;
+    }
+    sessionStorage.setItem(STORAGE_KEY, id);
+    set({ currentProjectId: id, error: null });
   },
 
   clearProject: () => {
-    localStorage.removeItem(STORAGE_KEY);
+    const { currentProjectId } = get();
+    if (currentProjectId) releaseLock(currentProjectId);
+    sessionStorage.removeItem(STORAGE_KEY);
     set({ currentProjectId: null });
   },
 

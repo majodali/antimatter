@@ -1,13 +1,14 @@
 /**
  * Workspace Server — runs on EC2 instances, providing the full workspace backend.
  *
- * Combines all project-scoped APIs (files, build, agent, deploy, environments)
- * with interactive terminal (WebSocket + PTY) in a single Express server.
+ * Supports multiple projects per server. Each project gets its own ProjectContext
+ * with isolated: file system, PTY terminal, S3 sync, workflow engine, and WebSocket
+ * connections. Projects are lazy-initialized on first request.
  *
  * Lifecycle:
  *  1. EC2 user-data downloads this bundle from S3 and starts it via systemd
- *  2. On first boot, syncs project files from S3 to local EBS
- *  3. Serves APIs on port 8080, proxied by ALB + CloudFront
+ *  2. If PROJECT_ID env var is set, that project is auto-initialized (backward compat)
+ *  3. Additional projects are initialized on demand via /workspace/{projectId}/* routes
  *  4. Idle shutdown: stops EC2 instance after 10 min with no WebSocket connections
  */
 
@@ -15,15 +16,8 @@ import express from 'express';
 import { createServer } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { URL } from 'node:url';
-import { existsSync, readdirSync, mkdirSync, createWriteStream } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { pipeline } from 'node:stream/promises';
-import { Readable } from 'node:stream';
 import {
   S3Client,
-  ListObjectsV2Command,
-  GetObjectCommand,
 } from '@aws-sdk/client-s3';
 import {
   LambdaClient,
@@ -39,28 +33,12 @@ import {
   StopInstancesCommand,
 } from '@aws-sdk/client-ec2';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
-import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
-import { LocalWorkspaceEnvironment, syncToS3 } from '@antimatter/workspace';
-import type { SyncOptions, SyncResult } from '@antimatter/workspace';
-import { watchDebounced } from '@antimatter/filesystem';
-import type { FileSystem, WatchEvent, Watcher, WorkspacePath } from '@antimatter/filesystem';
+import { SSMClient } from '@aws-sdk/client-ssm';
 import { EventLogger } from './services/event-logger.js';
-import type { BuildRule, BuildResult } from '@antimatter/project-model';
-import { WorkspaceService } from './services/workspace-service.js';
-import { createFileRouter } from './routes/filesystem.js';
-import { createBuildRouter } from './routes/build.js';
-import { createAgentRouter } from './routes/agent.js';
-import { createDeployRouter } from './routes/deploy.js';
-import { createEnvironmentRouter } from './routes/environments.js';
-import { createActivityRouter } from './routes/activity.js';
-import { createGitRouter } from './routes/git.js';
-import { createEventsRouter } from './routes/events.js';
-import { createWorkflowRouter } from './routes/workflow.js';
-import { createTestResultsRouter } from './routes/test-results.js';
 import { createAuthMiddleware } from './middleware/auth.js';
-import { WorkflowManager } from './services/workflow-manager.js';
-import { ErrorStore } from './services/error-store.js';
 import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
+import { ProjectContext } from './project-context.js';
+import type { SharedConfig } from './project-context.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -74,582 +52,32 @@ const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/workspace/data';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
-if (!PROJECT_ID) {
-  console.error('ERROR: PROJECT_ID environment variable is required');
-  process.exit(1);
+// PROJECT_ID is now optional — server starts empty and loads projects on demand.
+// If set, that project is auto-initialized on startup (backward compat).
+if (PROJECT_ID) {
+  console.log(`[workspace-server] Primary project: ${PROJECT_ID}`);
 }
-
-console.log(`[workspace-server] Starting for project: ${PROJECT_ID}`);
 console.log(`[workspace-server] Workspace root: ${WORKSPACE_ROOT}`);
 console.log(`[workspace-server] S3 bucket: ${PROJECTS_BUCKET}`);
 
 // ---------------------------------------------------------------------------
-// Event Logger — centralized logging to S3 + EventBridge signaling
+// Global Event Logger — for server-wide events (not project-scoped)
 // ---------------------------------------------------------------------------
 
-const eventLogger = new EventLogger({
+const globalEventLogger = new EventLogger({
   s3Client: new S3Client({}),
   bucket: PROJECTS_BUCKET,
   source: 'workspace',
-  projectId: PROJECT_ID,
+  projectId: PROJECT_ID || 'server',
   eventBridgeClient: new EventBridgeClient({}),
   eventBusName: process.env.EVENT_BUS_NAME || 'antimatter',
 });
-eventLogger.startPeriodicFlush(10_000);
+globalEventLogger.startPeriodicFlush(10_000);
 
 // ---------------------------------------------------------------------------
-// File Change Notifier — broadcasts filesystem changes to IDE via WebSocket
+// Lazy-initialized deployment clients (shared across all projects)
 // ---------------------------------------------------------------------------
 
-// Two-tier ignore configuration:
-//   watcherIgnore  — events matching these prefixes never reach the workflow engine or UI.
-//   explorerIgnore — events matching these prefixes are hidden from the UI (file explorer +
-//                    WebSocket broadcasts) but STILL reach the workflow engine.
-// Defaults are sensible for most projects; can be overridden via .antimatter/config.json.
-
-const DEFAULT_WATCHER_IGNORE = ['.git/', '.vite-temp/'];
-const DEFAULT_EXPLORER_IGNORE = [
-  'node_modules/', '.antimatter-cache/', 'dist/', '.next/', '__pycache__/', '.git/',
-];
-const NOISE_FILES = ['.antimatter-sync.json'];
-
-let watcherIgnorePatterns: string[] = [...DEFAULT_WATCHER_IGNORE];
-let explorerIgnorePatterns: string[] = [...DEFAULT_EXPLORER_IGNORE];
-
-/** Load ignore config from .antimatter/config.json (if it exists). */
-async function loadIgnoreConfig(projectPath: string): Promise<void> {
-  try {
-    const configPath = join(projectPath, '.antimatter', 'config.json');
-    const raw = await readFile(configPath, 'utf-8');
-    const config = JSON.parse(raw);
-    if (Array.isArray(config.watcherIgnore)) {
-      watcherIgnorePatterns = config.watcherIgnore;
-      console.log(`[config] watcherIgnore loaded: ${watcherIgnorePatterns.join(', ')}`);
-    }
-    if (Array.isArray(config.explorerIgnore)) {
-      explorerIgnorePatterns = config.explorerIgnore;
-      console.log(`[config] explorerIgnore loaded: ${explorerIgnorePatterns.join(', ')}`);
-    }
-  } catch {
-    // No config file or invalid JSON — use defaults
-  }
-}
-
-/** Returns the current explorerIgnore patterns (used by file tree API). */
-function getExplorerIgnorePatterns(): string[] {
-  return explorerIgnorePatterns;
-}
-
-function isWatcherIgnored(path: string): boolean {
-  const normalized = path.startsWith('/') ? path.slice(1) : path;
-  return watcherIgnorePatterns.some(p => normalized.startsWith(p)) || NOISE_FILES.includes(normalized);
-}
-
-function isExplorerIgnored(path: string): boolean {
-  const normalized = path.startsWith('/') ? path.slice(1) : path;
-  return explorerIgnorePatterns.some(p => normalized.startsWith(p)) || NOISE_FILES.includes(normalized);
-}
-
-class FileChangeNotifier {
-  private watcher: Watcher | null = null;
-  private onBulkChange: (() => void) | null = null;
-  private onFilteredChanges: ((events: readonly WatchEvent[]) => void) | null = null;
-
-  // Batching: accumulate WebSocket broadcasts for up to BATCH_MS or BATCH_MAX events
-  private pendingBroadcast: { type: string; path: string }[] = [];
-  private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
-  private broadcastFn: ((msg: object) => void) | null = null;
-  private readonly BROADCAST_BATCH_MS = 500;
-  private readonly BROADCAST_BATCH_MAX = 50;
-
-  start(
-    fs: FileSystem,
-    broadcast: (msg: object) => void,
-    onBulkChange?: () => void,
-    onFilteredChanges?: (events: readonly WatchEvent[]) => void,
-  ): void {
-    this.onBulkChange = onBulkChange ?? null;
-    this.onFilteredChanges = onFilteredChanges ?? null;
-    this.broadcastFn = broadcast;
-
-    this.watcher = watchDebounced(
-      fs,
-      '/' as WorkspacePath,
-      (events: readonly WatchEvent[]) => {
-        // First tier: filter by watcherIgnore — these events are entirely discarded
-        const watcherFiltered = events.filter(e => !isWatcherIgnored(e.path));
-        if (watcherFiltered.length === 0) return;
-
-        // Feed workflow engine with ALL non-watcherIgnore events (including node_modules)
-        if (this.onFilteredChanges) {
-          this.onFilteredChanges(watcherFiltered);
-        }
-
-        // Second tier: filter by explorerIgnore for UI broadcasting
-        const uiFiltered = watcherFiltered.filter(e => !isExplorerIgnored(e.path));
-        if (uiFiltered.length > 0) {
-          this.queueBroadcast(uiFiltered);
-        }
-
-        // Trigger immediate S3 sync for bulk operations (git checkout, etc.)
-        if (watcherFiltered.length > 20 && this.onBulkChange) {
-          this.onBulkChange();
-        }
-      },
-      300, // debounce ms
-    );
-  }
-
-  /** Queue file-changes for batched WebSocket broadcast. */
-  private queueBroadcast(events: readonly WatchEvent[]): void {
-    for (const e of events) {
-      this.pendingBroadcast.push({ type: e.type, path: e.path });
-    }
-
-    // Flush immediately if batch size reached
-    if (this.pendingBroadcast.length >= this.BROADCAST_BATCH_MAX) {
-      this.flushBroadcast();
-      return;
-    }
-
-    // Otherwise start/reset timer
-    if (this.broadcastTimer) {
-      clearTimeout(this.broadcastTimer);
-    }
-    this.broadcastTimer = setTimeout(() => this.flushBroadcast(), this.BROADCAST_BATCH_MS);
-  }
-
-  /** Send accumulated file-changes as a single WebSocket message. */
-  private flushBroadcast(): void {
-    if (this.broadcastTimer) {
-      clearTimeout(this.broadcastTimer);
-      this.broadcastTimer = null;
-    }
-    if (this.pendingBroadcast.length === 0 || !this.broadcastFn) return;
-
-    const changes = this.pendingBroadcast;
-    this.pendingBroadcast = [];
-    this.broadcastFn({ type: 'file-changes', changes });
-  }
-
-  stop(): void {
-    this.flushBroadcast(); // Send any pending changes before stopping
-    this.watcher?.close();
-    this.watcher = null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// S3 Sync Scheduler — periodic workspace → S3 backup
-// ---------------------------------------------------------------------------
-
-class S3SyncScheduler {
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private syncing = false;
-
-  constructor(private readonly syncOptions: SyncOptions) {}
-
-  start(intervalMs = 30_000): void {
-    this.timer = setInterval(() => this.sync(), intervalMs);
-  }
-
-  async sync(): Promise<SyncResult | null> {
-    if (this.syncing) return null;
-    this.syncing = true;
-    try {
-      const result = await syncToS3(this.syncOptions);
-      if (result.uploaded > 0 || result.deleted > 0) {
-        eventLogger.info('system', `S3 sync: ${result.uploaded} uploaded, ${result.deleted} deleted (${result.durationMs}ms)`,
-          { uploaded: result.uploaded, deleted: result.deleted, durationMs: result.durationMs });
-      }
-      return result;
-    } catch (err) {
-      eventLogger.error('system', 'S3 sync failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    } finally {
-      this.syncing = false;
-    }
-  }
-
-  async shutdown(): Promise<void> {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-    // Final sync before shutdown
-    await this.sync();
-  }
-}
-
-// ---------------------------------------------------------------------------
-// PTY Manager — shared pseudo-terminal
-// ---------------------------------------------------------------------------
-
-// node-pty is a native module, installed separately on EC2
-let pty: any;
-try {
-  pty = require('node-pty');
-} catch {
-  console.warn('[workspace-server] node-pty not available — terminal disabled');
-}
-
-const MAX_REPLAY_BYTES = 50 * 1024;
-
-class PtyManager {
-  private shell: any = null;
-  private replayBuffer = '';
-  private listeners = new Set<(data: string) => void>();
-
-  get isRunning(): boolean {
-    return this.shell !== null;
-  }
-
-  start(cwd: string): void {
-    if (!pty) {
-      console.warn('[pty] node-pty not available');
-      return;
-    }
-    if (this.shell) return;
-
-    if (!existsSync(cwd)) {
-      mkdirSync(cwd, { recursive: true });
-    }
-
-    console.log(`[pty] Starting bash shell in ${cwd}`);
-
-    this.shell = pty.spawn('bash', [], {
-      name: 'xterm-256color',
-      cols: 120,
-      rows: 30,
-      cwd,
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-        HOME: WORKSPACE_ROOT,
-        LANG: 'en_US.UTF-8',
-      },
-    });
-
-    this.shell.onData((data: string) => {
-      this.replayBuffer += data;
-      if (this.replayBuffer.length > MAX_REPLAY_BYTES) {
-        this.replayBuffer = this.replayBuffer.slice(-MAX_REPLAY_BYTES);
-      }
-      for (const cb of this.listeners) {
-        try { cb(data); } catch { /* ignore */ }
-      }
-    });
-
-    this.shell.onExit(({ exitCode, signal }: { exitCode: number; signal: number }) => {
-      console.log(`[pty] Shell exited: code=${exitCode}, signal=${signal}`);
-      this.shell = null;
-      setTimeout(() => {
-        if (!this.shell) {
-          console.log('[pty] Restarting shell...');
-          this.start(cwd);
-        }
-      }, 1000);
-    });
-  }
-
-  write(data: string): void {
-    if (this.shell) this.shell.write(data);
-  }
-
-  resize(cols: number, rows: number): void {
-    if (this.shell) {
-      try { this.shell.resize(cols, rows); } catch { /* ignore */ }
-    }
-  }
-
-  onData(cb: (data: string) => void): () => void {
-    this.listeners.add(cb);
-    return () => this.listeners.delete(cb);
-  }
-
-  getReplayBuffer(): string {
-    return this.replayBuffer;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Connection Manager — tracks WebSocket connections + idle shutdown
-// ---------------------------------------------------------------------------
-
-class ConnectionManager {
-  private readonly connections = new Set<WebSocket>();
-  private shutdownTimer: ReturnType<typeof setTimeout> | null = null;
-  private workflowHoldCount = 0;
-  private holdSafetyTimer: ReturnType<typeof setTimeout> | null = null;
-  private static readonly MAX_HOLD_DURATION_MS = 30 * 60 * 1000; // 30 minutes
-
-  get count(): number {
-    return this.connections.size;
-  }
-
-  private get isHeld(): boolean {
-    return this.workflowHoldCount > 0;
-  }
-
-  add(ws: WebSocket): void {
-    this.connections.add(ws);
-    eventLogger.info('workspace', `Client connected (${this.connections.size} total)`);
-    if (this.shutdownTimer) {
-      clearTimeout(this.shutdownTimer);
-      this.shutdownTimer = null;
-      console.log(`[connections] Shutdown timer cancelled (${this.connections.size} connected)`);
-    }
-  }
-
-  remove(ws: WebSocket): void {
-    this.connections.delete(ws);
-    eventLogger.info('workspace', `Client disconnected (${this.connections.size} remaining)`);
-    console.log(`[connections] Client removed (${this.connections.size} remaining)`);
-
-    if (this.connections.size === 0 && !this.isHeld) {
-      this.startShutdownTimer();
-    }
-  }
-
-  /**
-   * Hold shutdown — called when a workflow command starts executing.
-   * Prevents idle shutdown while long-running commands (npm install, CDK deploy) are in progress.
-   */
-  holdShutdown(): void {
-    this.workflowHoldCount++;
-    console.log(`[connections] Shutdown hold acquired (count: ${this.workflowHoldCount})`);
-
-    // Cancel any pending shutdown timer
-    if (this.shutdownTimer) {
-      clearTimeout(this.shutdownTimer);
-      this.shutdownTimer = null;
-      console.log('[connections] Shutdown timer cancelled (workflow hold active)');
-    }
-
-    // Safety net: start a max-hold timer to prevent leaked holds from keeping instances alive forever
-    if (!this.holdSafetyTimer) {
-      this.holdSafetyTimer = setTimeout(() => {
-        console.warn(`[connections] Max hold duration (${ConnectionManager.MAX_HOLD_DURATION_MS / 60_000}min) exceeded — force releasing all holds`);
-        this.workflowHoldCount = 0;
-        this.holdSafetyTimer = null;
-        if (this.connections.size === 0) {
-          this.startShutdownTimer();
-        }
-      }, ConnectionManager.MAX_HOLD_DURATION_MS);
-    }
-  }
-
-  /**
-   * Release shutdown — called when a workflow command finishes.
-   * If no more holds and no connections, starts the idle shutdown timer.
-   */
-  releaseShutdown(): void {
-    if (this.workflowHoldCount > 0) {
-      this.workflowHoldCount--;
-    }
-    console.log(`[connections] Shutdown hold released (count: ${this.workflowHoldCount})`);
-
-    // Clear safety timer if no more holds
-    if (this.workflowHoldCount === 0 && this.holdSafetyTimer) {
-      clearTimeout(this.holdSafetyTimer);
-      this.holdSafetyTimer = null;
-    }
-
-    if (this.workflowHoldCount === 0 && this.connections.size === 0) {
-      this.startShutdownTimer();
-    }
-  }
-
-  private startShutdownTimer(): void {
-    console.log(`[connections] No connections — starting ${IDLE_TIMEOUT_MS / 1000}s shutdown timer`);
-    eventLogger.info('workspace', `No connections — idle shutdown timer started (${IDLE_TIMEOUT_MS / 1000}s)`);
-    this.shutdownTimer = setTimeout(async () => {
-      console.log('[connections] Idle timeout reached — stopping instance');
-      await selfStop();
-    }, IDLE_TIMEOUT_MS);
-  }
-}
-
-/**
- * Stop this EC2 instance. Reads instance ID from metadata.
- */
-async function selfStop(): Promise<void> {
-  try {
-    // Get instance ID from EC2 metadata (IMDSv2)
-    const tokenRes = await fetch('http://169.254.169.254/latest/api/token', {
-      method: 'PUT',
-      headers: { 'X-aws-ec2-metadata-token-ttl-seconds': '21600' },
-    });
-    const token = await tokenRes.text();
-
-    const idRes = await fetch('http://169.254.169.254/latest/meta-data/instance-id', {
-      headers: { 'X-aws-ec2-metadata-token': token },
-    });
-    const instanceId = await idRes.text();
-
-    console.log(`[workspace-server] Stopping instance ${instanceId}...`);
-
-    // Final S3 sync before shutdown
-    fileChangeNotifier.stop();
-    if (s3SyncScheduler) await s3SyncScheduler.shutdown();
-
-    await eventLogger.emit('workspace.idle.shutdown', 'workspace', 'info',
-      `Stopping instance ${instanceId} due to idle timeout`, { instanceId });
-
-    const ec2 = new EC2Client({});
-    await ec2.send(new StopInstancesCommand({
-      InstanceIds: [instanceId],
-    }));
-  } catch (err) {
-    console.error('[workspace-server] Failed to self-stop:', err);
-    // Don't exit — instance will be stopped by the stop command or manually
-  }
-}
-
-// ---------------------------------------------------------------------------
-// S3 Initial Sync — download project files on first boot
-// ---------------------------------------------------------------------------
-
-/**
- * Download project files from S3 on first boot.
- * Returns the list of relative paths that were downloaded, so the workflow
- * engine can be fed synthetic file:change events for them.
- */
-async function initialSyncFromS3(projectPath: string): Promise<string[]> {
-  if (!PROJECTS_BUCKET) {
-    console.log('[sync] No S3 bucket configured — skipping sync');
-    return [];
-  }
-
-  // Check if project directory has files (skip sync if not empty)
-  if (existsSync(projectPath)) {
-    const entries = readdirSync(projectPath);
-    if (entries.length > 0) {
-      console.log(`[sync] Project directory has ${entries.length} entries — skipping S3 sync`);
-      return [];
-    }
-  }
-
-  console.log('[sync] Empty project directory — syncing from S3...');
-  const s3 = new S3Client({});
-  const prefix = `projects/${PROJECT_ID}/files/`;
-  const downloadedFiles: string[] = [];
-
-  try {
-    let continuationToken: string | undefined;
-    do {
-      const result = await s3.send(new ListObjectsV2Command({
-        Bucket: PROJECTS_BUCKET,
-        Prefix: prefix,
-        ContinuationToken: continuationToken,
-      }));
-
-      for (const obj of result.Contents ?? []) {
-        if (!obj.Key || obj.Key.endsWith('/')) continue;
-
-        const relativePath = obj.Key.slice(prefix.length);
-        const localPath = join(projectPath, relativePath);
-
-        // Ensure directory exists
-        await mkdir(dirname(localPath), { recursive: true });
-
-        // Download file
-        const getResult = await s3.send(new GetObjectCommand({
-          Bucket: PROJECTS_BUCKET,
-          Key: obj.Key,
-        }));
-
-        if (getResult.Body) {
-          const stream = getResult.Body as Readable;
-          const ws = createWriteStream(localPath);
-          await pipeline(stream, ws);
-          downloadedFiles.push(relativePath);
-        }
-      }
-
-      continuationToken = result.NextContinuationToken;
-    } while (continuationToken);
-
-    console.log(`[sync] Downloaded ${downloadedFiles.length} files from S3`);
-    eventLogger.info('workspace', `S3 sync complete: ${downloadedFiles.length} files downloaded`, { downloaded: downloadedFiles.length });
-  } catch (err) {
-    console.error('[sync] S3 sync failed:', err);
-    eventLogger.error('workspace', 'S3 initial sync failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    // Continue — workspace can still function with an empty directory
-  }
-
-  return downloadedFiles;
-}
-
-// ---------------------------------------------------------------------------
-// Express App + Routes
-// ---------------------------------------------------------------------------
-
-const projectPath = join(WORKSPACE_ROOT, PROJECT_ID);
-const s3Client = new S3Client({});
-
-// Create workspace environment
-const env = new LocalWorkspaceEnvironment({
-  rootPath: projectPath,
-  id: PROJECT_ID,
-  label: PROJECT_ID,
-});
-
-// WorkspaceService is created lazily after SSM secrets are fetched.
-// Until then, use the env var as initial key.
-let workspace = new WorkspaceService({
-  env,
-  anthropicApiKey: ANTHROPIC_API_KEY,
-});
-
-// Broadcast a JSON message to all connected WebSocket clients
-function broadcastToClients(msg: object): void {
-  const data = JSON.stringify(msg);
-  for (const client of wss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(data);
-    }
-  }
-}
-
-// Error store — server-side project error storage.
-// onChange callback broadcasts error patches via workflowManager.
-// Uses a lazy reference because workflowManager isn't created yet.
-let workflowManager: WorkflowManager;
-const errorStore = new ErrorStore(env, () => {
-  workflowManager.broadcastStatePatch({
-    errors: errorStore.getAllErrors(),
-  });
-});
-
-// Workflow manager — event-driven rule engine
-workflowManager = new WorkflowManager({
-  env,
-  broadcast: broadcastToClients,
-  errorStore,
-  onExecStart: () => connectionManager.holdShutdown(),
-  onExecEnd: () => connectionManager.releaseShutdown(),
-});
-
-// S3 sync scheduler — periodic workspace → S3 backup
-const s3SyncScheduler = PROJECTS_BUCKET
-  ? new S3SyncScheduler({
-      s3Client: new S3Client({}),
-      bucket: PROJECTS_BUCKET,
-      s3Prefix: `projects/${PROJECT_ID}/files/`,
-      localPath: projectPath,
-      excludePatterns: ['node_modules/', '.git/', '.antimatter-cache/', 'dist/', 'dist-lambda/'],
-    })
-  : null;
-
-// File change notifier — broadcasts filesystem changes to connected IDE clients
-const fileChangeNotifier = new FileChangeNotifier();
-
-// Lazy-initialized deployment clients
 let deployLambdaClient: DeployLambdaClient | undefined;
 let deployCloudfrontClient: DeployCloudfrontClient | undefined;
 
@@ -691,7 +119,170 @@ function getDeployCloudfrontClient(): DeployCloudfrontClient {
   return deployCloudfrontClient;
 }
 
+// ---------------------------------------------------------------------------
+// Connection Manager — global idle shutdown across all projects
+// ---------------------------------------------------------------------------
+
+class ConnectionManager {
+  private totalConnections = 0;
+  private shutdownTimer: ReturnType<typeof setTimeout> | null = null;
+  private workflowHoldCount = 0;
+  private holdSafetyTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly MAX_HOLD_DURATION_MS = 30 * 60 * 1000; // 30 minutes
+
+  get count(): number { return this.totalConnections; }
+
+  private get isHeld(): boolean { return this.workflowHoldCount > 0; }
+
+  add(): void {
+    this.totalConnections++;
+    globalEventLogger.info('workspace', `Client connected (${this.totalConnections} total)`);
+    if (this.shutdownTimer) {
+      clearTimeout(this.shutdownTimer);
+      this.shutdownTimer = null;
+      console.log(`[connections] Shutdown timer cancelled (${this.totalConnections} connected)`);
+    }
+  }
+
+  remove(): void {
+    this.totalConnections = Math.max(0, this.totalConnections - 1);
+    globalEventLogger.info('workspace', `Client disconnected (${this.totalConnections} remaining)`);
+    console.log(`[connections] Client removed (${this.totalConnections} remaining)`);
+    if (this.totalConnections === 0 && !this.isHeld) {
+      this.startShutdownTimer();
+    }
+  }
+
+  holdShutdown(): void {
+    this.workflowHoldCount++;
+    console.log(`[connections] Shutdown hold acquired (count: ${this.workflowHoldCount})`);
+    if (this.shutdownTimer) {
+      clearTimeout(this.shutdownTimer);
+      this.shutdownTimer = null;
+      console.log('[connections] Shutdown timer cancelled (workflow hold active)');
+    }
+    if (!this.holdSafetyTimer) {
+      this.holdSafetyTimer = setTimeout(() => {
+        console.warn(`[connections] Max hold duration exceeded — force releasing all holds`);
+        this.workflowHoldCount = 0;
+        this.holdSafetyTimer = null;
+        if (this.totalConnections === 0) this.startShutdownTimer();
+      }, ConnectionManager.MAX_HOLD_DURATION_MS);
+    }
+  }
+
+  releaseShutdown(): void {
+    if (this.workflowHoldCount > 0) this.workflowHoldCount--;
+    console.log(`[connections] Shutdown hold released (count: ${this.workflowHoldCount})`);
+    if (this.workflowHoldCount === 0 && this.holdSafetyTimer) {
+      clearTimeout(this.holdSafetyTimer);
+      this.holdSafetyTimer = null;
+    }
+    if (this.workflowHoldCount === 0 && this.totalConnections === 0) {
+      this.startShutdownTimer();
+    }
+  }
+
+  private startShutdownTimer(): void {
+    console.log(`[connections] No connections — starting ${IDLE_TIMEOUT_MS / 1000}s shutdown timer`);
+    globalEventLogger.info('workspace', `No connections — idle shutdown timer started (${IDLE_TIMEOUT_MS / 1000}s)`);
+    this.shutdownTimer = setTimeout(async () => {
+      console.log('[connections] Idle timeout reached — stopping instance');
+      await selfStop();
+    }, IDLE_TIMEOUT_MS);
+  }
+}
+
+const connectionManager = new ConnectionManager();
+
+// ---------------------------------------------------------------------------
+// Project Context Management — lazy initialization with promise coalescing
+// ---------------------------------------------------------------------------
+
+const projectContexts = new Map<string, ProjectContext>();
+const contextInitPromises = new Map<string, Promise<ProjectContext>>();
+
+const sharedConfig: SharedConfig = {
+  workspaceRoot: WORKSPACE_ROOT,
+  projectsBucket: PROJECTS_BUCKET,
+  anthropicApiKey: ANTHROPIC_API_KEY,
+  s3Client: new S3Client({}),
+  ssmClient: new SSMClient({}),
+  eventBridgeClient: new EventBridgeClient({}),
+  eventBusName: process.env.EVENT_BUS_NAME || 'antimatter',
+  getDeployLambdaClient,
+  getDeployCloudfrontClient,
+  onExecStart: () => connectionManager.holdShutdown(),
+  onExecEnd: () => connectionManager.releaseShutdown(),
+};
+
+/**
+ * Get or create a ProjectContext for the given project ID.
+ * Uses promise coalescing to prevent duplicate initializations.
+ */
+async function getOrCreateContext(projectId: string): Promise<ProjectContext> {
+  // Already initialized
+  const existing = projectContexts.get(projectId);
+  if (existing) return existing;
+
+  // In-progress initialization — coalesce concurrent requests
+  const pending = contextInitPromises.get(projectId);
+  if (pending) return pending;
+
+  // New context — initialize
+  const promise = (async () => {
+    console.log(`[workspace-server] Creating context for project: ${projectId}`);
+    const ctx = new ProjectContext(projectId, sharedConfig);
+    await ctx.initialize();
+    projectContexts.set(projectId, ctx);
+    contextInitPromises.delete(projectId);
+    return ctx;
+  })();
+
+  contextInitPromises.set(projectId, promise);
+  return promise;
+}
+
+// ---------------------------------------------------------------------------
+// Self-Stop — stops this EC2 instance on idle timeout
+// ---------------------------------------------------------------------------
+
+async function selfStop(): Promise<void> {
+  try {
+    const tokenRes = await fetch('http://169.254.169.254/latest/api/token', {
+      method: 'PUT',
+      headers: { 'X-aws-ec2-metadata-token-ttl-seconds': '21600' },
+    });
+    const token = await tokenRes.text();
+
+    const idRes = await fetch('http://169.254.169.254/latest/meta-data/instance-id', {
+      headers: { 'X-aws-ec2-metadata-token': token },
+    });
+    const instanceId = await idRes.text();
+
+    console.log(`[workspace-server] Stopping instance ${instanceId}...`);
+
+    // Shutdown all project contexts (stops file watchers, PTYs, flushes S3 sync)
+    for (const ctx of projectContexts.values()) {
+      await ctx.shutdown();
+    }
+
+    await globalEventLogger.emit('workspace.idle.shutdown', 'workspace', 'info',
+      `Stopping instance ${instanceId} due to idle timeout`, { instanceId });
+
+    const ec2 = new EC2Client({});
+    await ec2.send(new StopInstancesCommand({ InstanceIds: [instanceId] }));
+  } catch (err) {
+    console.error('[workspace-server] Failed to self-stop:', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Express App
+// ---------------------------------------------------------------------------
+
 const app = express();
+
 // CORS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -705,48 +296,30 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '10mb' }));
 
-// Strip path prefixes. CloudFront routes:
-//   /workspace/{projectId}/api/files/* → this server
-//   /ws/terminal/{projectId}           → WebSocket upgrade
-// ALB forwards the full path, so we strip the prefix here.
-app.use((req, _res, next) => {
-  const workspacePrefix = `/workspace/${PROJECT_ID}`;
-  if (req.url.startsWith(`${workspacePrefix}/`)) {
-    req.url = req.url.slice(workspacePrefix.length);
-  } else if (req.url === workspacePrefix) {
-    req.url = '/';
-  }
-  // Also handle /{projectId}/ prefix (ALB health checks)
-  if (req.url.startsWith(`/${PROJECT_ID}/`)) {
-    req.url = req.url.slice(`/${PROJECT_ID}`.length);
-  } else if (req.url === `/${PROJECT_ID}`) {
-    req.url = '/';
-  }
-  next();
-});
+// ---- Global endpoints (no project context needed) ----
 
-// Health check
 app.get('/health', (_req, res) => {
   res.json({
     status: 'healthy',
-    projectId: PROJECT_ID,
+    projects: [...projectContexts.keys()],
+    primaryProject: PROJECT_ID || null,
     uptime: process.uptime(),
   });
 });
 
-// Status
 app.get('/status', (_req, res) => {
+  const projectStatuses: Record<string, { connections: number }> = {};
+  for (const [id, ctx] of projectContexts) {
+    projectStatuses[id] = { connections: ctx.connections.size };
+  }
   res.json({
-    projectId: PROJECT_ID,
-    connections: connectionManager.count,
+    projects: projectStatuses,
+    totalConnections: connectionManager.count,
     uptime: process.uptime(),
-    ptyRunning: ptyManager.isRunning,
   });
 });
 
 // ---- Auth middleware for API routes ----
-// Cognito config is passed via user-data config.env.
-// Health and status endpoints above remain unauthenticated (used by ALB health checks).
 const COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID || '';
 const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID || '';
 
@@ -759,75 +332,78 @@ if (COGNITO_USER_POOL_ID && COGNITO_CLIENT_ID) {
   }));
 }
 
-// Refresh — download latest workspace server from S3 and restart via systemd
-app.post('/api/refresh', async (_req, res) => {
-  try {
-    if (!PROJECTS_BUCKET) {
-      return res.status(500).json({ error: 'PROJECTS_BUCKET not configured' });
-    }
+// ---- Internal project context management ----
 
-    console.log('[workspace-server] Refresh requested — downloading latest bundle from S3...');
-
-    const result = await env.execute({
-      command: `aws s3 cp "s3://${PROJECTS_BUCKET}/workspace-server/workspace-server.js" /opt/antimatter/workspace-server.js`,
-      cwd: '.',
-      timeout: 30000,
-    });
-
-    if (result.exitCode !== 0) {
-      console.error('[workspace-server] Refresh failed:', result.stderr);
-      return res.status(500).json({ error: 'Failed to download update', details: result.stderr });
-    }
-
-    // Also download package.json and install external dependencies (esbuild, node-pty)
-    await env.execute({
-      command: `aws s3 cp "s3://${PROJECTS_BUCKET}/workspace-server/package.json" /opt/antimatter/package.json && cd /opt/antimatter && npm install --production`,
-      cwd: '.',
-      timeout: 60000,
-    }).catch(err => console.warn('[workspace-server] package.json update skipped:', err));
-
-    console.log('[workspace-server] Bundle updated. Exiting for systemd restart...');
-    res.json({ success: true, message: 'Update downloaded. Restarting...' });
-
-    // Give response time to flush, then exit — systemd Restart=always restarts us
-    setTimeout(() => process.exit(0), 500);
-  } catch (err) {
-    console.error('[workspace-server] Refresh error:', err);
-    res.status(500).json({ error: 'Refresh failed', message: String(err) });
+/** Shut down a single project's context (PTY, sync, watcher) without stopping the server. */
+app.delete('/internal/project-context/:projectId', async (req, res) => {
+  const { projectId } = req.params;
+  const ctx = projectContexts.get(projectId);
+  if (!ctx) {
+    return res.status(404).json({ error: 'No active context for this project' });
   }
+  await ctx.shutdown();
+  projectContexts.delete(projectId);
+  console.log(`[workspace-server] Project context ${projectId} removed`);
+  res.json({ success: true });
 });
 
-// Mount project-scoped API routes
-app.use('/api/files', createFileRouter(workspace, {
-  getExplorerIgnore: () => explorerIgnorePatterns,
-}));
-app.use('/api/build', createBuildRouter(workspace, {}));
-app.use('/api/agent', createAgentRouter(workspace));
-app.use('/api/deploy', (req, res, next) => {
-  createDeployRouter(
-    workspace,
-    s3Client,
-    {
-      bucket: PROJECTS_BUCKET,
-      prefix: `projects/${PROJECT_ID}/files/`,
-      lambdaClient: getDeployLambdaClient(),
-      cloudfrontClient: getDeployCloudfrontClient(),
-    },
-  )(req, res, next);
+/** List active project contexts. */
+app.get('/internal/project-contexts', (_req, res) => {
+  const contexts = [...projectContexts.keys()].map(id => ({
+    projectId: id,
+    connections: projectContexts.get(id)!.connections.size,
+  }));
+  res.json({ contexts });
 });
-app.use('/api/environments', createEnvironmentRouter(workspace));
-app.use('/api/activity', createActivityRouter(workspace));
-app.use('/api/git', createGitRouter(workspace));
-app.use('/api/events', createEventsRouter(s3Client, PROJECTS_BUCKET, PROJECT_ID));
-app.use('/api/workflow', createWorkflowRouter(workflowManager, errorStore));
-app.use('/api/test-results', createTestResultsRouter());
+
+// ---- Dynamic project routing ----
+// Parses project ID from URL, strips prefix, and delegates to the project's router.
+
+app.use((req, res, next) => {
+  let projectId: string | null = null;
+  let strippedUrl: string | null = null;
+
+  // Match /workspace/{projectId}/...
+  const workspaceMatch = req.url.match(/^\/workspace\/([^/?]+)(\/.*)?$/);
+  if (workspaceMatch) {
+    projectId = decodeURIComponent(workspaceMatch[1]);
+    strippedUrl = workspaceMatch[2] || '/';
+  }
+
+  // Backward compat: /{PROJECT_ID}/... prefix (ALB health checks use this)
+  if (!projectId && PROJECT_ID) {
+    if (req.url.startsWith(`/${PROJECT_ID}/`)) {
+      projectId = PROJECT_ID;
+      strippedUrl = req.url.slice(`/${PROJECT_ID}`.length);
+    } else if (req.url === `/${PROJECT_ID}`) {
+      projectId = PROJECT_ID;
+      strippedUrl = '/';
+    }
+  }
+
+  // Backward compat: bare /api/* routes → primary project (single-project mode)
+  if (!projectId && PROJECT_ID && req.url.startsWith('/api/')) {
+    projectId = PROJECT_ID;
+    strippedUrl = req.url; // Don't strip — router expects /api/*
+  }
+
+  if (!projectId) return next(); // No project ID found → fall through (404)
+
+  // Get or create project context and delegate to its router
+  getOrCreateContext(projectId)
+    .then(ctx => {
+      req.url = strippedUrl!;
+      ctx.router(req, res, next);
+    })
+    .catch(err => {
+      console.error(`[workspace-server] Failed to get context for ${projectId}:`, err);
+      res.status(500).json({ error: 'Failed to initialize project', message: String(err) });
+    });
+});
 
 // ---------------------------------------------------------------------------
-// HTTP + WebSocket server
+// HTTP + WebSocket Server
 // ---------------------------------------------------------------------------
-
-const ptyManager = new PtyManager();
-const connectionManager = new ConnectionManager();
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
@@ -846,8 +422,7 @@ server.on('upgrade', (req, socket, head) => {
   }
 
   const requestedProjectId = pathParts[terminalIdx + 1];
-  if (requestedProjectId !== PROJECT_ID) {
-    socket.write('HTTP/1.1 421 Misdirected Request\r\n\r\n');
+  if (!requestedProjectId) {
     socket.destroy();
     return;
   }
@@ -860,301 +435,67 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
 
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req);
-  });
+  // Get or create project context, then upgrade
+  getOrCreateContext(requestedProjectId)
+    .then(ctx => {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        // Track in global connection manager (for idle shutdown)
+        connectionManager.add();
+
+        // Delegate to project context for connection handling
+        ctx.handleConnection(ws);
+
+        // Track disconnection in global connection manager
+        const onClose = () => { connectionManager.remove(); };
+        ws.on('close', onClose);
+        ws.on('error', onClose);
+      });
+    })
+    .catch(err => {
+      console.error(`[workspace-server] WebSocket context error for ${requestedProjectId}:`, err);
+      socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+      socket.destroy();
+    });
 });
-
-wss.on('connection', (ws: WebSocket) => {
-  console.log('[workspace-server] WebSocket client connected');
-  connectionManager.add(ws);
-
-  // Send replay buffer
-  const replay = ptyManager.getReplayBuffer();
-  if (replay) {
-    ws.send(JSON.stringify({ type: 'replay', data: replay }));
-  }
-
-  // Send status
-  ws.send(JSON.stringify({ type: 'status', state: 'ready' }));
-
-  // Send full application state snapshot — eliminates REST race condition
-  ws.send(JSON.stringify({
-    type: 'application-state',
-    full: true,
-    state: workflowManager.getApplicationState(),
-  }));
-
-  // Server-side proactive heartbeat — sends every 20s to keep the connection
-  // alive through CloudFront/ALB proxies that have idle timeouts.
-  // This ensures data flows even when both client and PTY are idle.
-  const heartbeatTimer = setInterval(() => {
-    if (ws.readyState === 1 /* WebSocket.OPEN */) {
-      ws.send(JSON.stringify({ type: 'heartbeat' }));
-    }
-  }, 20_000);
-
-  // Forward PTY output to this client
-  const unsubscribe = ptyManager.onData((data) => {
-    if (ws.readyState === 1 /* WebSocket.OPEN */) {
-      ws.send(JSON.stringify({ type: 'output', data }));
-    }
-  });
-
-  // Handle messages from client
-  ws.on('message', (raw) => {
-    try {
-      const msg = JSON.parse(raw.toString());
-
-      switch (msg.type) {
-        case 'input':
-          ptyManager.write(msg.data);
-          break;
-        case 'resize':
-          if (typeof msg.cols === 'number' && typeof msg.rows === 'number') {
-            ptyManager.resize(msg.cols, msg.rows);
-          }
-          break;
-        case 'ping':
-          ws.send(JSON.stringify({ type: 'pong' }));
-          break;
-
-        // --- Workflow commands ---
-        case 'workflow-emit':
-          // Manual event emission: { type: 'workflow-emit', event: { type: 'deploy:teardown' } }
-          workflowManager.emitEvent(msg.event).catch((err: unknown) => {
-            console.error('[workspace-server] Workflow emit failed:', err);
-          });
-          break;
-        case 'workflow-hold':
-          workflowManager.hold();
-          break;
-        case 'workflow-release':
-          workflowManager.release();
-          break;
-        case 'workflow-reload':
-          workflowManager.start().catch((err: unknown) => {
-            console.error('[workspace-server] Workflow reload failed:', err);
-          });
-          break;
-      }
-    } catch {
-      // Ignore malformed messages
-    }
-  });
-
-  ws.on('close', () => {
-    console.log('[workspace-server] WebSocket client disconnected');
-    clearInterval(heartbeatTimer);
-    unsubscribe();
-    connectionManager.remove(ws);
-  });
-
-  ws.on('error', (err) => {
-    console.error('[workspace-server] WebSocket error:', err);
-    clearInterval(heartbeatTimer);
-    unsubscribe();
-    connectionManager.remove(ws);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SSM Secrets
-// ---------------------------------------------------------------------------
-
-const ssmClient = new SSMClient({});
-
-async function getSSMSecret(name: string): Promise<string> {
-  try {
-    const result = await ssmClient.send(
-      new GetParameterCommand({
-        Name: `/antimatter/secrets/${name}`,
-        WithDecryption: true,
-      }),
-    );
-    return result.Parameter?.Value ?? '';
-  } catch {
-    return '';
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Git Auto-Init
-// ---------------------------------------------------------------------------
-
-async function initializeGit(): Promise<void> {
-  console.log('[workspace-server] Initializing git repository...');
-
-  try {
-    // Fetch GitHub PAT from SSM (fall back to env var)
-    const githubPat = (await getSSMSecret('github-pat')) || process.env.GITHUB_PAT || '';
-
-    // Read project metadata from S3 for git config
-    let gitConfig: { repository?: string; defaultBranch?: string; userName?: string; userEmail?: string } = {};
-    if (PROJECTS_BUCKET) {
-      try {
-        const metaRes = await s3Client.send(
-          new GetObjectCommand({
-            Bucket: PROJECTS_BUCKET,
-            Key: `projects/${PROJECT_ID}/meta.json`,
-          }),
-        );
-        const body = await metaRes.Body?.transformToString('utf-8');
-        if (body) {
-          const meta = JSON.parse(body);
-          gitConfig = meta.git ?? {};
-        }
-      } catch (err) {
-        console.warn('[workspace-server] Could not read project meta for git config:', err);
-      }
-    }
-
-    // git init (idempotent — no-op if .git already exists from EBS)
-    await env.execute({ command: 'git init', cwd: '.', timeout: 5000 });
-
-    // Ensure .gitignore includes sync metadata
-    const gitignorePath = join(WORKSPACE_ROOT, PROJECT_ID, '.gitignore');
-    let gitignoreContent = '';
-    try { gitignoreContent = await readFile(gitignorePath, 'utf-8'); } catch { /* no existing .gitignore */ }
-    const ignoreEntries = ['.antimatter-sync.json', '.antimatter-cache/'];
-    const missing = ignoreEntries.filter(e => !gitignoreContent.split('\n').some(l => l.trim() === e));
-    if (missing.length > 0) {
-      const suffix = (gitignoreContent && !gitignoreContent.endsWith('\n')) ? '\n' : '';
-      await writeFile(gitignorePath, gitignoreContent + suffix + missing.join('\n') + '\n');
-      console.log(`[workspace-server] Added to .gitignore: ${missing.join(', ')}`);
-    }
-
-    // Set branch name
-    const branch = gitConfig.defaultBranch || 'main';
-    await env.execute({ command: `git checkout -B ${branch}`, cwd: '.', timeout: 5000 });
-
-    // Set user identity
-    if (gitConfig.userName) {
-      await env.execute({ command: `git config user.name "${gitConfig.userName}"`, cwd: '.', timeout: 5000 });
-    }
-    if (gitConfig.userEmail) {
-      await env.execute({ command: `git config user.email "${gitConfig.userEmail}"`, cwd: '.', timeout: 5000 });
-    }
-
-    // Set remote origin
-    if (gitConfig.repository) {
-      let remoteUrl = gitConfig.repository;
-      // Inject PAT into HTTPS URL for auth
-      if (githubPat && remoteUrl.startsWith('https://')) {
-        remoteUrl = remoteUrl.replace('https://', `https://x-access-token:${githubPat}@`);
-      }
-
-      // Remove existing origin (may not exist — ignore error)
-      await env.execute({ command: 'git remote remove origin', cwd: '.', timeout: 5000 }).catch(() => {});
-      await env.execute({ command: `git remote add origin ${remoteUrl}`, cwd: '.', timeout: 5000 });
-
-      // Fetch remote and set upstream tracking so `git pull` works
-      const fetchResult = await env.execute({ command: 'git fetch origin', cwd: '.', timeout: 30000 });
-      if (fetchResult.exitCode === 0) {
-        await env.execute({
-          command: `git branch --set-upstream-to=origin/${branch} ${branch}`,
-          cwd: '.', timeout: 5000,
-        }).catch(() => {});
-      }
-    }
-
-    // Initial commit if no commits exist
-    const logResult = await env.execute({ command: 'git log --oneline -1', cwd: '.', timeout: 5000 });
-    if (logResult.exitCode !== 0) {
-      await env.execute({ command: 'git add -A', cwd: '.', timeout: 30000 });
-      await env.execute({ command: 'git commit -m "Initial import" --allow-empty', cwd: '.', timeout: 10000 });
-    }
-
-    console.log('[workspace-server] Git repository initialized');
-  } catch (err) {
-    // Git failure should not prevent workspace from starting
-    console.warn('[workspace-server] Git initialization failed (non-fatal):', err);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
 async function startup() {
-  // Ensure project directory exists
-  if (!existsSync(projectPath)) {
-    mkdirSync(projectPath, { recursive: true });
+  // If PROJECT_ID is set, auto-initialize that project (backward compat)
+  if (PROJECT_ID) {
+    console.log(`[workspace-server] Auto-initializing primary project: ${PROJECT_ID}`);
+    await getOrCreateContext(PROJECT_ID);
   }
-
-  // Initial sync from S3 (only if project directory is empty)
-  console.log('[workspace-server] Checking for initial S3 sync...');
-  const downloadedFiles = await initialSyncFromS3(projectPath);
-
-  // Fetch Anthropic API key from SSM (fall back to env var)
-  const ssmAnthropicKey = await getSSMSecret('anthropic-api-key');
-  if (ssmAnthropicKey) {
-    console.log('[workspace-server] Using Anthropic API key from SSM');
-    workspace = new WorkspaceService({ env, anthropicApiKey: ssmAnthropicKey });
-  }
-
-  // Initialize git repository with project config from S3
-  await initializeGit();
-
-  // Start PTY
-  ptyManager.start(projectPath);
-
-  // Initialize error store (load persisted errors from disk)
-  await errorStore.initialize();
-
-  // Start workflow manager (loads definition + state, fires project:initialize if first run)
-  await workflowManager.start();
-
-  // Feed initial S3 files to workflow engine as synthetic file:change events.
-  // This lets workflow rules react to the project's initial state (e.g., trigger
-  // pnpm install when package.json is present). Happens AFTER workflow start so
-  // rules are loaded, but BEFORE file watcher start so no double-events.
-  if (downloadedFiles.length > 0) {
-    const syntheticEvents: WatchEvent[] = downloadedFiles
-      .map(p => ({ type: 'change' as const, path: p as WorkspacePath }));
-    console.log(`[workspace-server] Feeding ${syntheticEvents.length} initial files to workflow engine`);
-    workflowManager.onFileChanges(syntheticEvents);
-  }
-
-  // Load ignore config from .antimatter/config.json (before starting file watcher)
-  await loadIgnoreConfig(projectPath);
-
-  // Start file change notifier — broadcasts to IDE clients + feeds workflow engine
-  fileChangeNotifier.start(
-    env.fileSystem,
-    broadcastToClients,
-    () => s3SyncScheduler?.sync(), // Trigger immediate S3 sync on bulk changes
-    (events) => workflowManager.onFileChanges(events), // Feed workflow engine
-  );
-
-  // Start S3 sync scheduler (every 30s)
-  s3SyncScheduler?.start(30_000);
 
   // Start HTTP server
   server.listen(PORT, async () => {
     console.log(`[workspace-server] Listening on port ${PORT}`);
-    console.log(`[workspace-server] Project: ${PROJECT_ID}`);
-    console.log(`[workspace-server] Project path: ${projectPath}`);
+    console.log(`[workspace-server] Active projects: ${[...projectContexts.keys()].join(', ') || '(none)'}`);
 
-    // Signal that workspace is ready for connections
-    await eventLogger.emit('workspace.ready', 'workspace', 'info',
+    await globalEventLogger.emit('workspace.ready', 'workspace', 'info',
       'Workspace server ready', { port: PORT, uptime: process.uptime() });
   });
 }
 
-// Graceful shutdown — sync files and flush events before exit
+// Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('[workspace-server] SIGTERM received — shutting down');
-  eventLogger.info('workspace', 'SIGTERM received — shutting down');
-  fileChangeNotifier.stop();
-  if (s3SyncScheduler) await s3SyncScheduler.shutdown();
-  await eventLogger.shutdown();
+  globalEventLogger.info('workspace', 'SIGTERM received — shutting down');
+
+  // Shutdown all project contexts
+  for (const ctx of projectContexts.values()) {
+    await ctx.shutdown();
+  }
+
+  await globalEventLogger.shutdown();
   process.exit(0);
 });
 
 startup().catch(async (err) => {
   console.error('[workspace-server] Fatal startup error:', err);
-  await eventLogger.emit('workspace.error', 'workspace', 'error',
+  await globalEventLogger.emit('workspace.error', 'workspace', 'error',
     'Fatal startup error', { error: err instanceof Error ? err.message : String(err) });
   process.exit(1);
 });

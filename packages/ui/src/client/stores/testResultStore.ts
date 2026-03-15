@@ -41,6 +41,8 @@ interface TestResultState {
   testProjectId: string | null;
   /** Lifecycle status of the cross-tab test executor. */
   testTabStatus: TestTabStatus;
+  /** Whether the "popup blocked" modal is visible. */
+  showTestTabModal: boolean;
 
   // Actions — mutators
   setResults: (results: StoredTestResult[]) => void;
@@ -55,6 +57,7 @@ interface TestResultState {
   clearResults: () => void;
   setTestProjectId: (id: string | null) => void;
   setTestTabStatus: (status: TestTabStatus) => void;
+  setShowTestTabModal: (show: boolean) => void;
 
   // Selectors
   getFilteredResults: () => StoredTestResult[];
@@ -73,6 +76,7 @@ export const useTestResultStore = create<TestResultState>()((set, get) => ({
   expandedAreas: new Set<string>(),
   testProjectId: null,
   testTabStatus: 'idle',
+  showTestTabModal: false,
 
   // ---- Actions ----
 
@@ -132,6 +136,7 @@ export const useTestResultStore = create<TestResultState>()((set, get) => ({
   setTestProjectId: (id) => set({ testProjectId: id }),
 
   setTestTabStatus: (status) => set({ testTabStatus: status }),
+  setShowTestTabModal: (show) => set({ showTestTabModal: show }),
 
   // ---- Selectors ----
 

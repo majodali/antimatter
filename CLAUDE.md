@@ -43,6 +43,8 @@ For full details see `docs/architecture.md`.
 
 Lambda API, EC2+ALB workspace, S3 (frontend + data), CloudFront, Cognito, EventBridge. Region: us-west-2.
 
+**Canonical URL: `https://ide.antimatter.solutions`** — Always use this domain for all API calls, automation commands, test URLs, and browser references. Never use the CloudFront distribution URL directly.
+
 ### Key Patterns
 
 - All file operations go through `FileSystem` interface
@@ -90,12 +92,37 @@ A feature is `done` when ALL its test cases are `test-passing`.
 - **Browser**: `/tests` dashboard
 - Tests SHOULD accept modular fixtures (service API + browser UI automation)
 
-### 4. UI Automation
+### 4. UI Automation & the Automation API
 
 All testable user actions should have UI automation support:
 - Supports functional tests without manual browser interaction
-- Reduces dependency on Claude-in-Chrome for testing
 - Serves as agent tools for the AI to drive IDE actions
+
+**Always use the Automation API instead of Claude-in-Chrome for browser interaction.** The Automation API is the primary interface for driving the IDE programmatically. This helps mature the API and avoids fragile browser automation.
+
+**Automation API endpoint:**
+```
+POST /workspace/{projectId}/api/automation/execute
+Content-Type: application/json
+Authorization: Bearer {cognito_token}
+
+{ "command": "tests.run", "params": { ... } }
+```
+
+**Key commands:**
+| Command | Execution | Description |
+|---------|-----------|-------------|
+| `tests.run` | browser/headless | Run functional tests (`fixture: 'browser'` or `'headless'`) |
+| `tests.list` | browser | List available test modules |
+| `tests.results` | browser | Get latest test results |
+| `file.read`, `file.write`, `file.tree` | server | File operations |
+| `git.status`, `git.commit`, `git.push` | server | Git operations |
+| `editor.open`, `editor.active`, `editor.tabs` | browser | Editor control |
+| `commands.list` | server | Discover all available commands |
+
+**Command discovery:** `GET /workspace/{projectId}/api/automation/commands`
+
+Browser commands require an active WebSocket connection (IDE tab open). Server commands work via REST alone. `tests.run` with `fixture: 'headless'` uses server-side Puppeteer and does not require a browser.
 
 ### 5. Central Structured Logging
 
@@ -150,8 +177,8 @@ node packages/ui/scripts/build-workspace-server.mjs
 cd infrastructure && MSYS_NO_PATHCONV=1 npx cdk deploy --require-approval never
 
 # Run deployed tests
-# Browser: https://d33wyunpiwy2df.cloudfront.net/tests
-# API: POST https://d33wyunpiwy2df.cloudfront.net/api/tests/run?suite=all
+# Browser: https://ide.antimatter.solutions/tests
+# API: POST https://ide.antimatter.solutions/api/tests/run?suite=all
 ```
 
 ## Conventions

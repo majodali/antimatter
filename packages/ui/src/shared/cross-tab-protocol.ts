@@ -18,6 +18,7 @@ export interface CrossTabRunOptions {
   area?: FeatureArea;
   failedOnly?: boolean;
   delayMs?: number;
+  keepTabOpen?: boolean;
 }
 
 // ---- Orchestrator → Executor messages ----
@@ -26,7 +27,8 @@ export type OrchestratorMessage =
   | { type: 'ping' }
   | { type: 'run-tests'; testIds?: string[]; options?: CrossTabRunOptions }
   | { type: 'abort' }
-  | { type: 'cleanup' };
+  | { type: 'cleanup'; keepOpen?: boolean }
+  | { type: 'discover-runner' };
 
 // ---- Executor → Orchestrator messages ----
 
@@ -37,4 +39,6 @@ export type ExecutorMessage =
   | { type: 'test-result'; result: StoredTestResult }
   | { type: 'run-complete'; summary: TestRunSummary }
   | { type: 'error'; message: string }
-  | { type: 'closing' };
+  | { type: 'closing' }
+  /** Sent by persistent test runner tab to announce availability. */
+  | { type: 'runner-available'; runnerId: string };

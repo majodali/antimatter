@@ -27,18 +27,21 @@ Antimatter is a self-hosting online IDE with AI agent integration, deployed on A
                               S3 Data Bucket
                             (project files)
 
-        EC2 Instance (per project)
+        EC2 Instance (shared or per-project)
         +---------------------------+
         | Workspace Server          |
-        | - PTY Manager             |
-        | - S3 Sync (30s)           |
-        | - Workflow Engine         |
-        | - WebSocket connections   |
-        | - Express routes (same    |
-        |   as Lambda)              |
+        | - ProjectContext per proj  |
+        |   - PTY Manager           |
+        |   - S3 Sync (30s)         |
+        |   - Workflow Engine       |
+        |   - WebSocket connections |
+        |   - Express Router        |
+        | - Dynamic project routing |
+        | - Idle shutdown (global)  |
         +---------------------------+
                     |
         Application Load Balancer
+         (per-project path rules)
                     |
               CloudFront /ws/*
 ```
@@ -92,29 +95,61 @@ Each environment (dev/staging/prod/feature) gets its own S3 buckets, CloudFront 
 
 ## 4. Workspace Server
 
-File: `packages/ui/src/server/workspace-server.ts`
+Files:
+- `packages/ui/src/server/workspace-server.ts` — Main server: Express app, WebSocket handler, project routing, idle shutdown
+- `packages/ui/src/server/project-context.ts` — `ProjectContext` class: per-project state (env, PTY, workflow, S3 sync, routes)
 
-The workspace server is an Express + WebSocket server running on EC2. One instance per project.
+The workspace server is an Express + WebSocket server running on EC2. It supports **multiple projects per instance** via lazy-initialized `ProjectContext` objects.
+
+### Multi-Project Architecture
+
+Each project gets its own `ProjectContext` containing:
+- `LocalWorkspaceEnvironment` — file system, command execution
+- `WorkspaceService` — file APIs, build, agent
+- `PtyManager` — pseudo-terminal (bash shell)
+- `S3SyncScheduler` — periodic workspace → S3 backup
+- `FileChangeNotifier` — filesystem watcher → WebSocket broadcasts
+- `WorkflowManager` — event-driven rule engine
+- `ErrorStore` — project error storage
+- `EventLogger` — structured logging
+- Express Router — project-scoped API routes
+- WebSocket connections — for broadcast isolation
+
+Project contexts are stored in a `Map<string, ProjectContext>` and lazy-initialized via `getOrCreateContext(projectId)` with promise coalescing (prevents duplicate init for concurrent requests).
+
+**Backward compat**: If `PROJECT_ID` env var is set, that project is auto-initialized on startup.
+
+**Shared mode**: The EC2 service (`workspace-ec2-service.ts`) supports `sharedMode` where multiple projects route to the same EC2 instance via per-project ALB rules.
 
 ### Lifecycle
 
-1. **Start**: `POST /api/workspace/start` — Lambda launches EC2 instance, returns connection info
+1. **Start**: `POST /api/workspace/start` — Lambda launches EC2 instance (or reuses existing in shared mode), creates ALB routing rules, returns connection info
 2. **Init**: EC2 user data script installs Node.js, downloads workspace server from S3, starts via systemd
-3. **Sync**: On startup, downloads project files from S3 to local filesystem
-4. **Git**: Auto-initializes git repo if not present, configures remote
-5. **Workflow**: Loads and compiles `.antimatter/*.ts` workflow files via esbuild
-6. **Ready**: WebSocket accepts connections, PTY available
+3. **Request arrives**: Dynamic routing middleware parses project ID from URL, calls `getOrCreateContext(projectId)`
+4. **Context init**: S3 sync, git init, PTY start, workflow engine start, file watcher start
+5. **Ready**: WebSocket accepts connections, PTY available, API routes active
+6. **Idle shutdown**: When ALL projects have zero connections for 10 min, instance self-stops
+
+### URL Routing
+
+The main Express app routes requests to the correct ProjectContext:
+- `/workspace/{projectId}/api/*` → project context router (standard path)
+- `/{projectId}/api/*` → project context router (ALB health check compat)
+- `/api/*` → primary project context (backward compat, when `PROJECT_ID` is set)
+- `/health` → global health check (lists active projects)
+- `/internal/project-contexts` → list active contexts
+- `DELETE /internal/project-context/{projectId}` — tear down a project context
 
 ### S3 Sync
 
 - **Direction**: Bidirectional — workspace ↔ S3
-- **Interval**: Every 30 seconds
+- **Interval**: Every 30 seconds (per project)
 - **Mechanism**: Compares file hashes, syncs changed files
 - **File change detection**: Uses chokidar watcher, batches changes, broadcasts via WebSocket
 
 ### PTY Manager
 
-- Single PTY per workspace (bash shell)
+- One PTY per project (bash shell)
 - Terminal replay buffer (configurable size) for reconnection
 - Input/output over WebSocket
 - Resize support
@@ -274,9 +309,52 @@ All routes are project-scoped: `/api/{route}` with project context from headers 
 
 Same Express routers as Lambda, plus:
 - `GET /health` — ALB health check
-- `GET /status` — Server uptime and connections
+- `GET /status` — Server uptime, connections, diagnostic counters
 - `POST /api/refresh` — Self-update from S3
-- WebSocket at `/terminal/{projectId}` — PTY + workflow messaging
+- `GET /api/automation/commands` — Command catalog discovery (23 commands)
+- `POST /api/automation/execute` — Execute automation commands (server-side or browser relay)
+- WebSocket at `/terminal/{projectId}` — PTY + workflow messaging + automation relay
+
+### IDE Automation API
+
+Structured REST endpoint for external agents (e.g., Claude Code) to invoke IDE operations and get JSON results back. Replaces fragile browser automation (screenshots + clicking) with reliable programmatic access.
+
+**Architecture:**
+```
+External Agent (curl/fetch)
+    │
+    ▼
+POST /workspace/{pid}/api/automation/execute
+    { command: "tests.run", params: { area: "cross-tab" } }
+    │
+    ├── Server commands → execute directly via WorkspaceService/git/workflow
+    │
+    └── Browser commands → WebSocket relay to connected browser tab
+                                 │ Zustand stores / DOM / test runner
+                                 ▼
+                           automation-response via WebSocket → REST response
+```
+
+**Command catalog** (23 commands in 6 groups):
+
+| Group | Commands | Execution |
+|-------|----------|-----------|
+| `file.*` | read, write, delete, mkdir, tree | Server |
+| `git.*` | status, stage, unstage, commit, push, pull | Server |
+| `build.*` | run | Server |
+| `workflow.*` | state, errors, emit | Server |
+| `editor.*` | open, active, tabs, close | Browser (WebSocket relay) |
+| `tests.*` | run, list, results | Browser (WebSocket relay) |
+
+**Key files:**
+- `src/shared/automation-types.ts` — Command catalog, types, request/response interfaces
+- `src/server/automation/server-commands.ts` — Server-side command executor
+- `src/server/routes/automation.ts` — REST route factory (POST /execute, GET /commands)
+- `src/client/lib/automation-handler.ts` — Browser-side handler receiving via WebSocket
+
+**WebSocket relay with correlation IDs:** Server creates a Promise per browser command keyed by `requestId`. Browser executes against Zustand stores and responds with matching `requestId`. Default timeout 30s (tests.run: 5min).
+
+**Authentication:** Same Cognito auth middleware as all `/api/*` routes.
 
 ---
 

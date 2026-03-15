@@ -1,7 +1,12 @@
 /**
  * Workspace EC2 Service — manages the lifecycle of EC2 workspace instances.
  *
- * Each project gets one EC2 instance. The API Lambda:
+ * Supports two modes:
+ *  - **Dedicated** (default): Each project gets its own EC2 instance.
+ *  - **Shared**: Multiple projects share a single EC2 instance. The workspace
+ *    server initializes project contexts lazily when traffic arrives.
+ *
+ * In both modes:
  *  - Starts instances on demand (RunInstances or StartInstances for stopped)
  *  - Creates/attaches EBS data volumes for persistent storage
  *  - Creates per-project ALB target groups + path-based listener rules
@@ -19,7 +24,6 @@ import {
   EC2Client,
   RunInstancesCommand,
   StartInstancesCommand,
-  StopInstancesCommand,
   DescribeInstancesCommand,
   CreateVolumeCommand,
   AttachVolumeCommand,
@@ -67,6 +71,12 @@ export interface WorkspaceEc2ServiceConfig {
   albDns: string;
   projectsBucket: string;
   region?: string;
+  /**
+   * When true, reuse existing running workspace instances for new projects
+   * instead of launching a dedicated instance per project. The workspace server
+   * initializes project contexts lazily when traffic arrives.
+   */
+  sharedMode?: boolean;
 }
 
 // Per-project ALB routing state
@@ -102,6 +112,10 @@ export class WorkspaceEc2Service {
 
   /**
    * Start a workspace instance for a project, or return the existing one.
+   *
+   * In shared mode, tries to reuse any running managed instance first.
+   * The workspace server will lazy-initialize the project context when
+   * traffic arrives via the ALB routing rules.
    */
   async startWorkspace(projectId: string): Promise<WorkspaceInstanceInfo> {
     // Check if an instance already exists for this project
@@ -114,6 +128,15 @@ export class WorkspaceEc2Service {
       if (existing.status === 'STOPPED') {
         return this.resumeInstance(projectId, existing.instanceId);
       }
+    }
+
+    // In shared mode, try to reuse an existing running server, or resume a stopped one
+    if (this.config.sharedMode) {
+      const shared = await this.reuseRunningServer(projectId);
+      if (shared) return shared;
+
+      const resumed = await this.resumeSharedServer(projectId);
+      if (resumed) return resumed;
     }
 
     // No existing instance — launch a new one
@@ -177,24 +200,12 @@ export class WorkspaceEc2Service {
   }
 
   /**
-   * Stop a workspace instance for a project (does NOT terminate — EBS persists).
+   * Delete per-project ALB routing rules (listener rule + target group).
+   * Used during project deletion to clean up routing without affecting the shared instance.
    */
-  async stopWorkspace(projectId: string): Promise<void> {
-    const info = await this.getWorkspaceStatus(projectId);
-    if (!info) return;
-
-    // Clean up ALB routing rules and target group
+  async deleteProjectRouting(projectId: string): Promise<void> {
     await this.deleteRoutingRules(projectId);
-
-    // Stop the instance (EBS persists, root disk persists)
-    await this.ec2.send(new StopInstancesCommand({
-      InstanceIds: [info.instanceId],
-    }));
-
     WorkspaceEc2Service.tokenCache.delete(projectId);
-    console.log(`[workspace-ec2] Stopped instance ${info.instanceId} for project ${projectId}`);
-    await this.eventLogger?.emit('workspace.instance.stopped', 'workspace', 'info',
-      `Stopped instance ${info.instanceId}`, { instanceId: info.instanceId });
   }
 
   // ---- Instance lifecycle ----
@@ -303,6 +314,151 @@ export class WorkspaceEc2Service {
     console.log(`[workspace-ec2] Resumed instance ${instanceId} for project ${projectId}`);
     await this.eventLogger?.emit('workspace.instance.resumed', 'workspace', 'info',
       `Resumed stopped instance ${instanceId}`, { instanceId });
+
+    return {
+      projectId,
+      instanceId,
+      status: 'PENDING',
+      port: 8080,
+      sessionToken,
+    };
+  }
+
+  // ---- Shared server support ----
+
+  /**
+   * Find any running managed workspace instance (regardless of project).
+   * Used in shared mode to reuse existing servers for new projects.
+   */
+  private async findAnyRunningServer(): Promise<Instance | null> {
+    const result = await this.ec2.send(new DescribeInstancesCommand({
+      Filters: [
+        { Name: 'tag:antimatter:managed', Values: ['true'] },
+        { Name: 'instance-state-name', Values: ['running'] },
+      ],
+    }));
+
+    for (const reservation of result.Reservations ?? []) {
+      for (const instance of reservation.Instances ?? []) {
+        if (instance.PrivateIpAddress) {
+          return instance;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Reuse an existing running workspace server for a new project.
+   * Creates ALB routing rules pointing the new project's paths to the
+   * existing instance. The workspace server will lazy-initialize the
+   * project context when traffic arrives.
+   */
+  private async reuseRunningServer(projectId: string): Promise<WorkspaceInstanceInfo | null> {
+    const server = await this.findAnyRunningServer();
+    if (!server || !server.PrivateIpAddress || !server.InstanceId) return null;
+
+    const ip = server.PrivateIpAddress;
+    const instanceId = server.InstanceId;
+
+    // Recover or read the session token from the server's tags
+    let sessionToken = this.getTagValue(server, 'antimatter:sessionToken') ?? '';
+    if (!sessionToken) {
+      sessionToken = randomUUID();
+    }
+    WorkspaceEc2Service.tokenCache.set(projectId, sessionToken);
+
+    // Create ALB routing rules so traffic for this project reaches the server
+    if (!WorkspaceEc2Service.routingCache.has(projectId)) {
+      await this.recoverRoutingState(projectId);
+    }
+    if (!WorkspaceEc2Service.routingCache.has(projectId)) {
+      await this.createRoutingRules(projectId, ip);
+    }
+
+    console.log(`[workspace-ec2] Reusing instance ${instanceId} (${ip}) for project ${projectId} (shared mode)`);
+    this.eventLogger?.info('workspace',
+      `Reusing shared instance ${instanceId} for project ${projectId}`,
+      { instanceId, projectId, ip });
+
+    return {
+      projectId,
+      instanceId,
+      status: 'RUNNING',
+      privateIp: ip,
+      port: 8080,
+      sessionToken,
+      startedAt: server.LaunchTime?.toISOString(),
+    };
+  }
+
+  /**
+   * Find any managed workspace instance in the given states (regardless of project).
+   * Prefers running > pending > stopped, then newest first.
+   */
+  private async findAnyManagedServer(
+    states: string[] = ['running', 'pending', 'stopped'],
+  ): Promise<Instance | null> {
+    const result = await this.ec2.send(new DescribeInstancesCommand({
+      Filters: [
+        { Name: 'tag:antimatter:managed', Values: ['true'] },
+        { Name: 'instance-state-name', Values: states },
+      ],
+    }));
+
+    const instances: Instance[] = [];
+    for (const reservation of result.Reservations ?? []) {
+      for (const instance of reservation.Instances ?? []) {
+        if (instance.InstanceId) {
+          instances.push(instance);
+        }
+      }
+    }
+
+    if (instances.length === 0) return null;
+
+    // Sort: running (3) > pending (2) > stopped (1), then newest first
+    const statePriority: Record<string, number> = { running: 3, pending: 2, stopped: 1 };
+    instances.sort((a, b) => {
+      const pa = statePriority[a.State?.Name ?? ''] ?? 0;
+      const pb = statePriority[b.State?.Name ?? ''] ?? 0;
+      if (pa !== pb) return pb - pa;
+      return (b.LaunchTime?.getTime() ?? 0) - (a.LaunchTime?.getTime() ?? 0);
+    });
+
+    return instances[0];
+  }
+
+  /**
+   * Resume a stopped shared server for a new project.
+   * Used in shared mode when no running instance is available but a stopped one exists.
+   */
+  private async resumeSharedServer(projectId: string): Promise<WorkspaceInstanceInfo | null> {
+    const server = await this.findAnyManagedServer(['stopped']);
+    if (!server || !server.InstanceId) return null;
+
+    const instanceId = server.InstanceId;
+
+    // Read session token from instance tags
+    let sessionToken = this.getTagValue(server, 'antimatter:sessionToken') ?? '';
+    if (!sessionToken) {
+      sessionToken = randomUUID();
+      await this.ec2.send(new CreateTagsCommand({
+        Resources: [instanceId],
+        Tags: [{ Key: 'antimatter:sessionToken', Value: sessionToken }],
+      }));
+    }
+    WorkspaceEc2Service.tokenCache.set(projectId, sessionToken);
+
+    // Start the stopped instance
+    await this.ec2.send(new StartInstancesCommand({
+      InstanceIds: [instanceId],
+    }));
+
+    console.log(`[workspace-ec2] Resumed shared instance ${instanceId} for project ${projectId}`);
+    this.eventLogger?.info('workspace',
+      `Resumed shared instance ${instanceId} for project ${projectId}`,
+      { instanceId, projectId });
 
     return {
       projectId,
@@ -505,10 +661,9 @@ echo "[workspace] Boot script complete"
   // ---- Instance lookup ----
 
   /**
-   * Find an EC2 instance for a project by tag.
-   * Returns the first non-terminated instance.
+   * Find ALL non-terminated EC2 instances for a project by its tags.
    */
-  private async findInstance(projectId: string): Promise<Instance | null> {
+  private async findAllInstances(projectId: string): Promise<Instance[]> {
     const result = await this.ec2.send(new DescribeInstancesCommand({
       Filters: [
         { Name: 'tag:antimatter:projectId', Values: [projectId] },
@@ -518,12 +673,68 @@ echo "[workspace] Boot script complete"
       ],
     }));
 
+    const instances: Instance[] = [];
     for (const reservation of result.Reservations ?? []) {
       for (const instance of reservation.Instances ?? []) {
-        return instance;
+        instances.push(instance);
       }
     }
-    return null;
+    return instances;
+  }
+
+  /**
+   * Find the EC2 instance for a project by tag.
+   * If multiple instances exist, keeps the best one (prefer running > pending
+   * > stopped, then newest) and terminates the extras.
+   */
+  private async findInstance(projectId: string): Promise<Instance | null> {
+    const instances = await this.findAllInstances(projectId);
+    if (instances.length === 0) return null;
+    if (instances.length === 1) return instances[0];
+
+    // Multiple instances — keep one, terminate the rest.
+    const statePriority = (s: string | undefined) => {
+      switch (s) {
+        case 'running': return 3;
+        case 'pending': return 2;
+        case 'stopped': return 1;
+        default: return 0;
+      }
+    };
+
+    instances.sort((a, b) => {
+      const sa = statePriority(a.State?.Name);
+      const sb = statePriority(b.State?.Name);
+      if (sa !== sb) return sb - sa;
+      const ta = a.LaunchTime?.getTime() ?? 0;
+      const tb = b.LaunchTime?.getTime() ?? 0;
+      return tb - ta;
+    });
+
+    const keeper = instances[0];
+    const extras = instances.slice(1);
+
+    console.warn(
+      `[workspace-ec2] Found ${instances.length} instances for project ${projectId} — ` +
+      `keeping ${keeper.InstanceId} (${keeper.State?.Name}), ` +
+      `terminating ${extras.length} extras: ${extras.map(i => i.InstanceId).join(', ')}`,
+    );
+
+    // Terminate extras asynchronously (don't block the caller)
+    this.terminateInstances(extras.map(i => i.InstanceId!)).catch(err => {
+      console.error(`[workspace-ec2] Failed to terminate extra instances:`, err);
+    });
+
+    return keeper;
+  }
+
+  /**
+   * Terminate EC2 instances by ID. Used to clean up duplicate instances.
+   */
+  private async terminateInstances(instanceIds: string[]): Promise<void> {
+    if (instanceIds.length === 0) return;
+    await this.ec2.send(new TerminateInstancesCommand({ InstanceIds: instanceIds }));
+    console.log(`[workspace-ec2] Terminated duplicate instances: ${instanceIds.join(', ')}`);
   }
 
   /**

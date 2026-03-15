@@ -17,8 +17,11 @@ import {
   queryElement,
   elementExists,
   clickElement,
+  doubleClickElement,
   typeIntoElement,
+  typeAndPressEnter,
   pressEnter,
+  pressKeyOnElement,
   waitForElement,
   waitForElementGone,
   waitFor,
@@ -61,6 +64,75 @@ export class BrowserActionContext implements ActionContext {
     await new Promise((r) => setTimeout(r, ms));
   }
 
+  /**
+   * Wait for a file-tree-item to appear, with early failure detection.
+   * Instead of blindly waiting 10s, checks for error/loading/empty states
+   * and fails immediately with a diagnostic message.
+   */
+  private async waitForTreeItem(pathTestId: string, operation: string, timeoutMs = 10000): Promise<void> {
+    const interval = 100;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      // Check if the target element appeared
+      if (queryElement(pathTestId)) return;
+
+      // Detect error state — FileExplorer shows error instead of tree
+      const errorEl = queryElement('file-explorer-error');
+      if (errorEl) {
+        const errorText = errorEl.textContent?.trim() ?? 'unknown error';
+        throw new Error(
+          `${operation}: FileExplorer is in error state: "${errorText}". ` +
+          `Tree item [data-testid="${pathTestId}"] will never appear.`,
+        );
+      }
+
+      // Detect loading state — FileTree replaced by "Loading..."
+      const loadingEl = queryElement('file-explorer-loading');
+      if (loadingEl && Date.now() > deadline - 2000) {
+        // Only warn if still loading near deadline (brief loading is normal)
+        throw new Error(
+          `${operation}: FileExplorer stuck in loading state for >` +
+          `${Math.round(timeoutMs / 1000 - 2)}s. Tree item [data-testid="${pathTestId}"] unreachable.`,
+        );
+      }
+
+      // Detect creation input still present — submitCreation may not have fired
+      const createInput = queryElement('file-explorer-create-input');
+      if (createInput && Date.now() > deadline - 5000) {
+        const inputVal = (createInput as HTMLInputElement).value;
+        throw new Error(
+          `${operation}: Creation input still visible (value="${inputVal}") after >` +
+          `${Math.round((timeoutMs - 5000) / 1000)}s. submitCreation may not have been triggered.`,
+        );
+      }
+
+      await new Promise((r) => setTimeout(r, interval));
+    }
+
+    // Final state snapshot for the timeout error
+    const treeItems = findAllByTestIdPrefix('file-tree-item-');
+    const treeItemPaths = treeItems.map(el => el.getAttribute('data-path')).filter(Boolean);
+    const errorEl = queryElement('file-explorer-error');
+    const loadingEl = queryElement('file-explorer-loading');
+    const emptyEl = queryElement('file-explorer-empty');
+    const createInput = queryElement('file-explorer-create-input');
+
+    const state = [
+      `treeItems=${treeItems.length}`,
+      `domPaths=[${treeItemPaths.join(',')}]`,
+      errorEl ? `error="${errorEl.textContent?.trim()}"` : null,
+      loadingEl ? 'loading=true' : null,
+      emptyEl ? 'empty=true' : null,
+      createInput ? `createInput="${(createInput as HTMLInputElement).value}"` : null,
+    ].filter(Boolean).join(', ');
+
+    throw new Error(
+      `${operation}: Timed out waiting for [data-testid="${pathTestId}"] after ${timeoutMs}ms. ` +
+      `Explorer state: ${state}`,
+    );
+  }
+
   // ---- Files ----
 
   async writeFile(path: string, content: string): Promise<void> {
@@ -70,22 +142,47 @@ export class BrowserActionContext implements ActionContext {
     // Wait for the creation input to appear
     await waitForElement('file-explorer-create-input', { timeoutMs: 3000 });
 
-    // Type the filename (supports nested paths like "src/index.ts" —
-    // FileExplorer passes the full string to saveFile which handles it)
-    await typeIntoElement('file-explorer-create-input', path, 'writeFile');
+    // Type the filename and press Enter in one atomic operation.
+    // This prevents the input from being removed by onBlur between typing and submitting.
+    // The Enter keydown is dispatched on the same element reference before any settle.
+    await typeAndPressEnter('file-explorer-create-input', path, 'writeFile');
 
-    // Press Enter to confirm creation
-    await pressEnter('file-explorer-create-input');
+    // Wait for the creation input to disappear — confirms submitCreation completed
+    // (may already be gone if the API calls completed within the settle period)
+    await waitForElementGone('file-explorer-create-input', { timeoutMs: 15000 });
 
-    // Wait for the tree to refresh, then expand parent folders if path is nested
-    await this.settle(300);
+    // Check if submitCreation reported an error (errors are now propagated to UI)
+    const createErrorEl = queryElement('file-explorer-error');
+    if (createErrorEl) {
+      const errorText = createErrorEl.textContent?.trim() ?? 'unknown error';
+      throw new Error(`writeFile: File creation failed: ${errorText}`);
+    }
+
+    // Expand parent folders if path is nested
     if (path.includes('/')) {
       await ensureParentFoldersExpanded(path);
     }
 
-    // Wait for the file to appear in the tree
+    // Wait for the file to appear in the tree (with early failure detection).
+    // If the first attempt fails, click the refresh button and retry once.
     const pathTestId = `file-tree-item-${encodePathForTestId(path)}`;
-    await waitForElement(pathTestId, { timeoutMs: 5000 });
+    try {
+      await this.waitForTreeItem(pathTestId, 'writeFile', 5000);
+    } catch {
+      // Tree item didn't appear — try refreshing the file tree and retrying
+      if (elementExists('file-explorer-refresh-btn')) {
+        await clickElement('file-explorer-refresh-btn', 'writeFile-refresh');
+        await this.settle(1000);
+        if (path.includes('/')) {
+          await ensureParentFoldersExpanded(path);
+        }
+        await this.waitForTreeItem(pathTestId, 'writeFile', 5000);
+      } else {
+        throw new Error(
+          `writeFile: Tree item [data-testid="${pathTestId}"] not found and no refresh button available`,
+        );
+      }
+    }
 
     // Wait for the file to open in the editor (the FileExplorer auto-opens new files)
     await this.settle(300);
@@ -124,13 +221,52 @@ export class BrowserActionContext implements ActionContext {
     return window.__monacoEditor.getValue();
   }
 
-  async deleteFile(_path: string): Promise<void> {
-    // The UI does not have a delete button — throw UINotSupportedError
-    throw new UINotSupportedError(
-      'deleteFile',
-      'file-tree-context-delete',
-      'UI does not support file deletion — no delete button or context menu exists',
-    );
+  async deleteFile(path: string): Promise<void> {
+    // Ensure the explorer sidebar is active
+    if (elementExists('sidebar-explorer-btn')) {
+      await clickElement('sidebar-explorer-btn', 'deleteFile');
+      await this.settle(100);
+    }
+
+    // For nested paths, expand parent folders so the target item is visible
+    if (path.includes('/')) {
+      await ensureParentFoldersExpanded(path);
+    }
+
+    // Click the file to select it
+    const pathTestId = `file-tree-item-${encodePathForTestId(path)}`;
+    await clickElement(pathTestId, 'deleteFile');
+    await this.settle(100);
+
+    // Focus the file explorer panel (keyboard events need it focused)
+    const explorerPanel = queryElement('file-explorer-panel');
+    if (explorerPanel) {
+      explorerPanel.focus();
+      await this.settle(50);
+    }
+
+    // Press Delete key to trigger delete confirmation
+    await pressKeyOnElement('Delete', explorerPanel);
+    await this.settle(200);
+
+    // Wait for and click the confirm delete button
+    await waitForElement('file-explorer-confirm-delete-btn', { timeoutMs: 3000 });
+    await clickElement('file-explorer-confirm-delete-btn', 'deleteFile-confirm');
+    await this.settle(500);
+
+    // Wait for the file to disappear from the tree
+    try {
+      await waitForElementGone(pathTestId, { timeoutMs: 10000 });
+    } catch {
+      // File might still be in tree — try refreshing
+      if (elementExists('file-explorer-refresh-btn')) {
+        await clickElement('file-explorer-refresh-btn', 'deleteFile-refresh');
+        await this.settle(1000);
+        await waitForElementGone(pathTestId, { timeoutMs: 5000 });
+      }
+    }
+
+    await this.delay();
   }
 
   async mkdir(path: string): Promise<void> {
@@ -140,21 +276,42 @@ export class BrowserActionContext implements ActionContext {
     // Wait for creation input
     await waitForElement('file-explorer-create-input', { timeoutMs: 3000 });
 
-    // Type folder name (supports nested paths like "src/components")
-    await typeIntoElement('file-explorer-create-input', path, 'mkdir');
+    // Type folder name and press Enter atomically (prevents onBlur race)
+    await typeAndPressEnter('file-explorer-create-input', path, 'mkdir');
 
-    // Press Enter
-    await pressEnter('file-explorer-create-input');
+    // Wait for the creation input to disappear — confirms submission completed
+    await waitForElementGone('file-explorer-create-input', { timeoutMs: 15000 });
 
-    // Wait for the tree to refresh, then expand parent folders if nested
-    await this.settle(300);
+    // Check if creation reported an error
+    const mkdirErrorEl = queryElement('file-explorer-error');
+    if (mkdirErrorEl) {
+      const errorText = mkdirErrorEl.textContent?.trim() ?? 'unknown error';
+      throw new Error(`mkdir: Folder creation failed: ${errorText}`);
+    }
+
+    // Expand parent folders if nested
     if (path.includes('/')) {
       await ensureParentFoldersExpanded(path);
     }
 
-    // Wait for the folder to appear in the tree
+    // Wait for the folder to appear in the tree (with retry on failure)
     const pathTestId = `file-tree-item-${encodePathForTestId(path)}`;
-    await waitForElement(pathTestId, { timeoutMs: 5000 });
+    try {
+      await this.waitForTreeItem(pathTestId, 'mkdir', 5000);
+    } catch {
+      if (elementExists('file-explorer-refresh-btn')) {
+        await clickElement('file-explorer-refresh-btn', 'mkdir-refresh');
+        await this.settle(1000);
+        if (path.includes('/')) {
+          await ensureParentFoldersExpanded(path);
+        }
+        await this.waitForTreeItem(pathTestId, 'mkdir', 5000);
+      } else {
+        throw new Error(
+          `mkdir: Tree item [data-testid="${pathTestId}"] not found and no refresh button available`,
+        );
+      }
+    }
 
     await this.delay();
   }
@@ -315,9 +472,10 @@ export class BrowserActionContext implements ActionContext {
       await ensureParentFoldersExpanded(path);
     }
 
-    // Click the file in the tree to open it
-    await clickElement(pathTestId, 'openFileInEditor');
-    await this.settle(300);
+    // Double-click the file in the tree to open it in the editor.
+    // Single click now only selects; double-click opens.
+    await doubleClickElement(pathTestId, 'openFileInEditor');
+    await this.settle(500);
 
     await this.delay();
   }

@@ -3,7 +3,6 @@ import {
   Terminal as TerminalIcon,
   Trash2,
   Play,
-  Square,
   Loader2,
   Wifi,
   WifiOff,
@@ -84,7 +83,6 @@ export function TerminalPanel() {
     disconnect,
     sendInput,
     resize,
-    stopContainer,
   } = useTerminalStore();
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -142,11 +140,6 @@ export function TerminalPanel() {
   const handleDisconnect = useCallback(() => {
     disconnect();
   }, [disconnect]);
-
-  const handleStop = useCallback(() => {
-    if (!currentProjectId) return;
-    stopContainer(currentProjectId);
-  }, [currentProjectId, stopContainer]);
 
   // Terminal data handler — sends keystrokes to the PTY via WebSocket.
   // Also buffers input during silent reconnect.
@@ -241,18 +234,6 @@ export function TerminalPanel() {
             >
               <RefreshCw className="h-3 w-3" />
               Retry
-            </Button>
-          )}
-          {isConnectedOrConnecting && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs gap-1 text-red-500 hover:text-red-400"
-              onClick={handleStop}
-              title="Stop workspace container"
-            >
-              <Square className="h-3 w-3" />
-              Stop
             </Button>
           )}
           <Button

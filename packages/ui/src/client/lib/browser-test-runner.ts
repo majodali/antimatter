@@ -12,7 +12,7 @@
  *   await runBrowserTests(undefined, { area: 'editor' });   // run by area
  */
 
-import type { TestModule, StoredTestResult, TestRunSummary, FeatureArea } from '../../shared/test-types.js';
+import type { TestModule, StoredTestResult, TestRunSummary, FeatureArea, TestTrace } from '../../shared/test-types.js';
 import { allTestModules } from '../../shared/test-modules/index.js';
 import { BrowserActionContext } from './browser-action-context.js';
 import type { BrowserActionContextOptions } from './browser-action-context.js';
@@ -20,7 +20,64 @@ import { UINotSupportedError } from './dom-helpers.js';
 import { useTestResultStore } from '../stores/testResultStore.js';
 import { useProjectStore } from '../stores/projectStore.js';
 import { getAccessToken } from './auth.js';
-import { getActiveWorkspace } from './api.js';
+import { hasActiveWorkspace } from './api.js';
+
+// ---------------------------------------------------------------------------
+// Console capture (shared with test-executor.ts)
+// ---------------------------------------------------------------------------
+
+interface ConsoleCapture {
+  getLogs(): string[];
+  restore(): void;
+}
+
+function startConsoleCapture(): ConsoleCapture {
+  const logs: string[] = [];
+  const origLog = console.log;
+  const origWarn = console.warn;
+  const origError = console.error;
+
+  const fmt = (args: unknown[]) =>
+    args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+
+  console.log = (...args: unknown[]) => {
+    logs.push(`[log] ${fmt(args)}`);
+    origLog.apply(console, args);
+  };
+  console.warn = (...args: unknown[]) => {
+    logs.push(`[warn] ${fmt(args)}`);
+    origWarn.apply(console, args);
+  };
+  console.error = (...args: unknown[]) => {
+    logs.push(`[error] ${fmt(args)}`);
+    origError.apply(console, args);
+  };
+
+  return {
+    getLogs: () => [...logs],
+    restore: () => {
+      console.log = origLog;
+      console.warn = origWarn;
+      console.error = origError;
+    },
+  };
+}
+
+function captureDomSnapshot(): string {
+  const parts: string[] = [];
+  const fileTree = document.querySelectorAll('[data-testid^="file-tree-item-"]');
+  parts.push(`file-tree: ${fileTree.length} items`);
+  const tabs = document.querySelectorAll('[data-testid^="editor-tab-"]');
+  const tabPaths = Array.from(tabs).map(
+    (t) => (t as HTMLElement).dataset.testid?.replace('editor-tab-', '') ?? '?',
+  );
+  parts.push(`editor-tabs: [${tabPaths.join(', ')}]`);
+  const activeTab = document.querySelector('[data-testid^="editor-tab-"][data-active="true"]');
+  parts.push(`active-tab: ${(activeTab as HTMLElement)?.dataset.path ?? 'none'}`);
+  const mainLayout = document.querySelector('[data-testid="main-layout"]');
+  parts.push(`main-layout: ${mainLayout ? 'present' : 'MISSING'}`);
+  return parts.join('\n');
+}
 
 export interface RunOptions {
   /** Only run tests matching these IDs. */
@@ -85,11 +142,21 @@ export async function runBrowserTests(
       let pass = false;
       let detail = '';
       let status: 'tested' | 'unsupported' | 'error' = 'tested';
+      let trace: TestTrace | undefined;
+
+      // Capture console output during the test
+      const capture = startConsoleCapture();
 
       try {
         const result = await test.run(ctx);
         pass = result.pass;
         detail = result.detail;
+        if (!pass) {
+          trace = {
+            consoleLogs: capture.getLogs(),
+            domSnapshot: captureDomSnapshot(),
+          };
+        }
       } catch (err) {
         if (err instanceof UINotSupportedError) {
           pass = false;
@@ -100,6 +167,13 @@ export async function runBrowserTests(
           detail = `Uncaught error: ${err instanceof Error ? err.message : String(err)}`;
           status = 'error';
         }
+        trace = {
+          consoleLogs: capture.getLogs(),
+          domSnapshot: captureDomSnapshot(),
+          errorStack: err instanceof Error ? err.stack : undefined,
+        };
+      } finally {
+        capture.restore();
       }
 
       const storedResult: StoredTestResult = {
@@ -113,6 +187,7 @@ export async function runBrowserTests(
         fixture: 'browser',
         timestamp: new Date().toISOString(),
         status,
+        trace,
       };
 
       results.push(storedResult);
@@ -153,8 +228,7 @@ async function postTestResults(summary: TestRunSummary, results: StoredTestResul
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
   const projectId = useProjectStore.getState().currentProjectId;
-  const wsProjectId = getActiveWorkspace();
-  const urlBase = projectId && wsProjectId === projectId
+  const urlBase = projectId && hasActiveWorkspace(projectId)
     ? `/workspace/${projectId}/api`
     : '/api';
 

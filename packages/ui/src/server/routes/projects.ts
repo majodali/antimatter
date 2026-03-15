@@ -11,6 +11,8 @@ import {
 } from '@aws-sdk/client-s3';
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/node';
+import { WorkspaceEc2Service } from '../services/workspace-ec2-service.js';
+import type { WorkspaceEc2ServiceConfig } from '../services/workspace-ec2-service.js';
 
 interface ProjectGitConfig {
   repository?: string;    // e.g. "https://github.com/user/repo.git"
@@ -74,7 +76,11 @@ function walkDirectory(dir: string, base: string = dir): WalkedFile[] {
   return results;
 }
 
-export function createProjectRouter(s3Client: S3Client, bucket: string): Router {
+export function createProjectRouter(
+  s3Client: S3Client,
+  bucket: string,
+  workspaceConfig?: WorkspaceEc2ServiceConfig | null,
+): Router {
   const router = Router();
 
   // Create project
@@ -218,10 +224,24 @@ export function createProjectRouter(s3Client: S3Client, bucket: string): Router 
     }
   });
 
-  // Delete project (all objects under prefix)
+  // Delete project — cascade: clean up ALB routing, then delete S3 data
   router.delete('/:id', async (req, res) => {
+    const projectId = req.params.id;
     try {
-      const prefix = `projects/${req.params.id}/`;
+      // 1. Clean up ALB routing rules for this project (shared instance stays running)
+      if (workspaceConfig) {
+        try {
+          const service = new WorkspaceEc2Service(workspaceConfig);
+          await service.deleteProjectRouting(projectId);
+          console.log(`[projects] Cleaned up routing for project ${projectId}`);
+        } catch (err) {
+          // Log but don't fail — routing may not exist
+          console.warn(`[projects] Routing cleanup for ${projectId}:`, err instanceof Error ? err.message : err);
+        }
+      }
+
+      // 2. Delete all S3 objects under the project prefix
+      const prefix = `projects/${projectId}/`;
       let continuationToken: string | undefined;
 
       do {

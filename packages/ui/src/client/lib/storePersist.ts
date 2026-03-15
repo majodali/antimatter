@@ -8,8 +8,28 @@ import { createJSONStorage, type StateStorage } from 'zustand/middleware';
 
 const PROJECT_STORAGE_KEY = 'antimatter-current-project';
 
+/**
+ * Injected getter that reads the current project ID from the in-memory
+ * Zustand store (per-tab), avoiding the shared localStorage key that
+ * would collide across tabs with different projects open.
+ */
+let projectIdGetter: (() => string | null) | null = null;
+
+export function setProjectIdGetter(getter: () => string | null): void {
+  projectIdGetter = getter;
+}
+
 function getCurrentProjectId(): string | null {
-  return localStorage.getItem(PROJECT_STORAGE_KEY);
+  if (projectIdGetter) return projectIdGetter();
+  // Fallback chain for early hydration (before setProjectIdGetter runs):
+  // 1. URL ?project= param — critical for tabs opened via window.open(),
+  //    which inherit the parent tab's sessionStorage (wrong project ID).
+  if (typeof window !== 'undefined') {
+    const urlProject = new URLSearchParams(window.location.search).get('project');
+    if (urlProject) return urlProject;
+  }
+  // 2. sessionStorage (same-tab persistence across refreshes)
+  return sessionStorage.getItem(PROJECT_STORAGE_KEY);
 }
 
 /**

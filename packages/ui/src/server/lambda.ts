@@ -143,8 +143,23 @@ if (process.env.COGNITO_USER_POOL_ID && process.env.COGNITO_CLIENT_ID) {
 
 // ---- Protected routes ----
 
-// Project CRUD routes
-apiRouter.use('/projects', createProjectRouter(s3Client, projectsBucket));
+// Workspace EC2 config — used by workspace routes and project delete cascade.
+const workspaceConfig: WorkspaceEc2ServiceConfig | null = process.env.WORKSPACE_LAUNCH_TEMPLATE_ID
+  ? {
+      launchTemplateId: process.env.WORKSPACE_LAUNCH_TEMPLATE_ID,
+      instanceProfileArn: process.env.WORKSPACE_INSTANCE_PROFILE_ARN ?? '',
+      subnetIds: (process.env.WORKSPACE_SUBNET_IDS ?? '').split(',').filter(Boolean),
+      securityGroupId: process.env.WORKSPACE_SG_ID ?? '',
+      listenerArn: process.env.ALB_LISTENER_ARN ?? '',
+      vpcId: process.env.VPC_ID ?? '',
+      albDns: process.env.WORKSPACE_ALB_DNS ?? '',
+      projectsBucket,
+      sharedMode: process.env.WORKSPACE_SHARED_MODE === 'true',
+    }
+  : null;
+
+// Project CRUD routes (workspaceConfig passed for cascade cleanup on delete)
+apiRouter.use('/projects', createProjectRouter(s3Client, projectsBucket, workspaceConfig));
 
 // Test runner
 apiRouter.use('/tests', createTestRouter());
@@ -162,27 +177,35 @@ apiRouter.use('/secrets', createSecretsRouter(ssmClient, clearSecretCache));
 // Project-scoped file routes — S3 fallback for browsing files when no workspace is running.
 // When a workspace EC2 instance is active, the frontend routes through /workspace/* instead.
 apiRouter.use('/projects/:projectId/files', async (req, res, next) => {
-  const env = new S3WorkspaceEnvironment({
-    s3Client,
-    bucket: projectsBucket,
-    prefix: `projects/${req.params.projectId}/files/`,
-  });
-  const anthropicApiKey = await getAnthropicKey();
-  const ws = new WorkspaceService({ env, anthropicApiKey });
-  createFileRouter(ws)(req, res, next);
+  try {
+    const env = new S3WorkspaceEnvironment({
+      s3Client,
+      bucket: projectsBucket,
+      prefix: `projects/${req.params.projectId}/files/`,
+    });
+    const anthropicApiKey = await getAnthropicKey();
+    const ws = new WorkspaceService({ env, anthropicApiKey });
+    createFileRouter(ws)(req, res, next);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Project-scoped build routes — config GET/PUT works via S3; execute routes will
 // fail gracefully since S3WorkspaceEnvironment doesn't support command execution.
 apiRouter.use('/projects/:projectId/build', async (req, res, next) => {
-  const env = new S3WorkspaceEnvironment({
-    s3Client,
-    bucket: projectsBucket,
-    prefix: `projects/${req.params.projectId}/files/`,
-  });
-  const anthropicApiKey = await getAnthropicKey();
-  const ws = new WorkspaceService({ env, anthropicApiKey });
-  createBuildRouter(ws)(req, res, next);
+  try {
+    const env = new S3WorkspaceEnvironment({
+      s3Client,
+      bucket: projectsBucket,
+      prefix: `projects/${req.params.projectId}/files/`,
+    });
+    const anthropicApiKey = await getAnthropicKey();
+    const ws = new WorkspaceService({ env, anthropicApiKey });
+    createBuildRouter(ws)(req, res, next);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Project-scoped activity log routes — persisted to S3.
@@ -211,27 +234,29 @@ apiRouter.use('/projects/:projectId/git', (req, res, next) => {
 // Project-scoped system events — reads JSONL event logs from S3.
 apiRouter.use('/projects/:projectId/events', createEventsRouter(s3Client, projectsBucket));
 
-// --- Workspace EC2 instance routes (project-scoped) ---
-// Manages EC2 instance lifecycle for workspace sessions.
-const workspaceConfig: WorkspaceEc2ServiceConfig | null = process.env.WORKSPACE_LAUNCH_TEMPLATE_ID
-  ? {
-      launchTemplateId: process.env.WORKSPACE_LAUNCH_TEMPLATE_ID,
-      instanceProfileArn: process.env.WORKSPACE_INSTANCE_PROFILE_ARN ?? '',
-      subnetIds: (process.env.WORKSPACE_SUBNET_IDS ?? '').split(',').filter(Boolean),
-      securityGroupId: process.env.WORKSPACE_SG_ID ?? '',
-      listenerArn: process.env.ALB_LISTENER_ARN ?? '',
-      vpcId: process.env.VPC_ID ?? '',
-      albDns: process.env.WORKSPACE_ALB_DNS ?? '',
-      projectsBucket,
-    }
-  : null;
-
+// Workspace EC2 instance routes (project-scoped).
 if (workspaceConfig) {
   apiRouter.use('/projects/:projectId/workspace', createWorkspaceRouter(workspaceConfig, createEventLogger));
 }
 
 app.use('/api', apiRouter);
 app.use('/', apiRouter);
+
+// ---- JSON catch-all for unmatched routes ----
+// Express default 404 returns HTML. CloudFront's custom error pages intercept
+// 404 responses and replace them with index.html (200), causing clients to
+// receive HTML when they expect JSON. Use 400 (not 404) to avoid interception.
+app.use((_req, res) => {
+  res.status(400).json({ error: 'Not Found', message: 'The requested API endpoint does not exist' });
+});
+
+// ---- JSON error handler ----
+// Catches unhandled errors from async middleware (e.g. S3WorkspaceEnvironment constructor,
+// getAnthropicKey). Returns JSON instead of Express's default HTML error page.
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[lambda] Unhandled error:', err.message);
+  res.status(500).json({ error: 'Internal Server Error', message: err.message });
+});
 
 // Export Lambda handler
 export const handler = serverlessExpress({ app });
