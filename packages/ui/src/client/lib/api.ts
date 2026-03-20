@@ -365,71 +365,8 @@ export async function sendChatMessageStreaming(
 // Build API
 // ---------------------------------------------------------------------------
 
-export async function executeBuild(
-  rules: BuildRule[],
-  projectId?: string,
-): Promise<BuildResult[]> {
-  const { results } = await apiFetch<{ results: BuildResult[] }>(`${buildBase(projectId)}/execute`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rules }),
-  });
-  return results;
-}
-
-export interface BuildProgressEvent {
-  type: 'rule-started' | 'rule-output' | 'rule-completed' | 'build-complete' | 'build-error';
-  ruleId?: string;
-  timestamp?: string;
-  line?: string;
-  result?: BuildResult;
-  results?: BuildResult[];
-  error?: string;
-}
-
-export async function executeBuildStreaming(
-  rules: BuildRule[],
-  onEvent: (event: BuildProgressEvent) => void,
-  projectId?: string,
-): Promise<void> {
-  const res = await fetch(`${buildBase(projectId)}/execute`, {
-    method: 'POST',
-    headers: await authHeaders({
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    }),
-    body: JSON.stringify({ rules }),
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.message ?? body.error);
-  }
-
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error('No response body');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        try {
-          const event = JSON.parse(line.slice(6)) as BuildProgressEvent;
-          onEvent(event);
-        } catch { /* skip malformed */ }
-      }
-    }
-  }
-}
+// executeBuild, executeBuildStreaming, BuildProgressEvent removed — build execution driven by workflow engine,
+// progress delivered via WebSocket application-state broadcasts.
 
 export async function fetchBuildResults(projectId?: string): Promise<BuildResult[]> {
   const { results } = await apiFetch<{ results: BuildResult[] }>(`${buildBase(projectId)}/results`);
@@ -481,62 +418,8 @@ export async function saveDeployConfig(config: DeployConfig, projectId?: string)
   });
 }
 
-export interface DeployProgressEvent {
-  type: 'step-started' | 'step-output' | 'step-completed' | 'deploy-complete' | 'deploy-error';
-  targetId?: string;
-  moduleId?: string;
-  step?: string;
-  output?: string;
-  result?: any;
-  results?: any[];
-  error?: string;
-  timestamp?: string;
-}
-
-export async function executeDeployStreaming(
-  targetIds: string[] | undefined,
-  onEvent: (event: DeployProgressEvent) => void,
-  projectId?: string,
-  dryRun?: boolean,
-): Promise<void> {
-  const res = await fetch(`${deployBase(projectId)}/execute`, {
-    method: 'POST',
-    headers: await authHeaders({
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    }),
-    body: JSON.stringify({ targetIds, dryRun }),
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.message ?? body.error);
-  }
-
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error('No response body');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        try {
-          const event = JSON.parse(line.slice(6)) as DeployProgressEvent;
-          onEvent(event);
-        } catch { /* skip malformed */ }
-      }
-    }
-  }
-}
+// executeDeployStreaming + DeployProgressEvent removed — deploy execution
+// driven by workflow engine, progress via WebSocket application-state broadcasts.
 
 export async function fetchDeployResults(projectId?: string): Promise<any[]> {
   const { results } = await apiFetch<{ results: any[] }>(`${deployBase(projectId)}/results`);
