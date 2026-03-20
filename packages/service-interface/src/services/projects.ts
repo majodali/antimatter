@@ -59,7 +59,8 @@ export interface ProjectsDeleteCommand {
 
 export interface ProjectsImportCommand {
   readonly type: 'projects.import';
-  readonly remote: string;
+  /** Git clone URL. */
+  readonly url: string;
   readonly name?: string;
 }
 
@@ -85,10 +86,14 @@ export interface ProjectsCommitCommand extends ProjectScoped {
 
 export interface ProjectsPushCommand extends ProjectScoped {
   readonly type: 'projects.push';
+  readonly remote?: string;
+  readonly branch?: string;
 }
 
 export interface ProjectsPullCommand extends ProjectScoped {
   readonly type: 'projects.pull';
+  readonly remote?: string;
+  readonly branch?: string;
 }
 
 // ---------------------------------------------------------------------------

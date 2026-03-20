@@ -93,6 +93,11 @@ function resolvePlatformUrl(
     case 'projects.delete':   return `/api/projects/${op.projectId}`;
     case 'projects.import':   return '/api/projects/import/git';
 
+    // Workspace lifecycle (platform context — routed through Lambda)
+    case 'workspaces.start':  return `/api/projects/${op.projectId}/workspace/start`;
+    case 'workspaces.stop':   return `/api/projects/${op.projectId}/workspace/stop`;
+    case 'workspaces.status': return `/api/projects/${op.projectId}/workspace/status`;
+
     // Auth
     case 'auth.currentUser':  return '/api/auth/me';
 

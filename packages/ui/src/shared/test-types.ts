@@ -28,6 +28,7 @@ export type FeatureArea =
   | 'logging'
   | 'cross-tab'
   | 'test-infra'
+  | 'projects'
   | 'm1';
 
 /**

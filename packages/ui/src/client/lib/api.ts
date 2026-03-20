@@ -170,22 +170,18 @@ function workflowBase(projectId?: string): string {
 // ---------------------------------------------------------------------------
 
 export async function fetchProjects(): Promise<ProjectMeta[]> {
-  const { projects } = await apiFetch<{ projects: ProjectMeta[] }>('/api/projects');
-  return projects;
+  const res = await client.query({ type: 'projects.list' } as any);
+  return unwrapOrThrow(res, 'fetchProjects').projects as ProjectMeta[];
 }
 
 export async function createProject(name: string): Promise<ProjectMeta> {
-  return apiFetch<ProjectMeta>('/api/projects', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
+  const res = await client.command({ type: 'projects.create', name } as any);
+  return unwrapOrThrow(res, 'createProject') as ProjectMeta;
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`/api/projects/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  });
+  const res = await client.command({ type: 'projects.delete', projectId: id } as any);
+  unwrapOrThrow(res, 'deleteProject');
 }
 
 export interface ImportGitResult extends ProjectMeta {
@@ -193,11 +189,8 @@ export interface ImportGitResult extends ProjectMeta {
 }
 
 export async function importGitProject(url: string, name?: string): Promise<ImportGitResult> {
-  return apiFetch<ImportGitResult>('/api/projects/import/git', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, name: name || undefined }),
-  });
+  const res = await client.command({ type: 'projects.import', url, name: name || undefined } as any);
+  return unwrapOrThrow(res, 'importGitProject') as ImportGitResult;
 }
 
 export function readBrowserFile(file: File): Promise<string | null> {
@@ -611,16 +604,13 @@ export interface WorkspaceInstanceInfo {
 }
 
 export async function startWorkspace(projectId: string): Promise<WorkspaceInstanceInfo> {
-  return apiFetch<WorkspaceInstanceInfo>(
-    `/api/projects/${encodeURIComponent(projectId)}/workspace/start`,
-    { method: 'POST' },
-  );
+  const res = await client.command({ type: 'workspaces.start', projectId } as any);
+  return unwrapOrThrow(res, 'startWorkspace') as WorkspaceInstanceInfo;
 }
 
 export async function getWorkspaceStatus(projectId: string): Promise<WorkspaceInstanceInfo> {
-  return apiFetch<WorkspaceInstanceInfo>(
-    `/api/projects/${encodeURIComponent(projectId)}/workspace/status`,
-  );
+  const res = await client.query({ type: 'workspaces.status', projectId } as any);
+  return unwrapOrThrow(res, 'getWorkspaceStatus') as WorkspaceInstanceInfo;
 }
 
 export async function getWorkspaceWsUrl(projectId: string, sessionToken: string): Promise<string> {
@@ -705,69 +695,96 @@ export interface GitFileChange {
 }
 
 export async function fetchGitStatus(projectId?: string): Promise<GitStatus> {
-  return apiFetch<GitStatus>(`${gitBase(projectId)}/status`);
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'projects.status', projectId: pid } as any,
+    pid || undefined,
+  );
+  return unwrapOrThrow(res, 'fetchGitStatus') as GitStatus;
 }
 
 export async function gitInit(projectId?: string): Promise<void> {
+  // gitInit is not in the service-interface — keep as direct fetch for now
   await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/init`, { method: 'POST' });
 }
 
 export async function gitStage(files: string[], projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/stage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ files }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'projects.stage', projectId: pid, files } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'gitStage');
 }
 
 export async function gitUnstage(files: string[], projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/unstage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ files }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'projects.unstage', projectId: pid, files } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'gitUnstage');
 }
 
 export async function gitCommit(message: string, projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/commit`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'projects.commit', projectId: pid, message } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'gitCommit');
 }
 
 export async function gitPush(remote?: string, branch?: string, projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/push`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ remote, branch }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'projects.push', projectId: pid, remote, branch } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'gitPush');
 }
 
 export async function gitPull(remote?: string, branch?: string, projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/pull`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ remote, branch }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'projects.pull', projectId: pid, remote, branch } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'gitPull');
 }
 
 export async function gitAddRemote(name: string, url: string, projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/remote/add`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, url }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'projects.setRemote', projectId: pid, url } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'gitAddRemote');
 }
 
 export async function fetchGitRemotes(projectId?: string): Promise<{ name: string; url: string; type: string }[]> {
-  const { remotes } = await apiFetch<{ remotes: { name: string; url: string; type: string }[] }>(`${gitBase(projectId)}/remotes`);
-  return remotes;
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'projects.remote', projectId: pid } as any,
+    pid || undefined,
+  );
+  const data = unwrapOrThrow(res, 'fetchGitRemotes');
+  // Server returns { remotes: [...] } but service-interface returns { url: string | null }
+  // Handle both shapes for backward compat
+  if ('remotes' in data) return (data as any).remotes;
+  return data.url ? [{ name: 'origin', url: data.url, type: 'fetch' }] : [];
 }
 
 export async function fetchGitLog(limit = 20, projectId?: string): Promise<{ hash: string; message: string }[]> {
-  const { commits } = await apiFetch<{ commits: { hash: string; message: string }[] }>(`${gitBase(projectId)}/log?limit=${limit}`);
-  return commits;
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'projects.log', projectId: pid, limit } as any,
+    pid || undefined,
+  );
+  const data = unwrapOrThrow(res, 'fetchGitLog');
+  // Server returns { commits: [...] } but service-interface type is { entries: [...] }
+  if ('commits' in data) return (data as any).commits;
+  return (data as any).entries ?? [];
 }
 
 // ---------------------------------------------------------------------------
