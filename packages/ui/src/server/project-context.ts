@@ -726,7 +726,9 @@ export class ProjectContext {
       getExplorerIgnore: () => this.fileChangeNotifier.getExplorerIgnore(),
     }));
     router.use('/api/build', createBuildRouter(this.workspace, {}));
-    router.use('/api/agent', createAgentRouter(this.workspace));
+    router.use('/api/agent', createAgentRouter(this.workspace, {
+      broadcast: (msg: object) => this.broadcastToClients(msg),
+    }));
     router.use('/api/deploy', (req, res, next) => {
       createDeployRouter(
         this.workspace,

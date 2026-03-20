@@ -6,7 +6,8 @@ import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { useChatStore } from '@/stores/chatStore';
 import { useProjectStore } from '@/stores/projectStore';
-import { sendChatMessageStreaming, clearChatHistory } from '@/lib/api';
+import { sendChatMessage, clearChatHistory } from '@/lib/api';
+import { workspaceConnection } from '@/lib/workspace-connection';
 import { eventLog } from '@/lib/eventLog';
 
 export function ChatPanel() {
@@ -17,16 +18,14 @@ export function ChatPanel() {
     setTyping,
     addMessage,
     addStreamingMessage,
-    appendToMessage,
     finalizeStreaming,
     clearMessages,
-    setAbortController,
-    cancelChat,
     pendingMessage,
     setPendingMessage,
   } = useChatStore();
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const streamingMsgIdRef = useRef<string | null>(null);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -49,6 +48,58 @@ export function ChatPanel() {
     }
   }, []);
 
+  // Subscribe to agent:chat WebSocket events
+  useEffect(() => {
+    const unsub = workspaceConnection.onMessage((msg: any) => {
+      const msgId = streamingMsgIdRef.current;
+      if (!msgId) return;
+
+      switch (msg.event) {
+        case 'text':
+          if (msg.delta) {
+            useChatStore.getState().appendToMessage(msgId, msg.delta);
+          }
+          break;
+        case 'tool-call':
+          if (msg.toolCall) {
+            useChatStore.getState().appendToMessage(
+              msgId,
+              `\n\n> Using tool: **${msg.toolCall.name}**\n`,
+            );
+          }
+          break;
+        case 'tool-result':
+          // Tool results handled server-side
+          break;
+        case 'handoff':
+          eventLog.info('chat', `Agent handoff: ${msg.fromRole} → ${msg.toRole}`);
+          useChatStore.getState().addMessage({
+            role: 'system',
+            content: `Agent handoff: ${msg.fromRole} → ${msg.toRole}`,
+          });
+          break;
+        case 'error':
+          eventLog.error('chat', 'Agent error', msg.error);
+          useChatStore.getState().appendToMessage(msgId, `\n\n**Error:** ${msg.error}`);
+          useChatStore.getState().finalizeStreaming();
+          useChatStore.getState().setTyping(false);
+          streamingMsgIdRef.current = null;
+          break;
+        case 'done':
+          eventLog.info('chat', 'Response complete');
+          if (msg.agentRole) {
+            useChatStore.getState().setMessageAgentRole(msgId, msg.agentRole);
+          }
+          useChatStore.getState().finalizeStreaming();
+          useChatStore.getState().setTyping(false);
+          streamingMsgIdRef.current = null;
+          break;
+      }
+    }, { type: 'agent:chat' });
+
+    return unsub;
+  }, []);
+
   // Process pending messages from code actions
   useEffect(() => {
     if (pendingMessage && !isTyping) {
@@ -59,87 +110,30 @@ export function ChatPanel() {
   }, [pendingMessage, isTyping]);
 
   const handleSend = async (message: string) => {
-    // Add user message
-    addMessage({
-      role: 'user',
-      content: message,
-    });
-
-    // Show typing indicator
+    addMessage({ role: 'user', content: message });
     setTyping(true);
 
     eventLog.info('chat', `Message sent: "${message.slice(0, 80)}${message.length > 80 ? '...' : ''}"`);
 
-    const controller = new AbortController();
-    setAbortController(controller);
-
-    // Create streaming message placeholder
+    // Create streaming message placeholder — events arrive via WebSocket
     const msgId = addStreamingMessage();
+    streamingMsgIdRef.current = msgId;
 
     try {
-      await sendChatMessageStreaming(
-        message,
-        (event) => {
-          switch (event.type) {
-            case 'text':
-              if (event.delta) {
-                appendToMessage(msgId, event.delta);
-              }
-              break;
-            case 'tool-call':
-              if (event.toolCall) {
-                appendToMessage(
-                  msgId,
-                  `\n\n> Using tool: **${event.toolCall.name}**\n`,
-                );
-              }
-              break;
-            case 'tool-result':
-              // Tool results are handled server-side, just note completion
-              break;
-            case 'handoff':
-              eventLog.info('chat', `Agent handoff: ${event.fromRole} → ${event.toRole}`);
-              addMessage({
-                role: 'system',
-                content: `Agent handoff: ${event.fromRole} → ${event.toRole}`,
-              });
-              break;
-            case 'error':
-              eventLog.error('chat', 'Streaming error', event.error);
-              appendToMessage(msgId, `\n\n**Error:** ${event.error}`);
-              break;
-            case 'done':
-              eventLog.info('chat', 'Response complete');
-              // Set agent role on the streaming message if provided
-              if (event.agentRole) {
-                useChatStore.getState().setMessageAgentRole(msgId, event.agentRole);
-              }
-              break;
-          }
-        },
-        currentProjectId ?? undefined,
-        controller.signal,
-      );
+      await sendChatMessage(message, currentProjectId ?? undefined);
+      // Server accepted — events will arrive via WebSocket agent:chat subscription
     } catch (error) {
-      if (controller.signal.aborted) {
-        appendToMessage(msgId, '\n\n*[Cancelled]*');
-      } else {
-        const errMsg = error instanceof Error ? error.message : 'Failed to get response';
-        eventLog.error('chat', 'Chat request failed', errMsg);
-        addMessage({
-          role: 'system',
-          content: `Error: ${errMsg}`,
-        });
-      }
-    } finally {
+      const errMsg = error instanceof Error ? error.message : 'Failed to send message';
+      eventLog.error('chat', 'Chat request failed', errMsg);
+      addMessage({ role: 'system', content: `Error: ${errMsg}` });
       finalizeStreaming();
       setTyping(false);
-      setAbortController(null);
+      streamingMsgIdRef.current = null;
     }
   };
 
   const handleClear = async () => {
-    cancelChat();
+    streamingMsgIdRef.current = null;
     clearMessages();
     try {
       await clearChatHistory(currentProjectId ?? undefined);

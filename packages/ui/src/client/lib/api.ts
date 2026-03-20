@@ -136,12 +136,8 @@ function deployBase(projectId?: string): string {
   return projectId ? `/api/projects/${projectId}/deploy` : '/api/deploy';
 }
 
-function gitBase(projectId?: string): string {
-  if (projectId && _hasActiveWorkspace(projectId)) {
-    return `/workspace/${projectId}/api/git`;
-  }
-  return projectId ? `/api/projects/${projectId}/git` : '/api/git';
-}
+// gitBase removed — git operations wired through ServiceClient.
+// gitInit still uses apiFetch (not yet in service-interface).
 
 function activityBase(projectId?: string): string {
   if (projectId && _hasActiveWorkspace(projectId)) {
@@ -288,14 +284,6 @@ export async function copyFiles(
 // Agent/Chat API
 // ---------------------------------------------------------------------------
 
-export async function sendChatMessage(message: string, projectId?: string): Promise<{ response: string }> {
-  return apiFetch<{ response: string }>(`${agentBase(projectId)}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
-  });
-}
-
 export async function clearChatHistory(projectId?: string): Promise<void> {
   await apiFetch<{ success: boolean }>(`${agentBase(projectId)}/history`, {
     method: 'DELETE',
@@ -315,50 +303,21 @@ export interface ChatStreamEvent {
   error?: string;
 }
 
-export async function sendChatMessageStreaming(
-  message: string,
-  onEvent: (event: ChatStreamEvent) => void,
-  projectId?: string,
-  abortSignal?: AbortSignal,
-): Promise<void> {
-  const res = await fetch(`${agentBase(projectId)}/chat`, {
+/**
+ * Send a chat message to the agent. The server processes it asynchronously
+ * and broadcasts incremental events over the WebSocket as `agent:chat` messages.
+ *
+ * The caller should subscribe to WebSocket `agent:chat` events via
+ * `workspaceConnection.onMessage(handler, { type: 'agent:chat' })` before calling this.
+ *
+ * @returns immediately once the server accepts the message
+ */
+export async function sendChatMessage(message: string, projectId?: string): Promise<void> {
+  await apiFetch<{ accepted: boolean } | { response: string }>(`${agentBase(projectId)}/chat`, {
     method: 'POST',
-    headers: await authHeaders({
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
-    signal: abortSignal,
   });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.message ?? body.error);
-  }
-
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error('No response body');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        try {
-          const event = JSON.parse(line.slice(6)) as ChatStreamEvent;
-          onEvent(event);
-        } catch { /* skip malformed */ }
-      }
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -611,8 +570,11 @@ export async function fetchGitStatus(projectId?: string): Promise<GitStatus> {
 }
 
 export async function gitInit(projectId?: string): Promise<void> {
-  // gitInit is not in the service-interface — keep as direct fetch for now
-  await apiFetch<{ success: boolean }>(`${gitBase(projectId)}/init`, { method: 'POST' });
+  // gitInit is not yet in the service-interface — use direct workspace/project URL
+  const base = projectId && _hasActiveWorkspace(projectId)
+    ? `/workspace/${projectId}/api/git`
+    : projectId ? `/api/projects/${projectId}/git` : '/api/git';
+  await apiFetch<{ success: boolean }>(`${base}/init`, { method: 'POST' });
 }
 
 export async function gitStage(files: string[], projectId?: string): Promise<void> {

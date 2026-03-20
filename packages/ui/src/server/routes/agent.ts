@@ -1,10 +1,21 @@
 import { Router } from 'express';
 import type { WorkspaceService } from '../services/workspace-service.js';
 
-export function createAgentRouter(workspace: WorkspaceService): Router {
+export interface AgentRouterOptions {
+  /** Broadcast a message to all connected WebSocket clients for this project. */
+  broadcast?: (msg: object) => void;
+}
+
+export function createAgentRouter(workspace: WorkspaceService, options?: AgentRouterOptions): Router {
   const router = Router();
 
-  // Chat endpoint — supports both JSON and SSE streaming
+  /**
+   * POST /chat — fire-and-forget chat endpoint.
+   *
+   * Accepts a message, starts processing asynchronously, and returns immediately.
+   * Chat events are broadcast over the WebSocket as `agent:chat` messages.
+   * Falls back to synchronous JSON response if no broadcast function is available.
+   */
   router.post('/chat', async (req, res) => {
     try {
       const { message } = req.body as { message: string };
@@ -13,61 +24,48 @@ export function createAgentRouter(workspace: WorkspaceService): Router {
         return res.status(400).json({ error: 'Message is required' });
       }
 
-      const wantsStream = req.headers.accept === 'text/event-stream';
+      if (options?.broadcast) {
+        const broadcast = options.broadcast;
 
-      if (wantsStream) {
-        // SSE streaming response
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        });
+        // Return immediately — events delivered via WebSocket
+        res.json({ accepted: true });
 
-        const abortController = new AbortController();
-        req.on('close', () => abortController.abort());
-
+        // Process in background
         try {
           const result = await workspace.chatStream(
             message,
             {
               onText: (delta) => {
-                res.write(`data: ${JSON.stringify({ type: 'text', delta })}\n\n`);
+                broadcast({ type: 'agent:chat', event: 'text', delta });
               },
               onToolCall: (toolCall) => {
-                res.write(`data: ${JSON.stringify({ type: 'tool-call', toolCall })}\n\n`);
+                broadcast({ type: 'agent:chat', event: 'tool-call', toolCall });
               },
               onToolResult: (toolResult) => {
-                res.write(`data: ${JSON.stringify({ type: 'tool-result', toolResult })}\n\n`);
+                broadcast({ type: 'agent:chat', event: 'tool-result', toolResult });
               },
               onHandoff: (fromRole, toRole) => {
-                res.write(`data: ${JSON.stringify({ type: 'handoff', fromRole, toRole })}\n\n`);
+                broadcast({ type: 'agent:chat', event: 'handoff', fromRole, toRole });
               },
             },
-            abortController.signal,
           );
 
-          res.write(
-            `data: ${JSON.stringify({
-              type: 'done',
-              response: result.response.content,
-              usage: result.response.usage,
-              agentRole: result.agentRole,
-            })}\n\n`,
-          );
+          broadcast({
+            type: 'agent:chat',
+            event: 'done',
+            response: result.response.content,
+            usage: result.response.usage,
+            agentRole: result.agentRole,
+          });
         } catch (error) {
-          if (!abortController.signal.aborted) {
-            res.write(
-              `data: ${JSON.stringify({
-                type: 'error',
-                error: error instanceof Error ? error.message : String(error),
-              })}\n\n`,
-            );
-          }
-        } finally {
-          res.end();
+          broadcast({
+            type: 'agent:chat',
+            event: 'error',
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       } else {
-        // Non-streaming JSON response (backward compatible)
+        // No broadcast — synchronous JSON response (Lambda/fallback)
         const result = await workspace.chat(message);
         res.json({
           response: result.response.content,
