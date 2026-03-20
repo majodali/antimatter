@@ -260,6 +260,30 @@ export async function fileExists(path: string, projectId?: string): Promise<bool
   return unwrapOrThrow(res, 'fileExists').exists;
 }
 
+export async function moveFiles(
+  entries: { src: string; dest: string }[],
+  projectId?: string,
+): Promise<{ moved: number; errors: string[] }> {
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'files.move', projectId: pid, entries } as any,
+    pid || undefined,
+  );
+  return unwrapOrThrow(res, 'moveFiles') as { moved: number; errors: string[] };
+}
+
+export async function copyFiles(
+  entries: { src: string; dest: string }[],
+  projectId?: string,
+): Promise<{ copied: number; errors: string[] }> {
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'files.copy', projectId: pid, entries } as any,
+    pid || undefined,
+  );
+  return unwrapOrThrow(res, 'copyFiles') as { copied: number; errors: string[] };
+}
+
 // ---------------------------------------------------------------------------
 // Agent/Chat API
 // ---------------------------------------------------------------------------
