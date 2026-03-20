@@ -32,6 +32,10 @@ import {
   EC2Client,
   StopInstancesCommand,
 } from '@aws-sdk/client-ec2';
+import {
+  ElasticLoadBalancingV2Client,
+  DeregisterTargetsCommand,
+} from '@aws-sdk/client-elastic-load-balancing-v2';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import { SSMClient } from '@aws-sdk/client-ssm';
 import { EventLogger } from './services/event-logger.js';
@@ -260,7 +264,29 @@ async function selfStop(): Promise<void> {
     });
     const instanceId = await idRes.text();
 
+    // Get our private IP for ALB deregistration
+    const ipRes = await fetch('http://169.254.169.254/latest/meta-data/local-ipv4', {
+      headers: { 'X-aws-ec2-metadata-token': token },
+    });
+    const privateIp = await ipRes.text();
+
     console.log(`[workspace-server] Stopping instance ${instanceId}...`);
+
+    // Deregister from ALB target group FIRST so traffic stops arriving immediately
+    const targetGroupArn = process.env.WORKSPACE_TARGET_GROUP_ARN;
+    if (targetGroupArn && privateIp) {
+      try {
+        const elbv2 = new ElasticLoadBalancingV2Client({});
+        await elbv2.send(new DeregisterTargetsCommand({
+          TargetGroupArn: targetGroupArn,
+          Targets: [{ Id: privateIp, Port: PORT }],
+        }));
+        console.log(`[workspace-server] Deregistered from ALB target group`);
+      } catch (albErr) {
+        console.error('[workspace-server] Failed to deregister from ALB:', albErr);
+        // Continue with shutdown — stale target will be cleaned up by health checks
+      }
+    }
 
     // Shutdown all project contexts (stops file watchers, PTYs, flushes S3 sync)
     for (const ctx of projectContexts.values()) {

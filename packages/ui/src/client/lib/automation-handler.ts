@@ -149,22 +149,36 @@ export class AutomationHandler {
         );
       }
 
-      // Browser fixture: use TestOrchestrator for proper isolation
-      // (creates disposable project, runs via BroadcastChannel)
-      // Uses persistent test tab — if popup blocked, shows modal for user gesture
+      // Browser fixture: fire-and-forget — start the test run asynchronously
+      // and return immediately. Callers poll via tests.results.
+      // This avoids HTTP/WebSocket timeouts for long-running tests.
       const { TestOrchestrator } = await import('./test-orchestrator.js');
+      const testIds = params.testIds as string[] | undefined;
+
       const orchestrator = new TestOrchestrator();
-      try {
-        const summary = await orchestrator.runTests({
-          testIds: params.testIds as string[] | undefined,
+
+      // Start entire test pipeline in background — don't await.
+      // The orchestrator handles setup() internally (calls test module setup
+      // to get projectId before opening the test tab).
+      (async () => {
+        await orchestrator.runTests({
+          testIds,
           area: params.area as any,
           failedOnly: params.failedOnly as boolean | undefined,
           keepTabOpen: false,
         });
-        return { summary };
-      } finally {
+      })().catch(async (err) => {
+        console.error('[automation] tests.run failed:', err);
+        const { useTestResultStore } = await import('../stores/testResultStore.js');
+        const msg = err instanceof Error ? err.message : String(err);
+        useTestResultStore.getState().setLastError(msg);
+        useTestResultStore.getState().setRunning(false);
+      }).finally(() => {
         orchestrator.dispose();
-      }
+      });
+
+      // Return immediately — caller polls tests.results
+      return { started: true, testIds };
     });
 
     this.handlers.set('tests.list', async () => {
@@ -187,6 +201,9 @@ export class AutomationHandler {
         runs: state.runs,
         isRunning: state.isRunning,
         currentTestId: state.currentTestId,
+        lastError: state.lastError,
+        testTabStatus: state.testTabStatus,
+        liveLogs: state.liveLogs,
       };
     });
 

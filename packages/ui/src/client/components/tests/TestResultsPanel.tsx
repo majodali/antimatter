@@ -86,11 +86,15 @@ function TestRow({
   testName,
   result,
   isRunning,
+  isSuiteRunning,
+  onRunTest,
 }: {
   testId: string;
   testName: string;
   result?: StoredTestResult;
   isRunning: boolean;
+  isSuiteRunning: boolean;
+  onRunTest: (testId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasDetail = result && (!result.pass || result.status === 'unsupported');
@@ -104,6 +108,21 @@ function TestRow({
         } ${isUnsupported ? 'bg-amber-500/5' : ''}`}
         onClick={() => hasDetail && setExpanded(!expanded)}
       >
+        {/* Run single test button */}
+        <button
+          className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded
+            hover:bg-green-600/30 text-muted-foreground hover:text-green-400
+            disabled:opacity-30 disabled:cursor-not-allowed"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRunTest(testId);
+          }}
+          disabled={isSuiteRunning}
+          title={`Run ${testId}`}
+          data-testid={`test-run-btn-${testId}`}
+        >
+          <Play className="h-2.5 w-2.5" />
+        </button>
         {hasDetail ? (
           <span className="flex-shrink-0 w-3">
             {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
@@ -173,12 +192,14 @@ function AreaGroup({
   results,
   currentTestId,
   isRunning,
+  onRunTest,
 }: {
   area: string;
   tests: { id: string; name: string }[];
   results: Map<string, StoredTestResult>;
   currentTestId: string | null;
   isRunning: boolean;
+  onRunTest: (testId: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const passCount = tests.filter((t) => results.get(t.id)?.pass).length;
@@ -224,6 +245,8 @@ function AreaGroup({
             testName={test.name}
             result={results.get(test.id)}
             isRunning={isRunning && currentTestId === test.id}
+            isSuiteRunning={isRunning}
+            onRunTest={onRunTest}
           />
         ))}
     </div>
@@ -306,6 +329,18 @@ export function TestResultsPanel() {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [results]);
+
+  const handleRunSingle = useCallback(async (testId: string) => {
+    setError(null);
+    try {
+      if (!orchestratorRef.current) {
+        orchestratorRef.current = new TestOrchestrator();
+      }
+      await orchestratorRef.current.runTests({ testIds: [testId], keepTabOpen });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [keepTabOpen]);
 
   // Get unique areas for filter dropdown
   const allAreas = Array.from(modulesByArea.keys()).sort();
@@ -444,6 +479,7 @@ export function TestResultsPanel() {
                 results={resultMap}
                 currentTestId={currentTestId}
                 isRunning={isRunning}
+                onRunTest={handleRunSingle}
               />
             ))}
           </div>

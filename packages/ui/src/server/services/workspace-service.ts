@@ -146,6 +146,14 @@ When asked to fix code, explain code, or refactor code, read the relevant files 
     await this.fs.mkdir(path as WorkspacePath);
   }
 
+  async move(src: string, dest: string): Promise<void> {
+    await this.fs.rename(src as WorkspacePath, dest as WorkspacePath);
+  }
+
+  async copy(src: string, dest: string): Promise<void> {
+    await this.fs.copyFile(src as WorkspacePath, dest as WorkspacePath);
+  }
+
   // --- Build operations ---
 
   async executeBuild(

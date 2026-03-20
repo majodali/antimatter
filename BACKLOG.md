@@ -25,6 +25,65 @@ A feature becomes `done` when ALL its test cases are `test-passing`.
 
 ---
 
+## Current Focus: Self-Hosted Development
+
+**Objective:** Move to 100% online self-hosted development. Desktop Claude Code and local tools are no longer needed.
+
+### Milestones
+
+| # | Milestone | Status | Description |
+|---|-----------|--------|-------------|
+| M1 | **Toy project edit/build/test/deploy** | in-progress | Manually create, edit, build, test, and deploy a toy TypeScript project (json-validator) entirely from within the IDE |
+| M2 | **Self-host Antimatter** | planned | Perform code changes, builds, tests, and deployments on Antimatter itself entirely from within the IDE |
+| M3 | **Claude Code remote driving** | planned | Claude Code (local CLI) drives the IDE remotely via the Automation API — editing, building, testing, deploying |
+| M4 | **Native AI agent** | planned | Built-in AI agent replaces Claude Code, using the same Automation API and service interface |
+
+### M1 Validation: json-validator Test Project
+
+A zero-dependency TypeScript JSON schema validator library used to validate Milestone 1 capabilities:
+
+- **File ops**: Create files/folders, edit in Monaco, see file tree
+- **Build**: `tsc` compilation, errors surface in Problems panel
+- **Test**: `node:test` runner, results visible in IDE
+- **Deploy**: S3 artifact upload
+- **Workflow rules**: install, typecheck, build, test
+
+### Target Architecture Model
+
+The system is decomposed into **App Services** (manage resources during project work) and **Platform Services** (supporting functions). Type definitions are in `@antimatter/service-interface`.
+
+**App Services:**
+
+| Service | Owns |
+|---------|------|
+| Projects | Project lifecycle, metadata, VCS (stage/commit/push/pull with generic verbs, single remote) |
+| Files | File CRUD, tree, unified annotations (any source, with actions), file change events |
+| Builds | Build rules, results, configurations, triggers. Subsumes deploy and workflow — the workflow engine is internal |
+| Tests | Test definitions (registered per-project), execution with configurable runners, results and events |
+| Workspaces | EC2 lifecycle, terminal sessions (resources with history), S3 sync |
+| DeployedResources | Project-defined resource tracking, custom actions (invoked via build triggers), secrets/env vars |
+| Agents | Chat sessions (optionally project-scoped), event-driven messages, chat history |
+
+**Platform Services:**
+
+| Service | Responsibility |
+|---------|---------------|
+| Auth | Cognito integration, token management |
+| ClientAutomation | Browser client testing/automation, client registry, IDE UI automation |
+| Observability | System, build, test event logging. S3 persistence (JSONL, daily partitioned) |
+
+**Service Interface:** All services expose canonical commands, queries, and events defined in `@antimatter/service-interface`. Operations are namespaced by service (e.g., `files.write`, `builds.triggers.invoke`). Three transport adapters (REST, WebSocket, tool-use) map to the same interface. Files, Builds, Tests, and DeployedResources operations are project-scoped. WebSocket connections default to a project scope with per-frame override. The `not-hosted` error code signals the client to redirect workspace operations to another handler.
+
+**Inter-service patterns:** Prefer events for asynchronous downstream effects (e.g., Files emits `files.changed` → Builds evaluates rules). Use direct invocation when a change is required for the current operation's integrity (e.g., Builds calls `files.annotate` to write build results to source files).
+
+### Known Blockers
+
+| Issue | Impact | Status |
+|-------|--------|--------|
+| **Workspace file sync bug** | Files created via UI route to S3/Lambda instead of workspace server when `activeWorkspaceProjectIds` is not yet populated for the project. Terminal works but file operations bypass workspace. | Confirmed by FT-WS-001 — investigating |
+
+---
+
 ## Phase: Bootstrap
 
 **Goal:** The IDE can build, test, and deploy itself.
@@ -189,6 +248,7 @@ A feature becomes `done` when ALL its test cases are `test-passing`.
 | | FT-WKSP-004: Workflow engine loads | defined | Workflow engine loads .antimatter/*.ts files on startup |
 | | FT-WKSP-005: Idle detection respects running commands | defined | Long-running commands prevent workspace auto-stop |
 | | FT-WKSP-006: S3/refresh race condition | defined | Workspace restart re-downloads stale files from S3 before local deletions (e.g. git clean) can sync. Fix: run syncToS3 before downloading on restart, or accept local filesystem as authoritative after git operations |
+| | FT-WS-001: Files sync to workspace | test-implemented | Files created via the UI exist on the workspace server filesystem, not just in S3. Polls `hasActiveWorkspace(projectId)` then checks `/exists` endpoint. Currently failing — confirms workspace file sync bug. (Browser functional test) |
 
 ### S3 Project Storage
 
@@ -214,9 +274,15 @@ A feature becomes `done` when ALL its test cases are `test-passing`.
 |----|---------------------|--------|-------------|
 | F-TEST-001 | **Smoke Test Suite** | in-progress | 17 Lambda-based smoke tests covering health, files, projects, commands, frontend |
 | | FT-TEST-001: All smoke tests pass | defined | POST /api/tests/run?suite=smoke returns all passing |
-| F-TEST-002 | **Functional Test Framework** | in-progress | ActionContext abstraction with FetchActionContext and ServiceActionContext. Only 2 placeholder tests. |
+| F-TEST-002 | **Functional Test Framework** | in-progress | ActionContext abstraction with three implementations (Fetch, Service, Browser). Test modules: file-explorer (7), editor (4), cross-tab (3), workspace (1). Browser runner with cross-tab orchestrator/executor via BroadcastChannel. |
 | | FT-TEST-002: Functional tests run from CLI | defined | npm test executes functional tests via ServiceActionContext |
 | | FT-TEST-003: Functional tests run from Lambda | defined | POST /api/tests/run?suite=functional executes via FetchActionContext |
+| | FT-TEST-004: Browser tests run from panel | test-passing | TestResultsPanel runs tests via cross-tab orchestrator with BrowserActionContext |
+| | FT-TEST-005: Single test execution | test-passing | Individual tests can be run via per-test play button in TestResultsPanel |
+| F-TEST-003 | **Cross-Tab Test Protocol** | in-progress | BroadcastChannel-based orchestrator/executor for browser functional tests. Orchestrator creates disposable project, opens test tab, executor runs tests and reports results. |
+| | FT-XTAB-001: Cross-tab communication | test-passing | Orchestrator and executor exchange messages via BroadcastChannel |
+| | FT-XTAB-002: Test tab lifecycle | test-passing | Test tab opens, receives commands, runs tests, reports results |
+| | FT-XTAB-003: Disposable project cleanup | test-passing | Test project is created for the run and cleaned up after |
 
 ### Build Scripts
 

@@ -150,8 +150,7 @@ const workspaceConfig: WorkspaceEc2ServiceConfig | null = process.env.WORKSPACE_
       instanceProfileArn: process.env.WORKSPACE_INSTANCE_PROFILE_ARN ?? '',
       subnetIds: (process.env.WORKSPACE_SUBNET_IDS ?? '').split(',').filter(Boolean),
       securityGroupId: process.env.WORKSPACE_SG_ID ?? '',
-      listenerArn: process.env.ALB_LISTENER_ARN ?? '',
-      vpcId: process.env.VPC_ID ?? '',
+      targetGroupArn: process.env.WORKSPACE_TARGET_GROUP_ARN ?? '',
       albDns: process.env.WORKSPACE_ALB_DNS ?? '',
       projectsBucket,
       sharedMode: process.env.WORKSPACE_SHARED_MODE === 'true',
@@ -174,18 +173,45 @@ apiRouter.use('/infra-environments', createInfraEnvironmentRouter(envRegistry));
 // Secrets management — SSM Parameter Store
 apiRouter.use('/secrets', createSecretsRouter(ssmClient, clearSecretCache));
 
-// Project-scoped file routes — S3 fallback for browsing files when no workspace is running.
-// When a workspace EC2 instance is active, the frontend routes through /workspace/* instead.
+// Project-scoped file routes — writes to S3 and, when the workspace is running,
+// forwards mutations to the workspace server so file watchers and workflow rules trigger.
 apiRouter.use('/projects/:projectId/files', async (req, res, next) => {
   try {
+    const projectId = req.params.projectId;
     const env = new S3WorkspaceEnvironment({
       s3Client,
       bucket: projectsBucket,
-      prefix: `projects/${req.params.projectId}/files/`,
+      prefix: `projects/${projectId}/files/`,
     });
     const anthropicApiKey = await getAnthropicKey();
     const ws = new WorkspaceService({ env, anthropicApiKey });
-    createFileRouter(ws)(req, res, next);
+
+    // Build a best-effort workspace forwarder when workspace is running.
+    // getWorkspaceStatus() also ensures ALB target registration as a side effect.
+    let workspaceForwarder: import('./routes/filesystem.js').WorkspaceForwarder | undefined;
+    if (workspaceConfig) {
+      const { WorkspaceEc2Service } = await import('./services/workspace-ec2-service.js');
+      const svc = new WorkspaceEc2Service(workspaceConfig);
+      const status = await svc.getWorkspaceStatus(projectId);
+      if (status?.status === 'RUNNING' && workspaceConfig.albDns) {
+        const albBase = `http://${workspaceConfig.albDns}/workspace/${encodeURIComponent(projectId)}/api/files`;
+        const authHeader = req.headers.authorization;
+        workspaceForwarder = async (route, method, body, query) => {
+          const qs = query ? '?' + new URLSearchParams(query).toString() : '';
+          const url = `${albBase}${route}${qs}`;
+          const headers: Record<string, string> = {};
+          if (authHeader) headers['Authorization'] = authHeader;
+          if (body) headers['Content-Type'] = 'application/json';
+          await fetch(url, {
+            method,
+            headers,
+            body: body ? JSON.stringify(body) : undefined,
+          });
+        };
+      }
+    }
+
+    createFileRouter(ws, { workspaceForwarder })(req, res, next);
   } catch (err) {
     next(err);
   }

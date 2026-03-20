@@ -121,13 +121,18 @@ class WorkspaceConnection {
       }
     }
 
-    // 3. Open WebSocket
-    await this.openWebSocket(projectId, this.sessionToken!);
-
-    // 4. Activate workspace-aware API routing — only after the WebSocket is
-    //    confirmed open.  This ensures file/API calls fall back to Lambda if
-    //    the workspace isn't actually reachable (e.g. ALB rule not propagated).
-    setActiveWorkspace(projectId);
+    // 3. Open WebSocket (for terminal, real-time events, file-change notifications).
+    //    setActiveWorkspace is called inside ws.onopen so it also fires on
+    //    reconnects (not just the initial connection).  If the initial WS
+    //    fails, reconnect attempts continue in the background.
+    try {
+      await this.openWebSocket(projectId, this.sessionToken!);
+    } catch {
+      // Initial WebSocket failed — reconnects are already scheduled by
+      // handleWsClose → attemptReconnect.  Don't throw: let the caller
+      // (terminalStore) observe state transitions instead.
+      console.warn('[workspace-connection] Initial WebSocket failed; reconnecting in background');
+    }
   }
 
   /**
@@ -214,15 +219,20 @@ class WorkspaceConnection {
 
   private async openWebSocket(projectId: string, sessionToken: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
+      let settled = false;
+
       getWorkspaceWsUrl(projectId, sessionToken).then(wsPath => {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}${wsPath}`;
         const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
+          settled = true;
           this.ws = ws;
           this.reconnectAttempt = 0;
           this.startKeepalive();
+          // Activate workspace routing on EVERY successful open (initial + reconnect)
+          setActiveWorkspace(projectId);
           this.setState('CONNECTED');
           resolve();
         };
@@ -233,6 +243,12 @@ class WorkspaceConnection {
 
         ws.onclose = (event) => {
           this.handleWsClose(event);
+          // Reject if the WS closed before ever opening — prevents connect() from
+          // hanging forever.  If already resolved (onopen fired first), this is a no-op.
+          if (!settled) {
+            settled = true;
+            reject(new Error(`WebSocket closed before opening (code: ${event.code})`));
+          }
         };
 
         ws.onerror = () => {
@@ -294,6 +310,9 @@ class WorkspaceConnection {
 
   private attemptReconnect(): void {
     if (this.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      // All retries exhausted — clear workspace routing so file ops
+      // fall back to Lambda/S3 rather than hitting a dead workspace.
+      if (this.projectId) clearActiveWorkspace(this.projectId);
       this.setState('DISCONNECTED');
       eventLog.error(
         'workspace',

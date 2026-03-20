@@ -1,7 +1,41 @@
+/**
+ * API facade — backward-compatible function exports for all REST operations.
+ *
+ * Workspace routing state is now centralized in rest-transport.ts and shared
+ * with the ServiceClient. New code should prefer `client` from service-client.ts.
+ * These functions remain for existing callers and will be migrated incrementally.
+ *
+ * SSE streaming functions (chat, build, deploy) are NOT routed through the
+ * ServiceClient because they use event-stream responses, not JSON request/response.
+ * They will move to a dedicated StreamingTransport in the future.
+ */
+
 import type { WorkspacePath } from '@antimatter/filesystem';
 import type { BuildResult, BuildRule } from '@antimatter/project-model';
+import type { InfraEnvironment, InfraEnvironmentOutputs } from '@antimatter/project-model';
+import type { ServiceResponse } from '@antimatter/service-interface';
 import { eventLog } from './eventLog';
 import { getAccessToken } from './auth';
+import { client } from './service-client';
+import {
+  setActiveWorkspace as _setActiveWorkspace,
+  clearActiveWorkspace as _clearActiveWorkspace,
+  getActiveWorkspace as _getActiveWorkspace,
+  hasActiveWorkspace as _hasActiveWorkspace,
+} from './rest-transport';
+
+// ---------------------------------------------------------------------------
+// Re-export workspace routing from the shared state in rest-transport
+// ---------------------------------------------------------------------------
+
+export const setActiveWorkspace = _setActiveWorkspace;
+export const clearActiveWorkspace = _clearActiveWorkspace;
+export const getActiveWorkspace = _getActiveWorkspace;
+export const hasActiveWorkspace = _hasActiveWorkspace;
+
+// ---------------------------------------------------------------------------
+// Types (kept for backward compat — callers import from here)
+// ---------------------------------------------------------------------------
 
 export interface FileNode {
   name: string;
@@ -21,8 +55,11 @@ interface ApiError {
   message?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Low-level fetch helpers (used by streaming + functions not yet on ServiceClient)
+// ---------------------------------------------------------------------------
+
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  // Inject Cognito access token for authenticated API calls
   const token = await getAccessToken();
   const headers = new Headers(init?.headers);
   if (token) {
@@ -31,7 +68,6 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
   const res = await fetch(url, { ...init, headers });
 
-  // Guard against non-JSON responses (e.g. CloudFront serving index.html for 404s)
   const contentType = res.headers.get('content-type') ?? '';
   if (!contentType.includes('json')) {
     const method = init?.method ?? 'GET';
@@ -56,6 +92,77 @@ async function authHeaders(extra?: Record<string, string>): Promise<Record<strin
     headers['Authorization'] = `Bearer ${token}`;
   }
   return headers;
+}
+
+// ---------------------------------------------------------------------------
+// ServiceClient response unwrapper
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract data from a ServiceResponse or throw an Error.
+ * Preserves the error-throwing behavior that all api.ts callers depend on.
+ */
+function unwrapOrThrow<T>(response: ServiceResponse<T>, context: string): T {
+  if (!response.ok) {
+    const msg = response.error?.message ?? `${context} failed`;
+    eventLog.error('network', `${context}: ${msg}`);
+    throw new Error(msg);
+  }
+  return response.data as T;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-aware base URL helpers (shared routing state from rest-transport)
+// ---------------------------------------------------------------------------
+
+function agentBase(projectId?: string): string {
+  if (projectId && _hasActiveWorkspace(projectId)) {
+    return `/workspace/${projectId}/api/agent`;
+  }
+  return projectId ? `/api/projects/${projectId}/agent` : '/api/agent';
+}
+
+function buildBase(projectId?: string): string {
+  if (projectId && _hasActiveWorkspace(projectId)) {
+    return `/workspace/${projectId}/api/build`;
+  }
+  return projectId ? `/api/projects/${projectId}/build` : '/api/build';
+}
+
+function deployBase(projectId?: string): string {
+  if (projectId && _hasActiveWorkspace(projectId)) {
+    return `/workspace/${projectId}/api/deploy`;
+  }
+  return projectId ? `/api/projects/${projectId}/deploy` : '/api/deploy';
+}
+
+function gitBase(projectId?: string): string {
+  if (projectId && _hasActiveWorkspace(projectId)) {
+    return `/workspace/${projectId}/api/git`;
+  }
+  return projectId ? `/api/projects/${projectId}/git` : '/api/git';
+}
+
+function activityBase(projectId?: string): string {
+  if (projectId && _hasActiveWorkspace(projectId)) {
+    return `/workspace/${projectId}/api/activity`;
+  }
+  return projectId ? `/api/projects/${projectId}/activity` : '/api/activity';
+}
+
+function eventsBase(projectId?: string): string {
+  if (projectId && _hasActiveWorkspace(projectId)) {
+    return `/workspace/${projectId}/api/events`;
+  }
+  return projectId ? `/api/projects/${projectId}/events` : '/api/events';
+}
+
+function workflowBase(projectId?: string): string {
+  const pid = projectId ?? _getActiveWorkspace();
+  if (pid) {
+    return `/workspace/${pid}/api/workflow`;
+  }
+  return '/api/workflow';
 }
 
 // ---------------------------------------------------------------------------
@@ -103,96 +210,66 @@ export function readBrowserFile(file: File): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace-aware API routing
+// File API — routed through ServiceClient for workspace-aware dispatch
 // ---------------------------------------------------------------------------
-// When a workspace EC2 instance is active for a project, project-scoped
-// API calls are routed through /workspace/{projectId}/api/* (EC2 via ALB)
-// instead of /api/projects/{projectId}/* (Lambda via API Gateway).
-
-const activeWorkspaceProjectIds = new Set<string>();
-
-export function setActiveWorkspace(projectId: string) {
-  activeWorkspaceProjectIds.add(projectId);
-}
-
-export function clearActiveWorkspace(projectId: string) {
-  activeWorkspaceProjectIds.delete(projectId);
-}
-
-export function getActiveWorkspace(): string | null {
-  const first = activeWorkspaceProjectIds.values().next();
-  return first.done ? null : first.value;
-}
-
-export function hasActiveWorkspace(projectId: string): boolean {
-  return activeWorkspaceProjectIds.has(projectId);
-}
-
-// ---------------------------------------------------------------------------
-// File API — project-scoped when projectId is provided
-// ---------------------------------------------------------------------------
-
-function fileBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
-    return `/workspace/${projectId}/api/files`;
-  }
-  return projectId ? `/api/projects/${projectId}/files` : '/api/files';
-}
 
 export async function fetchFileTree(path = '/', projectId?: string): Promise<FileNode[]> {
-  const { tree } = await apiFetch<{ tree: FileNode[] }>(
-    `${fileBase(projectId)}/tree?path=${encodeURIComponent(path)}`,
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'files.tree', projectId: pid, path } as any,
+    pid || undefined,
   );
-  return tree;
+  return unwrapOrThrow(res, 'fetchFileTree').tree as FileNode[];
 }
 
 export async function fetchFileContent(path: string, projectId?: string): Promise<string> {
-  const { content } = await apiFetch<{ path: string; content: string }>(
-    `${fileBase(projectId)}/read?path=${encodeURIComponent(path)}`,
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'files.read', projectId: pid, path } as any,
+    pid || undefined,
   );
-  return content;
+  return unwrapOrThrow(res, 'fetchFileContent').content;
 }
 
 export async function saveFile(path: string, content: string, projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${fileBase(projectId)}/write`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, content }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'files.write', projectId: pid, path, content } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'saveFile');
 }
 
 export async function createFolder(path: string, projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${fileBase(projectId)}/mkdir`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'files.mkdir', projectId: pid, path } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'createFolder');
 }
 
 export async function deleteFile(path: string, projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(
-    `${fileBase(projectId)}/delete?path=${encodeURIComponent(path)}`,
-    { method: 'DELETE' },
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'files.delete', projectId: pid, path } as any,
+    pid || undefined,
   );
+  unwrapOrThrow(res, 'deleteFile');
 }
 
 export async function fileExists(path: string, projectId?: string): Promise<boolean> {
-  const { exists } = await apiFetch<{ path: string; exists: boolean }>(
-    `${fileBase(projectId)}/exists?path=${encodeURIComponent(path)}`,
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'files.exists', projectId: pid, path } as any,
+    pid || undefined,
   );
-  return exists;
+  return unwrapOrThrow(res, 'fileExists').exists;
 }
 
 // ---------------------------------------------------------------------------
-// Agent/Chat API — project-scoped when projectId is provided
+// Agent/Chat API
 // ---------------------------------------------------------------------------
-
-function agentBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
-    return `/workspace/${projectId}/api/agent`;
-  }
-  return projectId ? `/api/projects/${projectId}/agent` : '/api/agent';
-}
 
 export async function sendChatMessage(message: string, projectId?: string): Promise<{ response: string }> {
   return apiFetch<{ response: string }>(`${agentBase(projectId)}/chat`, {
@@ -268,15 +345,8 @@ export async function sendChatMessageStreaming(
 }
 
 // ---------------------------------------------------------------------------
-// Build API — project-scoped when projectId is provided
+// Build API
 // ---------------------------------------------------------------------------
-
-function buildBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
-    return `/workspace/${projectId}/api/build`;
-  }
-  return projectId ? `/api/projects/${projectId}/build` : '/api/build';
-}
 
 export async function executeBuild(
   rules: BuildRule[],
@@ -373,15 +443,8 @@ export async function clearBuildCache(ruleId?: string, projectId?: string): Prom
 }
 
 // ---------------------------------------------------------------------------
-// Deploy API — project-scoped when projectId is provided
+// Deploy API
 // ---------------------------------------------------------------------------
-
-function deployBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
-    return `/workspace/${projectId}/api/deploy`;
-  }
-  return projectId ? `/api/projects/${projectId}/deploy` : '/api/deploy';
-}
 
 export interface DeployConfig {
   modules: any[];
@@ -493,7 +556,7 @@ async function getCommandUrl(): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Command Execution API — runs commands on the Command Lambda via EFS
+// Command Execution API
 // ---------------------------------------------------------------------------
 
 export interface CommandResult {
@@ -508,8 +571,6 @@ export async function executeProjectCommand(
   command: string,
   options?: { syncAfter?: boolean },
 ): Promise<CommandResult> {
-  // Use direct Lambda Function URL (15-min timeout) when available,
-  // fall back to API Gateway path (29-second timeout).
   const commandUrl = await getCommandUrl();
   const baseUrl = commandUrl
     ? `${commandUrl}projects/${encodeURIComponent(projectId)}/exec`
@@ -535,7 +596,7 @@ export async function executeProjectCommand(
 }
 
 // ---------------------------------------------------------------------------
-// Workspace Instance API — manages EC2 workspace lifecycle
+// Workspace Instance API
 // ---------------------------------------------------------------------------
 
 export interface WorkspaceInstanceInfo {
@@ -562,13 +623,7 @@ export async function getWorkspaceStatus(projectId: string): Promise<WorkspaceIn
   );
 }
 
-/**
- * Get the WebSocket URL for connecting to a workspace terminal.
- * Uses the CloudFront distribution which proxies /ws/* to the ALB.
- */
 export async function getWorkspaceWsUrl(projectId: string, sessionToken: string): Promise<string> {
-  // WebSocket goes through CloudFront /ws/* → ALB → EC2 instance
-  // Using relative URL so it automatically uses the CloudFront host
   return `/ws/terminal/${encodeURIComponent(projectId)}?token=${encodeURIComponent(sessionToken)}`;
 }
 
@@ -576,17 +631,13 @@ export async function getWorkspaceWsUrl(projectId: string, sessionToken: string)
 // Chat History Persistence API
 // ---------------------------------------------------------------------------
 
-function chatHistoryBase(projectId?: string): string {
-  return `${agentBase(projectId)}/chat/history`;
-}
-
 export async function fetchChatHistory(projectId?: string): Promise<any[]> {
-  const { messages } = await apiFetch<{ messages: any[] }>(chatHistoryBase(projectId));
+  const { messages } = await apiFetch<{ messages: any[] }>(`${agentBase(projectId)}/chat/history`);
   return messages;
 }
 
 export async function saveChatHistory(messages: any[], projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(chatHistoryBase(projectId), {
+  await apiFetch<{ success: boolean }>(`${agentBase(projectId)}/chat/history`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages }),
@@ -596,13 +647,6 @@ export async function saveChatHistory(messages: any[], projectId?: string): Prom
 // ---------------------------------------------------------------------------
 // Activity Log Persistence API
 // ---------------------------------------------------------------------------
-
-function activityBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
-    return `/workspace/${projectId}/api/activity`;
-  }
-  return projectId ? `/api/projects/${projectId}/activity` : '/api/activity';
-}
 
 export async function fetchActivityLog(projectId?: string): Promise<any[]> {
   const { events } = await apiFetch<{ events: any[] }>(activityBase(projectId));
@@ -618,7 +662,7 @@ export async function saveActivityLog(events: any[], projectId?: string): Promis
 }
 
 // ---------------------------------------------------------------------------
-// System Events API — centralized event log from S3
+// System Events API
 // ---------------------------------------------------------------------------
 
 export interface SystemEvent {
@@ -630,13 +674,6 @@ export interface SystemEvent {
   level: 'info' | 'warn' | 'error';
   message: string;
   detail?: Record<string, unknown>;
-}
-
-function eventsBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
-    return `/workspace/${projectId}/api/events`;
-  }
-  return projectId ? `/api/projects/${projectId}/events` : '/api/events';
 }
 
 export async function fetchSystemEvents(
@@ -653,13 +690,6 @@ export async function fetchSystemEvents(
 // ---------------------------------------------------------------------------
 // Git API
 // ---------------------------------------------------------------------------
-
-function gitBase(projectId?: string): string {
-  if (projectId && activeWorkspaceProjectIds.has(projectId)) {
-    return `/workspace/${projectId}/api/git`;
-  }
-  return projectId ? `/api/projects/${projectId}/git` : '/api/git';
-}
 
 export interface GitStatus {
   initialized: boolean;
@@ -744,8 +774,6 @@ export async function fetchGitLog(limit = 20, projectId?: string): Promise<{ has
 // Infrastructure Environment Registry
 // ---------------------------------------------------------------------------
 
-import type { InfraEnvironment, InfraEnvironmentOutputs } from '@antimatter/project-model';
-
 export async function fetchInfraEnvironments(): Promise<InfraEnvironment[]> {
   const { environments } = await apiFetch<{ environments: InfraEnvironment[] }>('/api/infra-environments');
   return environments;
@@ -804,7 +832,6 @@ export async function deleteSecret(name: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function refreshWorkspace(projectId: string): Promise<void> {
-  // This goes directly to the workspace EC2 via CloudFront → ALB
   await apiFetch<{ success: boolean }>(`/workspace/${projectId}/api/refresh`, {
     method: 'POST',
   });
@@ -813,14 +840,6 @@ export async function refreshWorkspace(projectId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 // Workflow / Pipeline API (workspace-scoped)
 // ---------------------------------------------------------------------------
-
-function workflowBase(projectId?: string): string {
-  const pid = projectId ?? getActiveWorkspace();
-  if (pid) {
-    return `/workspace/${pid}/api/workflow`;
-  }
-  return '/api/workflow';
-}
 
 export interface EnvironmentActionDeclaration {
   event: { type: string; [key: string]: unknown };
@@ -846,4 +865,3 @@ export async function runWorkflowRule(
     method: 'POST',
   });
 }
-

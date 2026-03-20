@@ -227,18 +227,25 @@ export class TestExecutor {
       // Capture console output during the test
       const capture = startConsoleCapture();
 
+      // Periodically flush new console logs to the orchestrator so they
+      // survive orchestrator timeouts and are available for live inspection.
+      let lastFlushedCount = 0;
+      const flushInterval = setInterval(() => {
+        const currentLogs = capture.getLogs();
+        if (currentLogs.length > lastFlushedCount) {
+          this.send({
+            type: 'test-log',
+            testId: test.id,
+            logs: currentLogs.slice(lastFlushedCount),
+          });
+          lastFlushedCount = currentLogs.length;
+        }
+      }, 5000);
+
       try {
         const result = await test.run(ctx);
         pass = result.pass;
         detail = result.detail;
-
-        // On failure, capture diagnostics
-        if (!pass) {
-          trace = {
-            consoleLogs: capture.getLogs(),
-            domSnapshot: captureDomSnapshot(),
-          };
-        }
       } catch (err) {
         if (err instanceof UINotSupportedError) {
           pass = false;
@@ -249,13 +256,26 @@ export class TestExecutor {
           detail = `Uncaught error: ${err instanceof Error ? err.message : String(err)}`;
           status = 'error';
         }
-        // Capture diagnostics on error
-        trace = {
-          consoleLogs: capture.getLogs(),
-          domSnapshot: captureDomSnapshot(),
-          errorStack: err instanceof Error ? err.stack : undefined,
-        };
       } finally {
+        clearInterval(flushInterval);
+        // Final flush of any remaining logs
+        const finalLogs = capture.getLogs();
+        if (finalLogs.length > lastFlushedCount) {
+          this.send({
+            type: 'test-log',
+            testId: test.id,
+            logs: finalLogs.slice(lastFlushedCount),
+          });
+        }
+
+        // Always include console logs in trace for diagnostics.
+        // DOM snapshot and error stack only on failure.
+        trace = {
+          consoleLogs: finalLogs,
+          ...(!pass ? { domSnapshot: captureDomSnapshot() } : {}),
+          ...(status === 'error' ? { errorStack: detail } : {}),
+        };
+
         capture.restore();
       }
 

@@ -31,9 +31,27 @@ function filterTree(nodes: FileNode[], ignorePatterns: string[]): FileNode[] {
     });
 }
 
+/**
+ * Forwards a mutation request to the workspace server via ALB.
+ * Called best-effort after the local (S3) write succeeds.
+ */
+export type WorkspaceForwarder = (
+  route: string,
+  method: string,
+  body?: Record<string, unknown>,
+  query?: Record<string, string>,
+) => Promise<void>;
+
 export interface FileRouterOptions {
   /** Returns the current explorerIgnore patterns for filtering file tree responses. */
   getExplorerIgnore?: () => string[];
+  /**
+   * When provided, mutation routes (write, delete, mkdir) forward the operation
+   * to the workspace server after the local (S3) write succeeds. Best-effort:
+   * if forwarding fails, the local write still succeeds and the workspace will
+   * pick up the change on the next S3 sync cycle.
+   */
+  workspaceForwarder?: WorkspaceForwarder;
 }
 
 export function createFileRouter(workspace: WorkspaceService, options?: FileRouterOptions): Router {
@@ -94,6 +112,10 @@ export function createFileRouter(workspace: WorkspaceService, options?: FileRout
         return res.status(400).json({ error: 'Path and content are required' });
       }
       await workspace.writeFile(path, content);
+      // Best-effort forward to workspace server so file watcher + workflow trigger
+      options?.workspaceForwarder?.('/write', 'POST', { path, content }).catch(err => {
+        console.warn('[file-router] Workspace forward failed for write:', err.message ?? err);
+      });
       res.json({ success: true, path });
     } catch (error) {
       res.status(500).json({
@@ -111,6 +133,9 @@ export function createFileRouter(workspace: WorkspaceService, options?: FileRout
         return res.status(400).json({ error: 'Path is required' });
       }
       await workspace.mkdir(path);
+      options?.workspaceForwarder?.('/mkdir', 'POST', { path }).catch(err => {
+        console.warn('[file-router] Workspace forward failed for mkdir:', err.message ?? err);
+      });
       res.json({ success: true, path });
     } catch (error) {
       res.status(500).json({
@@ -128,6 +153,9 @@ export function createFileRouter(workspace: WorkspaceService, options?: FileRout
         return res.status(400).json({ error: 'Path parameter is required' });
       }
       await workspace.deleteFile(path);
+      options?.workspaceForwarder?.('/delete', 'DELETE', undefined, { path }).catch(err => {
+        console.warn('[file-router] Workspace forward failed for delete:', err.message ?? err);
+      });
       res.json({ success: true, path });
     } catch (error) {
       res.status(500).json({
@@ -149,6 +177,64 @@ export function createFileRouter(workspace: WorkspaceService, options?: FileRout
     } catch (error) {
       res.status(500).json({
         error: 'Failed to check file existence',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Move/rename files or directories (supports batch)
+  router.post('/move', async (req, res) => {
+    try {
+      const { entries } = req.body;
+      if (!Array.isArray(entries) || entries.length === 0) {
+        return res.status(400).json({ error: 'entries array is required' });
+      }
+      let moved = 0;
+      const errors: string[] = [];
+      for (const { src, dest } of entries) {
+        try {
+          await workspace.move(src, dest);
+          moved++;
+        } catch (err) {
+          errors.push(`${src} → ${dest}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      options?.workspaceForwarder?.('/move', 'POST', { entries }).catch(err => {
+        console.warn('[file-router] Workspace forward failed for move:', err.message ?? err);
+      });
+      res.json({ moved, errors });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to move files',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Copy files or directories (supports batch)
+  router.post('/copy', async (req, res) => {
+    try {
+      const { entries } = req.body;
+      if (!Array.isArray(entries) || entries.length === 0) {
+        return res.status(400).json({ error: 'entries array is required' });
+      }
+      let copied = 0;
+      const errors: string[] = [];
+      for (const { src, dest } of entries) {
+        try {
+          await workspace.copy(src, dest);
+          copied++;
+        } catch (err) {
+          errors.push(`${src} → ${dest}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      options?.workspaceForwarder?.('/copy', 'POST', { entries }).catch(err => {
+        console.warn('[file-router] Workspace forward failed for copy:', err.message ?? err);
+      });
+      res.json({ copied, errors });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to copy files',
         message: error instanceof Error ? error.message : String(error),
       });
     }

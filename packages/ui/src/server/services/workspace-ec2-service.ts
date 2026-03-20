@@ -6,24 +6,17 @@
  *  - **Shared**: Multiple projects share a single EC2 instance. The workspace
  *    server initializes project contexts lazily when traffic arrives.
  *
- * In both modes:
- *  - Starts instances on demand (RunInstances or StartInstances for stopped)
- *  - Creates/attaches EBS data volumes for persistent storage
- *  - Creates per-project ALB target groups + path-based listener rules
- *  - Returns connection info to the frontend
- *  - Cleans up ALB resources + stops instances on shutdown
- *
- * Key differences from Fargate containers:
- *  - Stop (not terminate) — EBS volumes + root disk persist across stop/start
- *  - EBS data volume per project — persistent storage survives instance restart
- *  - Full workspace: Docker, git, cdk, all project APIs + terminal
- *  - ALB routes /workspace/{projectId}/* and /ws/terminal/{projectId}*
+ * ALB routing is static — a single catch-all target group forwards all
+ * /workspace/* and /ws/* traffic to the workspace server. This service
+ * only registers/deregisters instance IPs in the target group.
+ * The workspace server handles per-project routing internally.
  */
 
 import {
   EC2Client,
   RunInstancesCommand,
   StartInstancesCommand,
+  TerminateInstancesCommand,
   DescribeInstancesCommand,
   CreateVolumeCommand,
   AttachVolumeCommand,
@@ -37,11 +30,6 @@ import {
   RegisterTargetsCommand,
   DeregisterTargetsCommand,
   DescribeTargetHealthCommand,
-  CreateTargetGroupCommand,
-  DeleteTargetGroupCommand,
-  CreateRuleCommand,
-  DeleteRuleCommand,
-  DescribeRulesCommand,
 } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { randomUUID } from 'node:crypto';
 import type { EventLogger } from './event-logger.js';
@@ -66,8 +54,8 @@ export interface WorkspaceEc2ServiceConfig {
   instanceProfileArn: string;
   subnetIds: string[];
   securityGroupId: string;
-  listenerArn: string;
-  vpcId: string;
+  /** ARN of the static ALB target group for workspace traffic. */
+  targetGroupArn: string;
   albDns: string;
   projectsBucket: string;
   region?: string;
@@ -77,12 +65,6 @@ export interface WorkspaceEc2ServiceConfig {
    * initializes project contexts lazily when traffic arrives.
    */
   sharedMode?: boolean;
-}
-
-// Per-project ALB routing state
-interface RoutingState {
-  targetGroupArn: string;
-  ruleArn: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,10 +81,6 @@ export class WorkspaceEc2Service {
   // On cold start, recovered from instance tags.
   private static tokenCache = new Map<string, string>();
 
-  // In-memory cache of dynamic ALB resources by project ID.
-  // Lost on Lambda cold start — recovered via recoverRoutingState().
-  private static routingCache = new Map<string, RoutingState>();
-
   constructor(config: WorkspaceEc2ServiceConfig, eventLogger?: EventLogger) {
     this.config = config;
     this.ec2 = new EC2Client({ region: config.region });
@@ -115,7 +93,7 @@ export class WorkspaceEc2Service {
    *
    * In shared mode, tries to reuse any running managed instance first.
    * The workspace server will lazy-initialize the project context when
-   * traffic arrives via the ALB routing rules.
+   * traffic arrives via the ALB.
    */
   async startWorkspace(projectId: string): Promise<WorkspaceInstanceInfo> {
     // Check if an instance already exists for this project
@@ -145,10 +123,20 @@ export class WorkspaceEc2Service {
 
   /**
    * Get the status of a workspace instance for a project.
-   * When the instance reaches RUNNING and has an IP, creates ALB routing rules.
+   * When the instance is RUNNING, ensures its IP is registered in the ALB target group.
    */
   async getWorkspaceStatus(projectId: string): Promise<WorkspaceInstanceInfo | null> {
-    const instance = await this.findInstance(projectId);
+    let instance = await this.findInstance(projectId);
+
+    // In shared mode, no instance is tagged per-project. Fall back to finding
+    // any running managed server.
+    if (!instance && this.config.sharedMode) {
+      const shared = await this.findAnyRunningServer();
+      if (shared) {
+        instance = shared;
+      }
+    }
+
     if (!instance) return null;
 
     const instanceId = instance.InstanceId!;
@@ -172,19 +160,9 @@ export class WorkspaceEc2Service {
       }
     }
 
-    // If the instance is RUNNING and we have an IP, ensure ALB routing rules exist
-    // and the target group has the correct IP registered
+    // If the instance is RUNNING and we have an IP, ensure it's registered in the target group
     if (status === 'RUNNING' && privateIp) {
-      if (!WorkspaceEc2Service.routingCache.has(projectId)) {
-        await this.recoverRoutingState(projectId);
-      }
-      if (WorkspaceEc2Service.routingCache.has(projectId)) {
-        // Routing exists — verify the target IP matches the current instance
-        await this.ensureTargetIp(projectId, privateIp);
-      } else {
-        // No routing — create fresh rules
-        await this.createRoutingRules(projectId, privateIp);
-      }
+      await this.ensureTargetRegistered(privateIp);
     }
 
     return {
@@ -200,11 +178,11 @@ export class WorkspaceEc2Service {
   }
 
   /**
-   * Delete per-project ALB routing rules (listener rule + target group).
-   * Used during project deletion to clean up routing without affecting the shared instance.
+   * Clean up project-specific resources.
+   * With static ALB routing, there are no per-project ALB resources to clean up.
+   * Just clears the cached session token.
    */
   async deleteProjectRouting(projectId: string): Promise<void> {
-    await this.deleteRoutingRules(projectId);
     WorkspaceEc2Service.tokenCache.delete(projectId);
   }
 
@@ -350,9 +328,7 @@ export class WorkspaceEc2Service {
 
   /**
    * Reuse an existing running workspace server for a new project.
-   * Creates ALB routing rules pointing the new project's paths to the
-   * existing instance. The workspace server will lazy-initialize the
-   * project context when traffic arrives.
+   * The workspace server will lazy-initialize the project context when traffic arrives.
    */
   private async reuseRunningServer(projectId: string): Promise<WorkspaceInstanceInfo | null> {
     const server = await this.findAnyRunningServer();
@@ -368,13 +344,8 @@ export class WorkspaceEc2Service {
     }
     WorkspaceEc2Service.tokenCache.set(projectId, sessionToken);
 
-    // Create ALB routing rules so traffic for this project reaches the server
-    if (!WorkspaceEc2Service.routingCache.has(projectId)) {
-      await this.recoverRoutingState(projectId);
-    }
-    if (!WorkspaceEc2Service.routingCache.has(projectId)) {
-      await this.createRoutingRules(projectId, ip);
-    }
+    // Ensure the server's IP is in the target group
+    await this.ensureTargetRegistered(ip);
 
     console.log(`[workspace-ec2] Reusing instance ${instanceId} (${ip}) for project ${projectId} (shared mode)`);
     this.eventLogger?.info('workspace',
@@ -541,6 +512,7 @@ export class WorkspaceEc2Service {
     const eventBusName = process.env.EVENT_BUS_NAME ?? 'antimatter';
     const cognitoUserPoolId = process.env.COGNITO_USER_POOL_ID ?? '';
     const cognitoClientId = process.env.COGNITO_CLIENT_ID ?? '';
+    const targetGroupArn = this.config.targetGroupArn;
 
     return `#!/bin/bash
 set -x
@@ -585,6 +557,7 @@ AWS_DEFAULT_REGION=us-west-2
 EVENT_BUS_NAME=${eventBusName}
 COGNITO_USER_POOL_ID=${cognitoUserPoolId}
 COGNITO_CLIENT_ID=${cognitoClientId}
+WORKSPACE_TARGET_GROUP_ARN=${targetGroupArn}
 ENVEOF
 
 # ---- Mount EBS data volume ----
@@ -656,6 +629,52 @@ systemctl start workspace-server
 
 echo "[workspace] Boot script complete"
 `;
+  }
+
+  // ---- ALB target registration ----
+
+  /**
+   * Ensure the instance IP is registered in the static ALB target group.
+   * Also deregisters any stale IPs that no longer belong to a running instance.
+   */
+  private async ensureTargetRegistered(ip: string): Promise<void> {
+    try {
+      const health = await this.elbv2.send(new DescribeTargetHealthCommand({
+        TargetGroupArn: this.config.targetGroupArn,
+      }));
+
+      const registered = health.TargetHealthDescriptions ?? [];
+      const hasIp = registered.some(t => t.Target?.Id === ip);
+
+      if (hasIp) return; // Already registered
+
+      // Deregister any stale targets (old IPs from previous instance runs)
+      const staleTargets = registered
+        .filter(t => t.Target?.Id && t.Target.Id !== ip)
+        .map(t => ({ Id: t.Target!.Id!, Port: t.Target!.Port }));
+
+      if (staleTargets.length > 0) {
+        await this.elbv2.send(new DeregisterTargetsCommand({
+          TargetGroupArn: this.config.targetGroupArn,
+          Targets: staleTargets,
+        }));
+        console.log(`[workspace-ec2] Deregistered ${staleTargets.length} stale target(s) from ALB`);
+      }
+
+      // Register the current IP
+      await this.elbv2.send(new RegisterTargetsCommand({
+        TargetGroupArn: this.config.targetGroupArn,
+        Targets: [{ Id: ip, Port: 8080 }],
+      }));
+
+      console.log(`[workspace-ec2] Registered IP ${ip} in ALB target group`);
+      this.eventLogger?.info('workspace', `Registered IP ${ip} in ALB target group`);
+    } catch (err) {
+      console.error(`[workspace-ec2] Failed to register target IP ${ip}:`, err);
+      this.eventLogger?.error('workspace', `Failed to register target IP`, {
+        ip, error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // ---- Instance lookup ----
@@ -743,233 +762,6 @@ echo "[workspace] Boot script complete"
   private getTagValue(instance: Instance | null, key: string): string | undefined {
     if (!instance) return undefined;
     return instance.Tags?.find(t => t.Key === key)?.Value;
-  }
-
-  // ---- Dynamic ALB routing ----
-
-  /**
-   * Create a per-project target group + path-based listener rule.
-   * Routes /workspace/{projectId}/* and /ws/terminal/{projectId}*
-   * to this target group.
-   */
-  private async createRoutingRules(projectId: string, ip: string): Promise<void> {
-    // Target group name: max 32 chars, alphanumeric + hyphens
-    const tgName = `ws-${projectId.substring(0, 27)}`;
-
-    try {
-      // 1. Create target group
-      const createTgResult = await this.elbv2.send(new CreateTargetGroupCommand({
-        Name: tgName,
-        Protocol: 'HTTP',
-        Port: 8080,
-        VpcId: this.config.vpcId,
-        TargetType: 'ip',
-        HealthCheckPath: `/workspace/${projectId}/health`,
-        HealthCheckIntervalSeconds: 10,
-        HealthCheckTimeoutSeconds: 5,
-        HealthyThresholdCount: 2,
-        UnhealthyThresholdCount: 3,
-        Tags: [
-          { Key: 'antimatter:projectId', Value: projectId },
-          { Key: 'antimatter:managed', Value: 'true' },
-        ],
-      }));
-
-      const targetGroupArn = createTgResult.TargetGroups?.[0]?.TargetGroupArn;
-      if (!targetGroupArn) throw new Error('CreateTargetGroup returned no ARN');
-
-      // 2. Register instance IP
-      await this.elbv2.send(new RegisterTargetsCommand({
-        TargetGroupArn: targetGroupArn,
-        Targets: [{ Id: ip, Port: 8080 }],
-      }));
-
-      // 3. Create listener rule with path-based routing
-      const priority = await this.getNextRulePriority();
-      const createRuleResult = await this.elbv2.send(new CreateRuleCommand({
-        ListenerArn: this.config.listenerArn,
-        Priority: priority,
-        Conditions: [
-          {
-            Field: 'path-pattern',
-            PathPatternConfig: {
-              Values: [
-                `/workspace/${projectId}/*`,
-                `/ws/terminal/${projectId}*`,
-              ],
-            },
-          },
-        ],
-        Actions: [
-          {
-            Type: 'forward',
-            TargetGroupArn: targetGroupArn,
-          },
-        ],
-        Tags: [
-          { Key: 'antimatter:projectId', Value: projectId },
-          { Key: 'antimatter:managed', Value: 'true' },
-        ],
-      }));
-
-      const ruleArn = createRuleResult.Rules?.[0]?.RuleArn;
-      if (!ruleArn) throw new Error('CreateRule returned no ARN');
-
-      // Cache for cleanup
-      WorkspaceEc2Service.routingCache.set(projectId, {
-        targetGroupArn,
-        ruleArn,
-      });
-
-      console.log(`[workspace-ec2] Created ALB routing for ${projectId}: tg=${tgName}, rule priority=${priority}`);
-      this.eventLogger?.info('workspace', `Created ALB routing for ${projectId}`, { targetGroup: tgName, priority });
-    } catch (err) {
-      console.error(`[workspace-ec2] Failed to create ALB routing for ${projectId}:`, err);
-      this.eventLogger?.error('workspace', `Failed to create ALB routing`, {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    }
-  }
-
-  /**
-   * Ensure the target group for a project has the correct IP registered.
-   * After an instance stop/start, the private IP may change. This method
-   * detects stale registrations and updates to the current IP.
-   */
-  private async ensureTargetIp(projectId: string, expectedIp: string): Promise<void> {
-    const state = WorkspaceEc2Service.routingCache.get(projectId);
-    if (!state) return;
-
-    try {
-      const health = await this.elbv2.send(new DescribeTargetHealthCommand({
-        TargetGroupArn: state.targetGroupArn,
-      }));
-
-      const registeredTargets = health.TargetHealthDescriptions ?? [];
-      const hasCorrectIp = registeredTargets.some(t => t.Target?.Id === expectedIp);
-
-      if (!hasCorrectIp) {
-        console.log(`[workspace-ec2] Target IP mismatch for ${projectId} — updating to ${expectedIp}`);
-
-        // Deregister all stale targets
-        if (registeredTargets.length > 0) {
-          const staleTargets = registeredTargets
-            .filter(t => t.Target?.Id && t.Target.Id !== expectedIp)
-            .map(t => ({ Id: t.Target!.Id!, Port: t.Target!.Port }));
-
-          if (staleTargets.length > 0) {
-            await this.elbv2.send(new DeregisterTargetsCommand({
-              TargetGroupArn: state.targetGroupArn,
-              Targets: staleTargets,
-            }));
-            console.log(`[workspace-ec2] Deregistered ${staleTargets.length} stale target(s)`);
-          }
-        }
-
-        // Register the correct IP
-        await this.elbv2.send(new RegisterTargetsCommand({
-          TargetGroupArn: state.targetGroupArn,
-          Targets: [{ Id: expectedIp, Port: 8080 }],
-        }));
-
-        console.log(`[workspace-ec2] Registered correct IP ${expectedIp} for ${projectId}`);
-        this.eventLogger?.info('workspace', `Updated target IP for ${projectId} to ${expectedIp}`);
-      }
-    } catch (err) {
-      console.error(`[workspace-ec2] Failed to verify/update target IP for ${projectId}:`, err);
-      // If the target group is broken beyond repair, delete and recreate routing
-      try {
-        await this.deleteRoutingRules(projectId);
-        await this.createRoutingRules(projectId, expectedIp);
-      } catch (recreateErr) {
-        console.error(`[workspace-ec2] Failed to recreate routing for ${projectId}:`, recreateErr);
-      }
-    }
-  }
-
-  /**
-   * Delete per-project listener rule + target group.
-   */
-  private async deleteRoutingRules(projectId: string): Promise<void> {
-    // Ensure we have the routing state (may need recovery after cold start)
-    if (!WorkspaceEc2Service.routingCache.has(projectId)) {
-      await this.recoverRoutingState(projectId);
-    }
-
-    const state = WorkspaceEc2Service.routingCache.get(projectId);
-    if (!state) {
-      console.log(`[workspace-ec2] No routing state to clean up for ${projectId}`);
-      return;
-    }
-
-    // Delete rule first (must be removed before target group)
-    try {
-      await this.elbv2.send(new DeleteRuleCommand({ RuleArn: state.ruleArn }));
-      console.log(`[workspace-ec2] Deleted listener rule for ${projectId}`);
-    } catch (err) {
-      console.error(`[workspace-ec2] Failed to delete rule for ${projectId}:`, err);
-    }
-
-    // Delete target group
-    try {
-      await this.elbv2.send(new DeleteTargetGroupCommand({ TargetGroupArn: state.targetGroupArn }));
-      console.log(`[workspace-ec2] Deleted target group for ${projectId}`);
-    } catch (err) {
-      console.error(`[workspace-ec2] Failed to delete target group for ${projectId}:`, err);
-    }
-
-    WorkspaceEc2Service.routingCache.delete(projectId);
-  }
-
-  /**
-   * Recover routing state after Lambda cold start by scanning listener rules
-   * for the project's path pattern.
-   */
-  private async recoverRoutingState(projectId: string): Promise<void> {
-    if (WorkspaceEc2Service.routingCache.has(projectId)) return;
-
-    try {
-      const result = await this.elbv2.send(new DescribeRulesCommand({
-        ListenerArn: this.config.listenerArn,
-      }));
-
-      for (const rule of result.Rules ?? []) {
-        const pathCondition = rule.Conditions?.find(c => c.Field === 'path-pattern');
-        const matchesProject = pathCondition?.PathPatternConfig?.Values?.some(
-          v => v.includes(projectId),
-        );
-
-        if (matchesProject && rule.RuleArn) {
-          const tgArn = rule.Actions?.[0]?.TargetGroupArn;
-          if (tgArn) {
-            WorkspaceEc2Service.routingCache.set(projectId, {
-              targetGroupArn: tgArn,
-              ruleArn: rule.RuleArn,
-            });
-            console.log(`[workspace-ec2] Recovered routing state for ${projectId}`);
-            return;
-          }
-        }
-      }
-    } catch (err) {
-      console.error(`[workspace-ec2] Failed to recover routing state for ${projectId}:`, err);
-    }
-  }
-
-  /**
-   * Find the next available listener rule priority.
-   */
-  private async getNextRulePriority(): Promise<number> {
-    const result = await this.elbv2.send(new DescribeRulesCommand({
-      ListenerArn: this.config.listenerArn,
-    }));
-
-    const priorities = (result.Rules ?? [])
-      .map(r => parseInt(r.Priority ?? '0', 10))
-      .filter(p => !isNaN(p) && p > 0);
-
-    return priorities.length === 0 ? 1 : Math.max(...priorities) + 1;
   }
 
   // ---- Helpers ----

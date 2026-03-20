@@ -50,10 +50,11 @@ Antimatter is a self-hosting online IDE with AI agent integration, deployed on A
 
 ## 2. Monorepo Structure
 
-npm workspaces with 10 packages:
+npm workspaces with 12 packages:
 
 | Package | Path | Description |
 |---------|------|-------------|
+| `@antimatter/service-interface` | `packages/service-interface/` | Canonical type definitions for all platform operations. Commands, queries, events, and protocol types organized by service (Projects, Files, Builds, Tests, Workspaces, DeployedResources, Agents, Auth, ClientAutomation, Observability). Transport-agnostic ServiceClient with routing. |
 | `@antimatter/project-model` | `packages/project-model/` | Domain types: Project, Module, SourceFile, BuildRule, TestSuite, DeploymentResult. Immutable interfaces, all other packages reference this. |
 | `@antimatter/filesystem` | `packages/filesystem/` | FileSystem interface with MemoryFileSystem, LocalFileSystem, S3FileSystem. Path utilities, content hashing, change tracking. |
 | `@antimatter/tool-integration` | `packages/tool-integration/` | ToolRunner interface with SubprocessRunner and MockRunner. Parameter substitution, environment management. |
@@ -62,6 +63,7 @@ npm workspaces with 10 packages:
 | `@antimatter/workflow` | `packages/workflow/` | Workflow type definitions: rules, events, state, widget declarations, project errors. |
 | `@antimatter/workspace` | `packages/workspace/` | Workspace environment abstraction: LocalWorkspaceEnvironment, S3 sync utilities. |
 | `@antimatter/test-harness` | `packages/test-harness/` | Functional test utilities: ActionContext abstraction, FetchActionContext, ServiceActionContext, test fixtures. |
+| `@antimatter/mcp-server` | `packages/mcp-server/` | MCP server bridging Claude Code to Antimatter IDE automation API. |
 | `@antimatter/ui` | `packages/ui/` | React frontend (Vite + Tailwind + Monaco + xterm.js) and Express backend (Lambda handler + workspace server). |
 | `infrastructure` | `infrastructure/` | AWS CDK stacks: AntimatterStack (production), AntimatterEnvStack (per-environment). |
 
@@ -376,6 +378,8 @@ Tests are framework-agnostic `TestModule` objects in `packages/ui/src/shared/tes
 **Test modules** (organized by area):
 - `file-explorer-tests.ts` — FT-FILE-001 through FT-FILE-007
 - `editor-tests.ts` — FT-EDIT-001 through FT-EDIT-004
+- `cross-tab-tests.ts` — Cross-tab communication tests
+- `workspace-tests.ts` — FT-WS-001 (workspace file sync verification)
 - `index.ts` — barrel export of all test modules
 
 **Key types** (`packages/ui/src/shared/test-types.ts`):
@@ -399,7 +403,8 @@ All three implement the same interface: file, build, deploy, environment, agent,
 
 - **CLI**: `npm test` (Vitest discovers functional tests via `functional.spec.ts`)
 - **Lambda**: `POST /api/tests/run?suite=smoke|functional|workspace|all`
-- **Browser**: Tests tab in bottom panel (Run All, Run Failed, filter by area/status)
+- **Browser**: Tests tab in bottom panel (Run All, Run Failed, Run Single, filter by area/status)
+- **Automation API**: `tests.run` command via REST → browser relay
 - **Console**: `window.__runTests()` runs all functional tests via BrowserActionContext
 
 ### Test Results API
@@ -468,3 +473,71 @@ git pull origin main
 - Step 6 updates the workspace server's local files
 - Workflow engine auto-detects `.antimatter/*.ts` changes and recompiles
 - CloudFront cache may require manual invalidation for index.html
+
+---
+
+## 11. Target Architecture Model
+
+The system is moving toward a decomposition into **Resource Managers** and **Platform Services**, connected through a canonical **Service Interface**.
+
+### Resource Managers
+
+Each resource manager owns the lifecycle and state of a specific resource type:
+
+| Manager | Owns | Current Implementation |
+|---------|------|----------------------|
+| **Project** | Project lifecycle, metadata, templates | `routes/projects.ts`, `projectStore` |
+| **File** | File CRUD, tree, sync (serialized per-project) | `routes/filesystem.ts`, `fileStore`, S3FileSystem |
+| **Workflow** | Rule definitions, state, event dispatch, widget declarations | `workflow-manager.ts`, `applicationStore` |
+| **Test** | Test runs, results, runner registration | `routes/tests.ts`, `testResultStore`, cross-tab framework |
+| **Workspace** | EC2 lifecycle, WebSocket, terminal sessions, S3 sync | `workspace-ec2-service.ts`, `project-context.ts`, `workspace-connection.ts` |
+| **Deployed Resources** | Deployment state, environment management | `routes/deploy.ts`, `routes/environments.ts` |
+| **Observability** | Logs, metrics, traces, error store | `event-logger.ts`, `error-store.ts` |
+
+### Platform Services
+
+Cross-cutting capabilities that don't own a resource type:
+
+| Service | Responsibility | Current Implementation |
+|---------|---------------|----------------------|
+| **Auth & User** | Cognito integration, token management | `auth.ts` middleware, `auth.js` client lib |
+| **Agent Orchestration** | AI agent providers, tool system, conversation history | `@antimatter/agent-framework`, `routes/agent.ts` |
+| **Git Integration** | Status, stage, commit, push, pull, branch | `routes/git.ts`, `gitStore` |
+| **Cloud Resource Management** | AWS resource provisioning (CDK, EC2, S3) | `infrastructure/`, `workspace-ec2-service.ts` |
+| **Workflow Script Tooling** | esbuild compilation, type checking, auto-reload | `workflow-manager.ts` (bundled with Workflow manager) |
+
+### Service Interface
+
+All resource managers and platform services expose a canonical set of **commands**, **queries**, and **events** defined in a shared TypeScript schema package. Three transport adapters map to the same interface:
+
+| Adapter | Use Case | Current State |
+|---------|----------|--------------|
+| **REST** | Lambda API, external clients | Express routers per resource |
+| **WebSocket** | Real-time updates, terminal I/O, browser commands | Workspace server protocol |
+| **Tool-use** | AI agent actions | `@antimatter/agent-framework` tool definitions |
+
+### Deployment Model
+
+**Quasi-monolithic:** Services are bundled into two processes (Lambda + workspace server), calling each other directly via TypeScript interfaces — not external APIs. This avoids distributed system complexity while maintaining clean module boundaries. The service interface schema enables future decomposition if needed.
+
+### Browser Test Framework
+
+The browser functional test framework uses a cross-tab architecture:
+
+```
+Orchestrator (original tab)           Executor (test tab)
+  │                                      │
+  ├── Creates disposable project         │
+  ├── Opens test tab ──────────────────► Tab loads with testMode=true
+  │                                      │
+  │   ◄── BroadcastChannel ──────────── Signals "ready"
+  │                                      │
+  ├── Sends "run-tests" ──────────────► Runs tests via BrowserActionContext
+  │                                      │  (DOM interactions: click, type, etc.)
+  │   ◄── "test-result" per test ────── Reports individual results
+  │   ◄── "run-complete" ───────────── Reports summary
+  │                                      │
+  └── Stores results, cleans up          └── Tab stays open or closes
+```
+
+Key files: `test-orchestrator.ts`, `test-executor.ts`, `cross-tab-protocol.ts`, `BrowserActionContext`

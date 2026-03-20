@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@antimatter/agent-framework": "*",
+    "@antimatter/service-interface": "*",
     "@antimatter/build-system": "*",
     "@antimatter/filesystem": "*",
     "@antimatter/project-model": "*",

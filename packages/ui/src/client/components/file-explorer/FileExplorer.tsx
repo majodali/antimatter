@@ -37,6 +37,7 @@ export function FileExplorer() {
   const openFile = useEditorStore((s) => s.openFile);
   const closeFile = useEditorStore((s) => s.closeFile);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const workspaceReady = useProjectStore((s) => s.workspaceReady);
   const errorCounts = useApplicationStore((s) => s.getErrorCountsByFile());
 
   const [isLoading, setIsLoading] = useState(false);
@@ -47,10 +48,14 @@ export function FileExplorer() {
   const isSubmittingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Load files on mount and when project changes
+  // Load files once the workspace WebSocket is connected and routing is active.
+  // This prevents the initial tree load from hitting Lambda/S3 before the
+  // workspace server is reachable.
   useEffect(() => {
-    loadFiles();
-  }, [currentProjectId]);
+    if (workspaceReady && currentProjectId) {
+      loadFiles();
+    }
+  }, [workspaceReady, currentProjectId]);
 
   useEffect(() => {
     if (creatingType && inputRef.current) {
@@ -453,7 +458,11 @@ export function FileExplorer() {
             </div>
           )}
 
-          {isLoading ? (
+          {!workspaceReady && currentProjectId ? (
+            <div className="px-4 py-2 text-xs text-muted-foreground" data-testid="file-explorer-connecting">
+              Connecting to workspace...
+            </div>
+          ) : isLoading ? (
             <div className="px-4 py-2 text-xs text-muted-foreground" data-testid="file-explorer-loading">
               Loading files...
             </div>

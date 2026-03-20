@@ -23,11 +23,15 @@ interface ProjectStore {
   error: string | null;
   importProgress: ImportProgress | null;
 
+  /** True once the workspace WebSocket is connected and API routing is active. */
+  workspaceReady: boolean;
+
   loadProjects: () => Promise<void>;
   create: (name: string) => Promise<ProjectMeta>;
   remove: (id: string) => Promise<void>;
   selectProject: (id: string) => void;
   clearProject: () => void;
+  setWorkspaceReady: (ready: boolean) => void;
   importFromGit: (url: string, name?: string) => Promise<ProjectMeta>;
   importFromFiles: (files: FileList, projectName: string) => Promise<ProjectMeta>;
 }
@@ -68,6 +72,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   isLoading: false,
   error: null,
   importProgress: null,
+  workspaceReady: false,
 
   loadProjects: async () => {
     set({ isLoading: true, error: null });
@@ -112,15 +117,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       return;
     }
     sessionStorage.setItem(STORAGE_KEY, id);
-    set({ currentProjectId: id, error: null });
+    // Reset workspaceReady — it will be set to true once the workspace
+    // WebSocket connects for the new project.
+    set({ currentProjectId: id, error: null, workspaceReady: false });
   },
 
   clearProject: () => {
     const { currentProjectId } = get();
     if (currentProjectId) releaseLock(currentProjectId);
     sessionStorage.removeItem(STORAGE_KEY);
-    set({ currentProjectId: null });
+    set({ currentProjectId: null, workspaceReady: false });
   },
+
+  setWorkspaceReady: (ready: boolean) => set({ workspaceReady: ready }),
 
   importFromGit: async (url: string, name?: string) => {
     set({ importProgress: { current: 0, total: 0, status: 'Cloning repository...' } });

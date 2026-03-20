@@ -22,6 +22,7 @@ import {
   type CrossTabRunOptions,
 } from '../../shared/cross-tab-protocol.js';
 import type { TestRunSummary } from '../../shared/test-types.js';
+import { allTestModules } from '../../shared/test-modules/index.js';
 import { useTestResultStore } from '../stores/testResultStore.js';
 import { createProject, deleteProject } from './api.js';
 
@@ -89,6 +90,7 @@ export class TestOrchestrator {
   private channel: BroadcastChannel;
   private testTabWindow: Window | null = null;
   private testProjectId: string | null = null;
+  private isExternalProject = false; // true when using a pre-existing project (not disposable)
   private keepTabOpen = false;
 
   // Promise resolvers for async coordination
@@ -120,15 +122,29 @@ export class TestOrchestrator {
     store.setTestTabStatus('creating');
 
     try {
-      // 1. Create disposable test project
-      const projectName = `__test_${Date.now()}`;
-      const project = await createProject(projectName);
-      this.testProjectId = project.id;
-      store.setTestProjectId(project.id);
+      // 1. Use provided project ID, run setup() from test modules, or create a disposable project
+      if (options?.projectId) {
+        // Caller already ran setup or knows which project to use
+        this.testProjectId = options.projectId;
+        this.isExternalProject = true;
+      } else {
+        // Check if any target test module has a setup() that provides a projectId
+        const setupProjectId = await this.runTestSetup(options?.testIds);
+        if (setupProjectId) {
+          this.testProjectId = setupProjectId;
+          this.isExternalProject = true;
+        } else {
+          const projectName = `__test_${Date.now()}`;
+          const project = await createProject(projectName);
+          this.testProjectId = project.id;
+          this.isExternalProject = false;
+        }
+      }
+      store.setTestProjectId(this.testProjectId);
 
       // 2. Open test tab (persistent tab with modal fallback)
       store.setTestTabStatus('loading');
-      const url = `/?project=${encodeURIComponent(project.id)}&testMode=true`;
+      const url = `/?project=${encodeURIComponent(this.testProjectId!)}&testMode=true`;
       this.keepTabOpen = options?.keepTabOpen ?? false;
 
       await this.openOrReuseTab(url);
@@ -142,7 +158,10 @@ export class TestOrchestrator {
       this.send({ type: 'run-tests', testIds: options?.testIds, options });
 
       // 5. Wait for completion (results arrive incrementally via messages)
-      const summary = await this.waitForCompletion(300_000); // 5 min timeout
+      // Timeout must exceed the longest individual test timeout (e.g. M1 rule wait = 5 min)
+      // plus overhead for file creation, workspace verification, S3 sync, etc.
+      const completionTimeoutMs = options?.timeoutMs ?? 600_000; // 10 min default
+      const summary = await this.waitForCompletion(completionTimeoutMs);
 
       return summary;
     } catch (err) {
@@ -214,6 +233,10 @@ export class TestOrchestrator {
       case 'run-complete':
         useTestResultStore.getState().addRun(msg.summary);
         this.completionResolve?.(msg.summary);
+        break;
+
+      case 'test-log':
+        useTestResultStore.getState().appendLogs(msg.testId, msg.logs);
         break;
 
       case 'error':
@@ -295,8 +318,9 @@ export class TestOrchestrator {
       return;
     }
 
-    // Delete the disposable test project (best-effort)
-    if (this.testProjectId) {
+    // Delete the disposable test project (best-effort).
+    // External projects (provided via options.projectId) are NOT deleted.
+    if (this.testProjectId && !this.isExternalProject) {
       try {
         await deleteProject(this.testProjectId);
       } catch {
@@ -310,6 +334,32 @@ export class TestOrchestrator {
     this.readyReject = null;
     this.completionResolve = null;
     this.completionReject = null;
+  }
+
+  // ---- Test setup ----
+
+  /**
+   * Run setup() for the first matching test module that has one.
+   * This allows test modules to specify which project the test tab should open.
+   * Returns the projectId if a setup function provided one, otherwise null.
+   */
+  private async runTestSetup(testIds?: string[]): Promise<string | null> {
+    // Only run setup for specifically targeted tests.
+    // "Run All" creates a disposable project — tests with setup() should be
+    // run individually or by area so the correct project is used.
+    if (!testIds?.length) return null;
+
+    for (const test of allTestModules) {
+      if (testIds.includes(test.id) && test.setup) {
+        console.log(`[test-orchestrator] Running setup() for ${test.id}...`);
+        const result = await test.setup();
+        if (result.projectId) {
+          console.log(`[test-orchestrator] setup() returned projectId: ${result.projectId}`);
+          return result.projectId;
+        }
+      }
+    }
+    return null;
   }
 
   /**

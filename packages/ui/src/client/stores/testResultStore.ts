@@ -43,6 +43,10 @@ interface TestResultState {
   testTabStatus: TestTabStatus;
   /** Whether the "popup blocked" modal is visible. */
   showTestTabModal: boolean;
+  /** Last error from a test run (for diagnosing silent failures). */
+  lastError: string | null;
+  /** Incremental logs streamed from the test tab during execution (testId → lines). */
+  liveLogs: Record<string, string[]>;
 
   // Actions — mutators
   setResults: (results: StoredTestResult[]) => void;
@@ -58,6 +62,8 @@ interface TestResultState {
   setTestProjectId: (id: string | null) => void;
   setTestTabStatus: (status: TestTabStatus) => void;
   setShowTestTabModal: (show: boolean) => void;
+  setLastError: (error: string | null) => void;
+  appendLogs: (testId: string, logs: string[]) => void;
 
   // Selectors
   getFilteredResults: () => StoredTestResult[];
@@ -77,6 +83,8 @@ export const useTestResultStore = create<TestResultState>()((set, get) => ({
   testProjectId: null,
   testTabStatus: 'idle',
   showTestTabModal: false,
+  lastError: null,
+  liveLogs: {},
 
   // ---- Actions ----
 
@@ -131,12 +139,21 @@ export const useTestResultStore = create<TestResultState>()((set, get) => ({
 
   collapseAll: () => set({ expandedAreas: new Set() }),
 
-  clearResults: () => set({ results: [], runs: [], currentTestId: null }),
+  clearResults: () => set({ results: [], runs: [], currentTestId: null, liveLogs: {} }),
 
   setTestProjectId: (id) => set({ testProjectId: id }),
 
   setTestTabStatus: (status) => set({ testTabStatus: status }),
   setShowTestTabModal: (show) => set({ showTestTabModal: show }),
+  setLastError: (error) => set({ lastError: error }),
+
+  appendLogs: (testId, logs) =>
+    set((state) => ({
+      liveLogs: {
+        ...state.liveLogs,
+        [testId]: [...(state.liveLogs[testId] ?? []), ...logs],
+      },
+    })),
 
   // ---- Selectors ----
 

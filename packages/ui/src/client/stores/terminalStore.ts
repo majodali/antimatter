@@ -18,6 +18,7 @@ import { useBuildStore } from './buildStore';
 import { useFileStore } from './fileStore';
 import { useEditorStore } from './editorStore';
 import { useApplicationStore } from './applicationStore';
+import { useProjectStore } from './projectStore';
 
 // ---------------------------------------------------------------------------
 // Automation handler — injected by App.tsx when a project loads
@@ -224,6 +225,11 @@ function registerMessageSubscriptions(
       if (term && term.cols && term.rows) {
         workspaceConnection.send({ type: 'resize', cols: term.cols, rows: term.rows });
       }
+
+      // Signal that workspace routing is active.
+      // FileExplorer gates its initial load on this flag so the tree is
+      // fetched from the workspace server, not Lambda/S3.
+      useProjectStore.getState().setWorkspaceReady(true);
     } else if (wsState === 'PENDING' && current.connectionState === 'connected') {
       // Transition from connected → reconnecting
       set({
@@ -252,6 +258,7 @@ function registerMessageSubscriptions(
         statusMessage: null,
         showReconnectOverlay: false,
       });
+      useProjectStore.getState().setWorkspaceReady(false);
     }
   });
 }

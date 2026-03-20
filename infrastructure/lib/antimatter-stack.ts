@@ -265,16 +265,30 @@ export class AntimatterStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    // HTTP listener — default action is 404.
-    // Per-project target groups and path-based routing rules are created
-    // dynamically by workspace-ec2-service when instances start.
+    // Static target group for all workspace traffic.
+    // The workspace server handles per-project routing internally.
+    // Lambda registers/deregisters instance IPs when workspaces start/stop.
+    const workspaceTargetGroup = new elbv2.ApplicationTargetGroup(this, 'WorkspaceTargetGroup', {
+      targetGroupName: 'ws-default',
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      port: 8080,
+      vpc: this.vpc,
+      targetType: elbv2.TargetType.IP,
+      healthCheck: {
+        path: '/health',
+        interval: cdk.Duration.seconds(10),
+        timeout: cdk.Duration.seconds(5),
+        healthyThresholdCount: 2,
+        unhealthyThresholdCount: 3,
+      },
+    });
+
+    // HTTP listener — forwards all traffic to the static target group.
+    // If no targets are registered (no workspace running), ALB returns 503.
     const workspaceListener = workspaceAlb.addListener('WorkspaceListener', {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
-      defaultAction: elbv2.ListenerAction.fixedResponse(404, {
-        contentType: 'text/plain',
-        messageBody: 'No workspace instance for this path',
-      }),
+      defaultAction: elbv2.ListenerAction.forward([workspaceTargetGroup]),
     });
 
     // Allow ALB to reach workspace instances on port 8080
@@ -352,23 +366,17 @@ export class AntimatterStack extends cdk.Stack {
       resources: [workspaceRole.roleArn],
     }));
 
-    // Allow API Lambda to manage dynamic ALB target groups and listener rules.
-    // Resources are '*' because target groups and rules are created at runtime
-    // with unpredictable ARNs.
+    // Allow API Lambda to register/deregister targets in the static target group.
     apiFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: [
-        'elasticloadbalancing:CreateTargetGroup',
-        'elasticloadbalancing:DeleteTargetGroup',
         'elasticloadbalancing:RegisterTargets',
         'elasticloadbalancing:DeregisterTargets',
-        'elasticloadbalancing:DescribeTargetGroups',
-        'elasticloadbalancing:DescribeTargetHealth',
-        'elasticloadbalancing:ModifyTargetGroupAttributes',
-        'elasticloadbalancing:CreateRule',
-        'elasticloadbalancing:DeleteRule',
-        'elasticloadbalancing:DescribeRules',
-        'elasticloadbalancing:AddTags',
       ],
+      resources: [workspaceTargetGroup.targetGroupArn],
+    }));
+    // DescribeTargetHealth requires resource: * (does not support resource-level ARN).
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['elasticloadbalancing:DescribeTargetHealth'],
       resources: ['*'],
     }));
 
@@ -382,8 +390,7 @@ export class AntimatterStack extends cdk.Stack {
     apiFunction.addEnvironment('WORKSPACE_INSTANCE_PROFILE_ARN', instanceProfile.instanceProfileArn);
     apiFunction.addEnvironment('WORKSPACE_SUBNET_IDS', this.vpc.privateSubnets.map(s => s.subnetId).join(','));
     apiFunction.addEnvironment('WORKSPACE_SG_ID', workspaceSg.securityGroupId);
-    apiFunction.addEnvironment('ALB_LISTENER_ARN', workspaceListener.listenerArn);
-    apiFunction.addEnvironment('VPC_ID', this.vpc.vpcId);
+    apiFunction.addEnvironment('WORKSPACE_TARGET_GROUP_ARN', workspaceTargetGroup.targetGroupArn);
     apiFunction.addEnvironment('WORKSPACE_ALB_DNS', workspaceAlb.loadBalancerDnsName);
     apiFunction.addEnvironment('WORKSPACE_SHARED_MODE', 'true');
 

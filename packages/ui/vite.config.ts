@@ -10,6 +10,8 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src/client'),
       '@shared': path.resolve(__dirname, './src/shared'),
     },
+    // Resolve @antimatter/* workspace packages to TypeScript source
+    conditions: ['@antimatter/source'],
   },
   server: {
     port: 3000,

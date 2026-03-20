@@ -27,7 +27,8 @@ export type FeatureArea =
   | 'workspace'
   | 'logging'
   | 'cross-tab'
-  | 'test-infra';
+  | 'test-infra'
+  | 'm1';
 
 /**
  * A single functional test.
@@ -40,6 +41,13 @@ export interface TestModule {
   readonly name: string;
   /** Feature area for grouping */
   readonly area: FeatureArea;
+  /**
+   * Optional setup that runs in the orchestrator context (main IDE tab)
+   * BEFORE the test tab is opened. Use this to create/find a specific project
+   * and start its workspace. If provided, the returned projectId is used
+   * to open the test tab with that project (instead of a disposable one).
+   */
+  readonly setup?: () => Promise<{ projectId: string }>;
   /** The test body. Returns pass/fail + detail string. */
   readonly run: (ctx: ActionContext) => Promise<TestModuleResult>;
 }

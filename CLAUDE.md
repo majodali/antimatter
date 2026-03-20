@@ -28,6 +28,7 @@ For full details see `docs/architecture.md`.
 
 | Package | Purpose |
 |---------|---------|
+| `@antimatter/service-interface` | Canonical service types: commands, queries, events, protocol, routing (organized by service) |
 | `@antimatter/project-model` | Domain types (Project, Module, SourceFile, BuildRule, etc.) |
 | `@antimatter/filesystem` | FileSystem interface: MemoryFileSystem, LocalFileSystem, S3FileSystem |
 | `@antimatter/tool-integration` | ToolRunner interface: SubprocessRunner, MockRunner |
@@ -36,6 +37,7 @@ For full details see `docs/architecture.md`.
 | `@antimatter/workflow` | Workflow types: rules, events, state, widgets, errors |
 | `@antimatter/workspace` | Workspace environment abstraction, S3 sync |
 | `@antimatter/test-harness` | ActionContext abstraction, FetchActionContext, ServiceActionContext |
+| `@antimatter/mcp-server` | MCP server bridging Claude Code to Antimatter IDE automation API |
 | `@antimatter/ui` | React frontend + Express backend (Lambda + workspace server) |
 | `infrastructure` | AWS CDK stacks |
 
