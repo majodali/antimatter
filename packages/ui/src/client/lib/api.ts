@@ -146,12 +146,7 @@ function activityBase(projectId?: string): string {
   return projectId ? `/api/projects/${projectId}/activity` : '/api/activity';
 }
 
-function eventsBase(projectId?: string): string {
-  if (projectId && _hasActiveWorkspace(projectId)) {
-    return `/workspace/${projectId}/api/events`;
-  }
-  return projectId ? `/api/projects/${projectId}/events` : '/api/events';
-}
+// eventsBase removed — observability.events.list wired through ServiceClient.
 
 function workflowBase(projectId?: string): string {
   const pid = projectId ?? _getActiveWorkspace();
@@ -285,9 +280,12 @@ export async function copyFiles(
 // ---------------------------------------------------------------------------
 
 export async function clearChatHistory(projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${agentBase(projectId)}/history`, {
-    method: 'DELETE',
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'agents.chats.delete', projectId: pid } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'clearChatHistory');
 }
 
 export interface ChatStreamEvent {
@@ -313,11 +311,12 @@ export interface ChatStreamEvent {
  * @returns immediately once the server accepts the message
  */
 export async function sendChatMessage(message: string, projectId?: string): Promise<void> {
-  await apiFetch<{ accepted: boolean } | { response: string }>(`${agentBase(projectId)}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'agents.chats.send', projectId: pid, message } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'sendChatMessage');
 }
 
 // ---------------------------------------------------------------------------
@@ -328,8 +327,12 @@ export async function sendChatMessage(message: string, projectId?: string): Prom
 // progress delivered via WebSocket application-state broadcasts.
 
 export async function fetchBuildResults(projectId?: string): Promise<BuildResult[]> {
-  const { results } = await apiFetch<{ results: BuildResult[] }>(`${buildBase(projectId)}/results`);
-  return results;
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'builds.results.list', projectId: pid } as any,
+    pid || undefined,
+  );
+  return unwrapOrThrow(res, 'fetchBuildResults').results as BuildResult[];
 }
 
 export interface BuildConfig {
@@ -337,15 +340,21 @@ export interface BuildConfig {
 }
 
 export async function fetchBuildConfig(projectId?: string): Promise<BuildConfig> {
-  return apiFetch<BuildConfig>(`${buildBase(projectId)}/config`);
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'builds.configurations.list', projectId: pid } as any,
+    pid || undefined,
+  );
+  return unwrapOrThrow(res, 'fetchBuildConfig') as BuildConfig;
 }
 
 export async function saveBuildConfig(config: BuildConfig, projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${buildBase(projectId)}/config`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(config),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'builds.configurations.set', projectId: pid, ...config } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'saveBuildConfig');
 }
 
 export async function clearBuildCache(ruleId?: string, projectId?: string): Promise<void> {
@@ -537,10 +546,12 @@ export async function fetchSystemEvents(
   days = 1,
   limit = 200,
 ): Promise<SystemEvent[]> {
-  const { events } = await apiFetch<{ events: SystemEvent[] }>(
-    `${eventsBase(projectId)}?days=${days}&limit=${limit}`,
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'observability.events.list', projectId: pid, days, limit } as any,
+    pid || undefined,
   );
-  return events;
+  return unwrapOrThrow(res, 'fetchSystemEvents').events as SystemEvent[];
 }
 
 // ---------------------------------------------------------------------------

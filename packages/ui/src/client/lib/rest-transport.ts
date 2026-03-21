@@ -102,10 +102,14 @@ function resolvePlatformUrl(
     case 'auth.currentUser':  return '/api/auth/me';
 
     // Observability
-    case 'observability.events.list':
-      return projectId
+    case 'observability.events.list': {
+      const base = projectId
         ? `/api/projects/${projectId}/events`
         : '/api/events';
+      const days = op.days ?? 1;
+      const limit = op.limit ?? 200;
+      return `${base}?days=${days}&limit=${limit}`;
+    }
 
     default:
       // Generic fallback: /api/{namespace}
@@ -211,9 +215,39 @@ function resolveServiceUrl(
       }
     }
 
+    case 'deploy': {
+      const sub = type.slice('deploy.'.length);
+      switch (sub) {
+        case 'config.get':     return `${base}/deploy/config`;
+        case 'config.set':     return `${base}/deploy/config`;
+        case 'results.list':   return `${base}/deploy/results`;
+        default:               return `${base}/deploy/${sub}`;
+      }
+    }
+
     case 'deployedResources': {
       const sub = type.slice('deployedResources.'.length);
       return `${base}/deploy/${sub}`;
+    }
+
+    case 'workflow': {
+      const sub = type.slice('workflow.'.length);
+      switch (sub) {
+        case 'emit':           return `${base}/workflow/emit`;
+        case 'runRule':        return `${base}/workflow/run-rule/${enc(op.ruleId)}`;
+        case 'state':          return `${base}/workflow/application-state`;
+        case 'declarations':   return `${base}/workflow/declarations`;
+        default:               return `${base}/workflow/${sub}`;
+      }
+    }
+
+    case 'activity': {
+      const sub = type.slice('activity.'.length);
+      switch (sub) {
+        case 'list':           return `${base}/activity`;
+        case 'save':           return `${base}/activity`;
+        default:               return `${base}/activity/${sub}`;
+      }
     }
 
     case 'clients': {

@@ -243,7 +243,14 @@ export class TestExecutor {
       }, 5000);
 
       try {
-        const result = await test.run(ctx);
+        // Per-test timeout prevents any single test from blocking the entire suite.
+        const PER_TEST_TIMEOUT_MS = 60_000; // 60 seconds max per test
+        const result = await Promise.race([
+          test.run(ctx),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Test timed out after ${PER_TEST_TIMEOUT_MS / 1000}s`)), PER_TEST_TIMEOUT_MS),
+          ),
+        ]);
         pass = result.pass;
         detail = result.detail;
       } catch (err) {
