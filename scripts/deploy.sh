@@ -99,10 +99,16 @@ if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
 else
   log "Restarting workspace server on $INSTANCE_ID..."
 
+  # Steps:
+  # 1. Ensure config.env has the correct bucket name (fixes stale config from old stacks)
+  # 2. Download the bundle directly from S3 (don't rely on systemd ExecStartPre which
+  #    may have a stale bucket reference)
+  # 3. Restart the workspace server via systemctl
+  # 4. Verify the new bundle is loaded and healthy
   CMD_ID=$(MSYS_NO_PATHCONV=1 aws ssm send-command \
     --instance-ids "$INSTANCE_ID" \
     --document-name "AWS-RunShellScript" \
-    --parameters '{"commands":["aws s3 cp s3://'"$BUCKET"'/workspace-server/workspace-server.js /opt/antimatter/workspace-server.js","pkill -f node.*workspace-server || true","sleep 2","cd /opt/antimatter && nohup /usr/bin/node workspace-server.js > /var/log/workspace-server.log 2>&1 &","sleep 3","curl -sf http://localhost:8080/health && echo Health_check_OK || echo WARNING_health_check_failed"]}' \
+    --parameters '{"commands":["sed -i \"s|PROJECTS_BUCKET=.*|PROJECTS_BUCKET='"$BUCKET"'|\" /opt/antimatter/config.env","aws s3 cp s3://'"$BUCKET"'/workspace-server/workspace-server.js /opt/antimatter/workspace-server.js","systemctl restart workspace-server","sleep 5","systemctl is-active workspace-server && echo Service_active || echo WARNING_service_not_active","ls -la /opt/antimatter/workspace-server.js","curl -sf http://localhost:8080/health && echo Health_check_OK || echo WARNING_health_check_failed"]}' \
     --query 'Command.CommandId' \
     --output text 2>/dev/null)
 
