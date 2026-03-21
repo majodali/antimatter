@@ -214,6 +214,38 @@ export class AutomationHandler {
       setTimeout(() => window.location.reload(), 100);
       return { refreshing: true };
     });
+
+    this.handlers.set('client.navigate', async (params) => {
+      const url = params.url as string | undefined;
+      const projectId = params.projectId as string | undefined;
+
+      if (url) {
+        // Navigate to an arbitrary URL (same-origin only)
+        setTimeout(() => { window.location.href = url; }, 100);
+        return { navigating: true, url };
+      }
+
+      if (projectId) {
+        // Navigate to a specific project's IDE view
+        setTimeout(() => { window.location.href = `/?project=${encodeURIComponent(projectId)}`; }, 100);
+        return { navigating: true, projectId };
+      }
+
+      return { error: 'Provide either url or projectId parameter' };
+    });
+
+    this.handlers.set('client.state', async () => {
+      // Return current client state for diagnostics
+      const { useProjectStore } = await import('../stores/projectStore.js');
+      const state = useProjectStore.getState();
+      return {
+        currentProjectId: state.currentProjectId,
+        workspaceReady: state.workspaceReady,
+        url: window.location.href,
+        pathname: window.location.pathname,
+        search: window.location.search,
+      };
+    });
   }
 }
 
