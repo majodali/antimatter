@@ -629,7 +629,7 @@ async function waitForRuleRerun(
       const current = snapshot.ruleResults[id]?.lastRunAt;
       const before = beforeTimestamps[id];
       const reran = current && current !== before;
-      return `${id}:${reran ? 'reran' : 'waiting'}`;
+      return `${id}:${reran ? snapshot.ruleResults[id]?.status : 'waiting'}(cur=${current?.slice(11,19) ?? 'null'},before=${before?.slice(11,19) ?? 'null'})`;
     });
     console.log(`[M1] waitForRuleRerun: [${status.join(', ')}] elapsed=${elapsed}s`);
 

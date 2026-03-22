@@ -40,7 +40,15 @@ function ProjectGate() {
     const projectParam = params.get('project');
     const testMode = params.get('testMode') === 'true';
 
-    if (projectParam && projectParam !== currentProjectId) {
+    if (testMode) {
+      setIsTestMode(true);
+      // Test tabs bypass project locking — they're ephemeral and shouldn't
+      // conflict with the main IDE tab or other test tabs.
+      if (projectParam) {
+        sessionStorage.setItem('antimatter-project', projectParam);
+        useProjectStore.setState({ currentProjectId: projectParam, error: null, workspaceReady: false });
+      }
+    } else if (projectParam && projectParam !== currentProjectId) {
       selectProject(projectParam);
     } else if (currentProjectId) {
       // Project loaded from localStorage — acquire lock or clear if taken
@@ -49,9 +57,6 @@ function ProjectGate() {
       } else {
         acquireLock(currentProjectId);
       }
-    }
-    if (testMode) {
-      setIsTestMode(true);
     }
   }, []);
 
