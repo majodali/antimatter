@@ -267,7 +267,8 @@ export default (wf: any) => {
   );
 
   wf.rule('Build TypeScript',
-    (e: any) => e.type === 'install:success',
+    (e: any) => e.type === 'install:success' ||
+      (e.type === 'file:change' && String(e.path).endsWith('.ts') && !String(e.path).startsWith('.antimatter/')),
     async (_events: any[], state: any) => {
       wf.log('Compiling TypeScript...');
       const result = await wf.exec('npm run build');
@@ -569,6 +570,57 @@ async function waitForRuleResults(
   );
 }
 
+/**
+ * Wait for specific rules to re-run (detected by lastRunAt timestamp changing).
+ * Used by FT-M1-002+ which modify files in an already-built project.
+ * Returns the updated rule results, or throws on timeout.
+ */
+async function waitForRuleRerun(
+  projectId: string,
+  ruleIds: string[],
+  beforeTimestamps: Record<string, string | undefined>,
+  timeoutMs: number,
+): Promise<Record<string, RuleResult>> {
+  const start = Date.now();
+  let lastLogCount = 0;
+
+  while (Date.now() - start < timeoutMs) {
+    const snapshot = await getWorkflowSnapshot(projectId);
+
+    // Capture new workflow log entries
+    if (snapshot.logs.length > lastLogCount) {
+      for (const entry of snapshot.logs.slice(lastLogCount)) {
+        console.log(`[workflow:${entry.level}] ${entry.message}`);
+      }
+      lastLogCount = snapshot.logs.length;
+    }
+
+    // Check if all target rules have a NEWER timestamp than before
+    const allRerun = ruleIds.every(id => {
+      const current = snapshot.ruleResults[id]?.lastRunAt;
+      const before = beforeTimestamps[id];
+      return current && current !== before;
+    });
+
+    if (allRerun) return snapshot.ruleResults;
+
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    const status = ruleIds.map(id => {
+      const current = snapshot.ruleResults[id]?.lastRunAt;
+      const before = beforeTimestamps[id];
+      const reran = current && current !== before;
+      return `${id}:${reran ? 'reran' : 'waiting'}`;
+    });
+    console.log(`[M1] waitForRuleRerun: [${status.join(', ')}] elapsed=${elapsed}s`);
+
+    await new Promise(r => setTimeout(r, 3000));
+  }
+
+  throw new Error(
+    `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for rules to re-run: [${ruleIds.join(', ')}]`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // FT-M1-001: Create and verify json-validator project
 // ---------------------------------------------------------------------------
@@ -649,6 +701,9 @@ const setupAndVerifyProject: TestModule = {
         console.log(`[FT-M1-001] All files created via DOM`);
       } else {
         console.log(`[FT-M1-001] Project already has files — skipping creation`);
+        // Always ensure .antimatter/build.ts is up to date (workflow rules may have changed)
+        console.log(`[FT-M1-001] Updating .antimatter/build.ts to ensure workflow rules are current...`);
+        await ctx.editFileContent('.antimatter/build.ts', PROJECT_FILES['.antimatter/build.ts']);
       }
 
       // ---- Step 3: Verify all source files exist on workspace ----
@@ -756,8 +811,356 @@ const setupAndVerifyProject: TestModule = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Shared M1 setup: find existing json-validator project, fail if missing
+// ---------------------------------------------------------------------------
+
+async function m1Setup(testId: string): Promise<{ projectId: string }> {
+  console.log(`[${testId}:setup] Finding '${PROJECT_NAME}' project...`);
+  const existing = await findProject(PROJECT_NAME);
+  if (!existing) {
+    throw new Error(
+      `Project '${PROJECT_NAME}' not found — FT-M1-001 must pass first. ` +
+      `This test depends on the project created by FT-M1-001.`,
+    );
+  }
+  const projectId = existing.id;
+  console.log(`[${testId}:setup] Found project: ${projectId}`);
+
+  await startProjectWorkspace(projectId);
+  await waitForWorkspaceRunning(projectId);
+  console.log(`[${testId}:setup] Workspace RUNNING`);
+  return { projectId };
+}
+
+/** Delete json-validator on precondition failure so next M1-001 run starts clean. */
+async function failAndCleanup(
+  testId: string,
+  projectId: string,
+  detail: string,
+): Promise<{ pass: false; detail: string }> {
+  console.log(`[${testId}] PRECONDITION FAILED: ${detail}`);
+  try {
+    await deleteProjectById(projectId);
+    console.log(`[${testId}] Deleted project ${projectId} for clean retry`);
+  } catch (err) {
+    console.warn(`[${testId}] Failed to delete project: ${err}`);
+  }
+  return { pass: false, detail: `Precondition failed (project deleted for retry): ${detail}` };
+}
+
+// ---------------------------------------------------------------------------
+// FT-M1-002: Modify source file via editor and verify rebuild
+// ---------------------------------------------------------------------------
+
+const modifyAndRebuild: TestModule = {
+  id: 'FT-M1-002',
+  name: 'Modify source file in editor, verify rebuild triggers and passes',
+  area: 'm1',
+
+  setup: () => m1Setup('FT-M1-002'),
+
+  run: async (ctx) => {
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get('project');
+    if (!projectId) {
+      return { pass: false, detail: 'No project ID in URL' };
+    }
+
+    try {
+      // ---- Precondition: verify src/validator.ts exists in file tree ----
+      const tree = await ctx.getFileTree();
+      const hasValidator = tree.some((f: any) =>
+        f.path === 'src/validator.ts' || f.name === 'validator.ts',
+      );
+      if (!hasValidator) {
+        return failAndCleanup('FT-M1-002', projectId,
+          'src/validator.ts not found in file tree — FT-M1-001 may not have completed');
+      }
+
+      // ---- Precondition: verify build rule previously passed ----
+      const snapshot = await getWorkflowSnapshot(projectId);
+      if (snapshot.ruleResults.build?.status !== 'success') {
+        return failAndCleanup('FT-M1-002', projectId,
+          `Build rule not in success state (status: ${snapshot.ruleResults.build?.status ?? 'none'}) — FT-M1-001 must pass first`);
+      }
+
+      // ---- Step 1: Open src/validator.ts in editor, read current content ----
+      console.log('[FT-M1-002] Opening src/validator.ts in editor...');
+      const currentContent = await ctx.readFile('src/validator.ts');
+
+      if (!currentContent.includes('export function validate')) {
+        return failAndCleanup('FT-M1-002', projectId,
+          'src/validator.ts does not contain validate function — file content is unexpected');
+      }
+
+      // ---- Step 2: Add isValid convenience function via editor ----
+      const isValidFunction = `\n\n/** Convenience: returns true if the value is valid against the schema. */\nexport function isValid(value: unknown, schema: Schema): boolean {\n  return validate(value, schema).valid;\n}\n`;
+
+      let newContent: string;
+      if (currentContent.includes('isValid')) {
+        // isValid already present — add a unique timestamp comment to force a file change
+        const marker = `// FT-M1-002 re-run at ${new Date().toISOString()}`;
+        console.log('[FT-M1-002] isValid already present — adding timestamp marker to force rebuild');
+        // Replace any existing marker or add at the end
+        newContent = currentContent.replace(/\/\/ FT-M1-002 re-run at .+/, marker);
+        if (!newContent.includes('FT-M1-002 re-run')) {
+          newContent = newContent.trimEnd() + '\n' + marker + '\n';
+        }
+      } else {
+        newContent = currentContent + isValidFunction;
+      }
+
+      console.log('[FT-M1-002] Editing src/validator.ts in editor...');
+      const beforeTimestamps: Record<string, string | undefined> = {
+        build: snapshot.ruleResults.build?.lastRunAt,
+        test: snapshot.ruleResults.test?.lastRunAt,
+      };
+
+      await ctx.editFileContent('src/validator.ts', newContent);
+      console.log('[FT-M1-002] File saved via editor. Waiting for rebuild...');
+
+      // ---- Step 3: Wait for build+test rules to re-trigger ----
+      const ruleResults = await waitForRuleRerun(
+        projectId, ['build', 'test'], beforeTimestamps, RULE_TIMEOUT_MS,
+      );
+
+      // ---- Step 4: Verify build passed ----
+      if (ruleResults.build?.status !== 'success') {
+        return {
+          pass: false,
+          detail: `Build failed after edit: ${ruleResults.build?.error ?? 'unknown'}`,
+        };
+      }
+
+      // ---- Step 5: Verify isValid in compiled output (diagnostic API check) ----
+      const headers = await getAuthHeaders();
+      const distRes = await fetch(
+        `/workspace/${encodeURIComponent(projectId)}/api/files/read?path=${encodeURIComponent('dist/src/validator.js')}`,
+        { headers },
+      );
+      if (distRes.ok) {
+        const { content: distContent } = await distRes.json();
+        if (!distContent.includes('isValid')) {
+          return {
+            pass: false,
+            detail: 'Build passed but dist/src/validator.js does not contain isValid',
+          };
+        }
+        console.log('[FT-M1-002] Verified: isValid present in compiled output');
+      }
+
+      // ---- Step 6: Verify tests still pass ----
+      if (ruleResults.test?.status !== 'success') {
+        return {
+          pass: false,
+          detail: `Tests failed after edit: ${ruleResults.test?.error ?? 'unknown'}`,
+        };
+      }
+
+      return {
+        pass: true,
+        detail: 'Edited src/validator.ts in editor (added isValid), build+test re-triggered and passed',
+      };
+    } catch (err) {
+      return {
+        pass: false,
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// FT-M1-003: Add new test case via editor and verify re-test
+// ---------------------------------------------------------------------------
+
+const addTestAndVerify: TestModule = {
+  id: 'FT-M1-003',
+  name: 'Add new test case in editor, verify test rule re-triggers and passes',
+  area: 'm1',
+
+  setup: () => m1Setup('FT-M1-003'),
+
+  run: async (ctx) => {
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get('project');
+    if (!projectId) {
+      return { pass: false, detail: 'No project ID in URL' };
+    }
+
+    try {
+      // ---- Precondition: isValid function exists (from FT-M1-002) ----
+      const validatorContent = await ctx.readFile('src/validator.ts');
+      if (!validatorContent.includes('isValid')) {
+        return failAndCleanup('FT-M1-003', projectId,
+          'src/validator.ts does not contain isValid — FT-M1-002 must pass first');
+      }
+
+      // ---- Step 1: Read test file and add new test case via editor ----
+      console.log('[FT-M1-003] Opening test/validator.test.ts in editor...');
+      const currentTest = await ctx.readFile('test/validator.test.ts');
+
+      const newTestCase = `\n  it('isValid convenience function returns boolean', () => {\n    const { isValid } = require('../src/validator.js');\n    if (typeof isValid !== 'function') return;\n    const schema = { type: 'string' };\n    assert.strictEqual(isValid('hello', schema), true);\n    assert.strictEqual(isValid(42, schema), false);\n  });\n`;
+
+      let updatedTest: string;
+      if (currentTest.includes('isValid convenience')) {
+        // Already present — add a unique timestamp comment to force a file change
+        const marker = `// FT-M1-003 re-run at ${new Date().toISOString()}`;
+        console.log('[FT-M1-003] isValid test already present — adding timestamp marker to force rebuild');
+        updatedTest = currentTest.replace(/\/\/ FT-M1-003 re-run at .+/, marker);
+        if (!updatedTest.includes('FT-M1-003 re-run')) {
+          updatedTest = updatedTest.trimEnd() + '\n' + marker + '\n';
+        }
+      } else {
+        const closingIdx = currentTest.lastIndexOf('});');
+        if (closingIdx === -1) {
+          return { pass: false, detail: 'Could not find closing }); in test file' };
+        }
+        updatedTest = currentTest.slice(0, closingIdx) + newTestCase + currentTest.slice(closingIdx);
+      }
+
+      // Record timestamps before edit
+      const snapshot = await getWorkflowSnapshot(projectId);
+      const beforeTimestamps: Record<string, string | undefined> = {
+        build: snapshot.ruleResults.build?.lastRunAt,
+        test: snapshot.ruleResults.test?.lastRunAt,
+      };
+
+      console.log('[FT-M1-003] Editing test/validator.test.ts in editor...');
+      await ctx.editFileContent('test/validator.test.ts', updatedTest);
+      console.log('[FT-M1-003] File saved. Waiting for build+test...');
+
+      // ---- Step 2: Wait for rules to re-trigger ----
+      const ruleResults = await waitForRuleRerun(
+        projectId, ['build', 'test'], beforeTimestamps, RULE_TIMEOUT_MS,
+      );
+
+      if (ruleResults.build?.status !== 'success') {
+        return { pass: false, detail: `Build failed: ${ruleResults.build?.error ?? 'unknown'}` };
+      }
+      if (ruleResults.test?.status !== 'success') {
+        return { pass: false, detail: `Tests failed: ${ruleResults.test?.error ?? 'unknown'}` };
+      }
+
+      return {
+        pass: true,
+        detail: 'Added isValid test case via editor, build+test rules re-triggered and passed',
+      };
+    } catch (err) {
+      return {
+        pass: false,
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// FT-M1-005: Git commit all changes and verify in log
+// Uses API calls (git is a backend operation, not a DOM interaction)
+// ---------------------------------------------------------------------------
+
+const gitCommitAndVerify: TestModule = {
+  id: 'FT-M1-005',
+  name: 'Git commit all M1 changes and verify in log',
+  area: 'm1',
+
+  setup: () => m1Setup('FT-M1-005'),
+
+  run: async (_ctx) => {
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get('project');
+    if (!projectId) {
+      return { pass: false, detail: 'No project ID in URL' };
+    }
+
+    try {
+      const headers = await getAuthHeaders();
+
+      // ---- Precondition: git initialized ----
+      const statusRes = await fetch(
+        `/workspace/${encodeURIComponent(projectId)}/api/git/status`,
+        { headers },
+      );
+      if (!statusRes.ok) {
+        return { pass: false, detail: `Git status failed: ${statusRes.statusText}` };
+      }
+      const status = await statusRes.json();
+
+      if (!status.initialized) {
+        return failAndCleanup('FT-M1-005', projectId, 'Git not initialized');
+      }
+
+      console.log(`[FT-M1-005] Git status: branch=${status.branch}, untracked=${status.untracked?.length ?? 0}, unstaged=${status.unstaged?.length ?? 0}`);
+
+      // ---- Step 1: Stage all files ----
+      const stageRes = await fetch(
+        `/workspace/${encodeURIComponent(projectId)}/api/git/stage`,
+        {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: ['.'] }),
+        },
+      );
+      if (!stageRes.ok) {
+        return { pass: false, detail: `Git stage failed: ${stageRes.statusText}` };
+      }
+      console.log('[FT-M1-005] Staged all files');
+
+      // ---- Step 2: Commit ----
+      const commitMsg = `feat: json-validator M1 milestone (FT-M1-005 at ${new Date().toISOString()})`;
+      const commitRes = await fetch(
+        `/workspace/${encodeURIComponent(projectId)}/api/git/commit`,
+        {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: commitMsg }),
+        },
+      );
+      if (!commitRes.ok) {
+        const body = await commitRes.json().catch(() => ({}));
+        if (body.message?.includes('nothing to commit') || body.error?.includes('nothing to commit')) {
+          return { pass: true, detail: 'All files already committed (clean working tree)' };
+        }
+        return { pass: false, detail: `Git commit failed: ${body.message ?? commitRes.statusText}` };
+      }
+      console.log(`[FT-M1-005] Committed: ${commitMsg}`);
+
+      // ---- Step 3: Verify in log ----
+      const logRes = await fetch(
+        `/workspace/${encodeURIComponent(projectId)}/api/git/log?limit=5`,
+        { headers },
+      );
+      if (!logRes.ok) {
+        return { pass: false, detail: `Git log failed: ${logRes.statusText}` };
+      }
+      const logData = await logRes.json();
+      const commits = logData.commits ?? logData.entries ?? [];
+      const found = commits.some((c: any) => c.message?.includes('FT-M1-005'));
+
+      if (!found) {
+        return { pass: false, detail: `Commit not found in log. Latest: ${commits[0]?.message ?? 'none'}` };
+      }
+
+      return {
+        pass: true,
+        detail: `All M1 changes staged, committed, verified in git log`,
+      };
+    } catch (err) {
+      return {
+        pass: false,
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+};
+
 // ---- Export ----
 
 export const m1Tests: readonly TestModule[] = [
   setupAndVerifyProject,
+  modifyAndRebuild,
+  addTestAndVerify,
+  gitCommitAndVerify,
 ];
