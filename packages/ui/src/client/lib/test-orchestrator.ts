@@ -185,10 +185,14 @@ export class TestOrchestrator {
    */
   private async openOrReuseTab(url: string): Promise<void> {
     if (persistentTestTab && !persistentTestTab.closed) {
-      // Reuse: navigate the existing persistent tab to the new test project
-      this.testTabWindow = persistentTestTab;
-      this.testTabWindow.location.href = url;
-    } else {
+      // Close the stale tab and open fresh. Simply navigating via location.href
+      // doesn't work because React's initialization ref prevents re-reading
+      // URL params, and the WebSocket from the previous project doesn't reconnect.
+      persistentTestTab.close();
+      persistentTestTab = null;
+    }
+
+    {
       // Attempt to open a new tab
       const win = window.open(url, '_blank');
       if (win) {

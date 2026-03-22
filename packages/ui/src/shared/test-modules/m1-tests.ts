@@ -272,16 +272,34 @@ export default (wf: any) => {
     async (_events: any[], state: any) => {
       wf.log('Compiling TypeScript...');
       const result = await wf.exec('npm run build 2>&1');
-      const tscOutput = result.stdout + result.stderr;
-      const errors = wf.parseTscErrors(tscOutput);
-      wf.reportErrors('tsc', errors);
+      const tscOutput = (result.stdout || '') + (result.stderr || '');
+
+      // Parse tsc errors inline — file(line,col): error TSnnnn: message
+      const tscErrors: any[] = [];
+      for (const line of tscOutput.split('\\n')) {
+        const m = line.match(/^(.+)\\((\\d+),(\\d+)\\):\\s+(error|warning)\\s+TS\\d+:\\s+(.+)$/);
+        if (m) {
+          tscErrors.push({
+            errorType: m[4] === 'error'
+              ? { name: 'TypeError', icon: 'circle-alert', color: '#f97316', style: 'squiggly' }
+              : { name: 'Warning', icon: 'triangle-alert', color: '#eab308', style: 'squiggly' },
+            toolId: 'tsc',
+            file: m[1].replace(/^\\.[\\/\\\\]/, ''),
+            message: m[5],
+            line: parseInt(m[2], 10),
+            column: parseInt(m[3], 10),
+          });
+        }
+      }
+      wf.reportErrors('tsc', tscErrors);
+
       if (result.exitCode === 0) {
         state.build = { status: 'success', lastRun: new Date().toISOString() };
         wf.log('TypeScript compiled successfully');
         wf.emit({ type: 'build:success' });
       } else {
-        state.build = { status: 'failed', lastRun: new Date().toISOString(), errorCount: errors.length };
-        wf.log('Build failed: ' + errors.length + ' error(s)', 'error');
+        state.build = { status: 'failed', lastRun: new Date().toISOString(), errorCount: tscErrors.length };
+        wf.log('Build failed: ' + tscErrors.length + ' error(s)', 'error');
       }
     },
     { id: 'build' },
