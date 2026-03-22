@@ -63,6 +63,9 @@ function ErrorRow({
             onNavigate(error.file, error.line, error.column);
           }
         }}
+        onDoubleClick={() => {
+          onNavigate(error.file, error.line, error.column);
+        }}
       >
         {hasDetail && (
           <span className="flex-shrink-0 w-3">
@@ -117,24 +120,37 @@ export function ProblemsPanel() {
     selectFile(file as WorkspacePath);
     const editorState = useEditorStore.getState();
 
-    const revealLocation = () => {
-      // After the file is active, scroll to the error location in Monaco
-      if (line && window.__monacoEditor) {
-        const pos = { lineNumber: line, column: column ?? 1 };
-        window.__monacoEditor.setPosition(pos);
-        window.__monacoEditor.revealLineInCenter(line);
-        window.__monacoEditor.focus();
-      }
+    // Poll until Monaco has the correct file model active, then reveal the location.
+    // This avoids race conditions with setTimeout.
+    const revealWhenReady = () => {
+      if (!line) return;
+      let attempts = 0;
+      const check = () => {
+        attempts++;
+        const editor = window.__monacoEditor;
+        if (!editor) { if (attempts < 20) setTimeout(check, 50); return; }
+        const model = editor.getModel();
+        const uri = model?.uri?.path ?? '';
+        // Check if the editor has loaded the target file
+        if (uri.endsWith(file) || uri.includes(file)) {
+          const pos = { lineNumber: line, column: column ?? 1 };
+          editor.setPosition(pos);
+          editor.revealLineInCenter(line);
+          editor.focus();
+        } else if (attempts < 20) {
+          setTimeout(check, 50);
+        }
+      };
+      setTimeout(check, 50);
     };
 
     if (editorState.openFiles.has(file as WorkspacePath)) {
       editorState.setActiveFile(file as WorkspacePath);
-      // Small delay to let Monaco switch to the file's model
-      setTimeout(revealLocation, 100);
+      revealWhenReady();
     } else {
       fetchFileContent(file).then((content) => {
         editorState.openFile(file as WorkspacePath, content, detectLanguage(file));
-        setTimeout(revealLocation, 200);
+        revealWhenReady();
       }).catch(() => {});
     }
   }
