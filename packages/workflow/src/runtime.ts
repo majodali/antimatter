@@ -23,6 +23,7 @@ import type {
   WorkflowRuntimeConfig,
   ProjectError,
 } from './types.js';
+import { parseTscErrors, parseToolOutput } from './parsers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -129,6 +130,10 @@ export class WorkflowRuntime<S> {
       reportErrors: (toolId: string, errors: ProjectError[]) => {
         options.config?.onReportErrors?.(toolId, errors);
       },
+      /** Parse TypeScript compiler output into ProjectError[]. */
+      parseTscErrors: (output: string) => parseTscErrors(output),
+      /** Parse generic tool output (tsc/eslint/etc) into ProjectError[]. */
+      parseToolOutput: (output: string, toolId: string) => parseToolOutput(output, toolId),
     };
 
     // Call the definition function to register rules.

@@ -53,7 +53,7 @@ function ErrorRow({
     : error.file;
 
   return (
-    <div className="border-b border-border/50 last:border-b-0">
+    <div className="border-b border-border/50 last:border-b-0" data-testid={`problem-error-${error.toolId}-${error.file}${error.line ? `-L${error.line}` : ''}`}>
       <div
         className="flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-accent/50"
         onClick={() => {
@@ -128,17 +128,17 @@ export function ProblemsPanel() {
 
   if (errors.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm" data-testid="problems-empty">
         No problems detected
       </div>
     );
   }
 
   return (
-    <ScrollArea className="h-full">
-      <div className="py-1">
+    <ScrollArea className="h-full" data-testid="problems-panel">
+      <div className="py-1" data-testid="problems-list">
         {fileGroups.map(([filePath, fileErrors]) => (
-          <div key={filePath}>
+          <div key={filePath} data-testid={`problems-file-${filePath}`}>
             {/* File header */}
             <div className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-foreground bg-muted/50 sticky top-0">
               <FileText className="h-3.5 w-3.5 text-muted-foreground" />

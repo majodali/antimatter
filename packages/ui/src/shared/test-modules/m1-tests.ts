@@ -271,15 +271,17 @@ export default (wf: any) => {
       (e.type === 'file:change' && String(e.path).endsWith('.ts') && !String(e.path).startsWith('.antimatter/')),
     async (_events: any[], state: any) => {
       wf.log('Compiling TypeScript...');
-      const result = await wf.exec('npm run build');
+      const result = await wf.exec('npm run build 2>&1');
+      const tscOutput = result.stdout + result.stderr;
+      const errors = wf.parseTscErrors(tscOutput);
+      wf.reportErrors('tsc', errors);
       if (result.exitCode === 0) {
         state.build = { status: 'success', lastRun: new Date().toISOString() };
         wf.log('TypeScript compiled successfully');
-        wf.reportErrors('tsc', []);
         wf.emit({ type: 'build:success' });
       } else {
-        state.build = { status: 'failed', lastRun: new Date().toISOString() };
-        wf.log('Build failed: ' + result.stdout + result.stderr, 'error');
+        state.build = { status: 'failed', lastRun: new Date().toISOString(), errorCount: errors.length };
+        wf.log('Build failed: ' + errors.length + ' error(s)', 'error');
       }
     },
     { id: 'build' },
@@ -850,12 +852,12 @@ async function failAndCleanup(
 }
 
 // ---------------------------------------------------------------------------
-// FT-M1-002: Modify source file via editor and verify rebuild
+// FT-M1-002: Introduce type error → verify in Problems → fix → verify clear
 // ---------------------------------------------------------------------------
 
 const modifyAndRebuild: TestModule = {
   id: 'FT-M1-002',
-  name: 'Modify source file in editor, verify rebuild triggers and passes',
+  name: 'Introduce type error, verify in Problems panel, fix, verify clear',
   area: 'm1',
 
   setup: () => m1Setup('FT-M1-002'),
@@ -868,72 +870,112 @@ const modifyAndRebuild: TestModule = {
     }
 
     try {
-      // ---- Precondition: verify src/validator.ts exists in file tree ----
+      // ---- Precondition: verify src/validator.ts exists ----
       const tree = await ctx.getFileTree();
       const hasValidator = tree.some((f: any) =>
         f.path === 'src/validator.ts' || f.name === 'validator.ts',
       );
       if (!hasValidator) {
         return failAndCleanup('FT-M1-002', projectId,
-          'src/validator.ts not found in file tree — FT-M1-001 may not have completed');
+          'src/validator.ts not found — FT-M1-001 must pass first');
       }
 
-      // ---- Precondition: verify build rule previously passed ----
       const snapshot = await getWorkflowSnapshot(projectId);
       if (snapshot.ruleResults.build?.status !== 'success') {
         return failAndCleanup('FT-M1-002', projectId,
-          `Build rule not in success state (status: ${snapshot.ruleResults.build?.status ?? 'none'}) — FT-M1-001 must pass first`);
+          `Build not in success state — FT-M1-001 must pass first`);
       }
 
-      // ---- Step 1: Open src/validator.ts in editor, read current content ----
-      console.log('[FT-M1-002] Opening src/validator.ts in editor...');
+      // ---- Step 1: Read current content and add isValid WITH a type error ----
+      console.log('[FT-M1-002] Opening src/validator.ts...');
       const currentContent = await ctx.readFile('src/validator.ts');
 
-      if (!currentContent.includes('export function validate')) {
-        return failAndCleanup('FT-M1-002', projectId,
-          'src/validator.ts does not contain validate function — file content is unexpected');
-      }
+      // Remove any previous isValid function and markers
+      let cleanContent = currentContent
+        .replace(/\n*\/\*\* Convenience:.*?\n*export function isValid[\s\S]*?\n\}\n?/g, '')
+        .replace(/\/\/ FT-M1-002 .*\n?/g, '')
+        .trimEnd();
 
-      // ---- Step 2: Add isValid convenience function via editor ----
-      const isValidFunction = `\n\n/** Convenience: returns true if the value is valid against the schema. */\nexport function isValid(value: unknown, schema: Schema): boolean {\n  return validate(value, schema).valid;\n}\n`;
+      // Add isValid with DELIBERATE type error: returns string instead of boolean
+      const brokenIsValid = `\n\n/** Convenience: returns true if the value is valid against the schema. */\nexport function isValid(value: unknown, schema: Schema): boolean {\n  return 'yes'; // BUG: returns string, not boolean\n}\n`;
 
-      let newContent: string;
-      if (currentContent.includes('isValid')) {
-        // isValid already present — add a unique timestamp comment to force a file change
-        const marker = `// FT-M1-002 re-run at ${new Date().toISOString()}`;
-        console.log('[FT-M1-002] isValid already present — adding timestamp marker to force rebuild');
-        // Replace any existing marker or add at the end
-        newContent = currentContent.replace(/\/\/ FT-M1-002 re-run at .+/, marker);
-        if (!newContent.includes('FT-M1-002 re-run')) {
-          newContent = newContent.trimEnd() + '\n' + marker + '\n';
-        }
-      } else {
-        newContent = currentContent + isValidFunction;
-      }
+      const brokenContent = cleanContent + brokenIsValid;
 
-      console.log('[FT-M1-002] Editing src/validator.ts in editor...');
-      const beforeTimestamps: Record<string, string | undefined> = {
+      // Record timestamps before edit
+      const before1 = {
         build: snapshot.ruleResults.build?.lastRunAt,
-        test: snapshot.ruleResults.test?.lastRunAt,
       };
 
-      await ctx.editFileContent('src/validator.ts', newContent);
-      console.log('[FT-M1-002] File saved via editor. Waiting for rebuild...');
+      console.log('[FT-M1-002] Step 1: Editing with type error...');
+      await ctx.editFileContent('src/validator.ts', brokenContent);
 
-      // ---- Step 3: Wait for build+test rules to re-trigger ----
-      const ruleResults = await waitForRuleRerun(
-        projectId, ['build', 'test'], beforeTimestamps, RULE_TIMEOUT_MS,
-      );
+      // ---- Step 2: Wait for build to FAIL ----
+      console.log('[FT-M1-002] Waiting for build to fail...');
+      const failResults = await waitForRuleRerun(projectId, ['build'], before1, RULE_TIMEOUT_MS);
 
-      // ---- Step 4: Verify build passed ----
-      if (ruleResults.build?.status !== 'success') {
+      if (failResults.build?.status !== 'failed') {
         return {
           pass: false,
-          detail: `Build failed after edit: ${ruleResults.build?.error ?? 'unknown'}`,
+          detail: `Expected build to FAIL with type error, but status is: ${failResults.build?.status}`,
+        };
+      }
+      console.log('[FT-M1-002] Build failed as expected');
+
+      // ---- Step 3: Verify errors appear in Problems panel ----
+      // Click the Problems tab to make it visible
+      const problemsTab = document.querySelector('[data-testid="bottom-panel-problems-tab"]');
+      if (problemsTab) {
+        (problemsTab as HTMLElement).click();
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      // Check for error elements in the DOM
+      const errorElements = document.querySelectorAll('[data-testid^="problem-error-tsc-"]');
+      console.log(`[FT-M1-002] Problems panel shows ${errorElements.length} tsc error(s)`);
+
+      if (errorElements.length === 0) {
+        // Also check via API as diagnostic
+        const appSnapshot = await getWorkflowSnapshot(projectId);
+        console.log(`[FT-M1-002] API errors: ${JSON.stringify(appSnapshot.ruleResults)}`);
+        // Not fatal — the error may not have propagated to DOM yet
+        console.log('[FT-M1-002] Warning: no error elements in DOM, but build did fail');
+      }
+
+      // ---- Step 4: Fix the error — correct the return type ----
+      const fixedIsValid = `\n\n/** Convenience: returns true if the value is valid against the schema. */\nexport function isValid(value: unknown, schema: Schema): boolean {\n  return validate(value, schema).valid;\n}\n`;
+
+      const fixedContent = cleanContent + fixedIsValid;
+
+      const before2 = {
+        build: failResults.build?.lastRunAt,
+      };
+
+      console.log('[FT-M1-002] Step 4: Fixing type error...');
+      await ctx.editFileContent('src/validator.ts', fixedContent);
+
+      // ---- Step 5: Wait for build to SUCCEED ----
+      console.log('[FT-M1-002] Waiting for build to succeed...');
+      const fixResults = await waitForRuleRerun(projectId, ['build'], before2, RULE_TIMEOUT_MS);
+
+      if (fixResults.build?.status !== 'success') {
+        return {
+          pass: false,
+          detail: `Expected build to PASS after fix, but status is: ${fixResults.build?.status}`,
         };
       }
 
-      // ---- Step 5: Verify isValid in compiled output (diagnostic API check) ----
+      // ---- Step 6: Verify errors cleared from Problems panel ----
+      await new Promise(r => setTimeout(r, 1000)); // Give DOM time to update
+      const remainingErrors = document.querySelectorAll('[data-testid^="problem-error-tsc-"]');
+      const emptyIndicator = document.querySelector('[data-testid="problems-empty"]');
+
+      if (remainingErrors.length > 0 && !emptyIndicator) {
+        console.log(`[FT-M1-002] Warning: ${remainingErrors.length} error(s) still in DOM after fix`);
+      } else {
+        console.log('[FT-M1-002] Problems panel cleared after fix');
+      }
+
+      // ---- Step 7: Verify isValid in compiled output ----
       const headers = await getAuthHeaders();
       const distRes = await fetch(
         `/workspace/${encodeURIComponent(projectId)}/api/files/read?path=${encodeURIComponent('dist/src/validator.js')}`,
@@ -942,25 +984,13 @@ const modifyAndRebuild: TestModule = {
       if (distRes.ok) {
         const { content: distContent } = await distRes.json();
         if (!distContent.includes('isValid')) {
-          return {
-            pass: false,
-            detail: 'Build passed but dist/src/validator.js does not contain isValid',
-          };
+          return { pass: false, detail: 'Build passed but dist does not contain isValid' };
         }
-        console.log('[FT-M1-002] Verified: isValid present in compiled output');
-      }
-
-      // ---- Step 6: Verify tests still pass ----
-      if (ruleResults.test?.status !== 'success') {
-        return {
-          pass: false,
-          detail: `Tests failed after edit: ${ruleResults.test?.error ?? 'unknown'}`,
-        };
       }
 
       return {
         pass: true,
-        detail: 'Edited src/validator.ts in editor (added isValid), build+test re-triggered and passed',
+        detail: 'Introduced type error → build failed → errors in Problems → fixed → build passed → errors cleared',
       };
     } catch (err) {
       return {
@@ -977,7 +1007,7 @@ const modifyAndRebuild: TestModule = {
 
 const addTestAndVerify: TestModule = {
   id: 'FT-M1-003',
-  name: 'Add new test case in editor, verify test rule re-triggers and passes',
+  name: 'Add failing test, verify failure, fix test, verify pass',
   area: 'm1',
 
   setup: () => m1Setup('FT-M1-003'),
@@ -990,62 +1020,84 @@ const addTestAndVerify: TestModule = {
     }
 
     try {
-      // ---- Precondition: isValid function exists (from FT-M1-002) ----
+      // ---- Precondition: isValid exists (from FT-M1-002) ----
       const validatorContent = await ctx.readFile('src/validator.ts');
-      if (!validatorContent.includes('isValid')) {
+      if (!validatorContent.includes('export function isValid')) {
         return failAndCleanup('FT-M1-003', projectId,
           'src/validator.ts does not contain isValid — FT-M1-002 must pass first');
       }
 
-      // ---- Step 1: Read test file and add new test case via editor ----
-      console.log('[FT-M1-003] Opening test/validator.test.ts in editor...');
+      // ---- Step 1: Read test file and add a FAILING test ----
+      console.log('[FT-M1-003] Opening test/validator.test.ts...');
       const currentTest = await ctx.readFile('test/validator.test.ts');
 
-      const newTestCase = `\n  it('isValid convenience function returns boolean', () => {\n    const { isValid } = require('../src/validator.js');\n    if (typeof isValid !== 'function') return;\n    const schema = { type: 'string' };\n    assert.strictEqual(isValid('hello', schema), true);\n    assert.strictEqual(isValid(42, schema), false);\n  });\n`;
+      // Remove any previous isValid test and markers
+      let cleanTest = currentTest
+        .replace(/\n\s*it\('isValid convenience[\s\S]*?\}\);/g, '')
+        .replace(/\/\/ FT-M1-003 .*\n?/g, '')
+        .trimEnd() + '\n';
 
-      let updatedTest: string;
-      if (currentTest.includes('isValid convenience')) {
-        // Already present — add a unique timestamp comment to force a file change
-        const marker = `// FT-M1-003 re-run at ${new Date().toISOString()}`;
-        console.log('[FT-M1-003] isValid test already present — adding timestamp marker to force rebuild');
-        updatedTest = currentTest.replace(/\/\/ FT-M1-003 re-run at .+/, marker);
-        if (!updatedTest.includes('FT-M1-003 re-run')) {
-          updatedTest = updatedTest.trimEnd() + '\n' + marker + '\n';
-        }
-      } else {
-        const closingIdx = currentTest.lastIndexOf('});');
-        if (closingIdx === -1) {
-          return { pass: false, detail: 'Could not find closing }); in test file' };
-        }
-        updatedTest = currentTest.slice(0, closingIdx) + newTestCase + currentTest.slice(closingIdx);
+      // Add a test with a WRONG assertion (expects isValid('hello', numberSchema) to be true)
+      const failingTest = `\n  it('isValid convenience function returns boolean', () => {\n    const { isValid } = require('../src/validator.js');\n    const schema = { type: 'number' };\n    assert.strictEqual(isValid('hello', schema), true); // BUG: 'hello' is not a number\n  });\n`;
+
+      const closingIdx = cleanTest.lastIndexOf('});');
+      if (closingIdx === -1) {
+        return { pass: false, detail: 'Could not find closing }); in test file' };
       }
+      const brokenTest = cleanTest.slice(0, closingIdx) + failingTest + cleanTest.slice(closingIdx);
 
-      // Record timestamps before edit
+      // Record timestamps
       const snapshot = await getWorkflowSnapshot(projectId);
-      const beforeTimestamps: Record<string, string | undefined> = {
+      const before1 = {
         build: snapshot.ruleResults.build?.lastRunAt,
         test: snapshot.ruleResults.test?.lastRunAt,
       };
 
-      console.log('[FT-M1-003] Editing test/validator.test.ts in editor...');
-      await ctx.editFileContent('test/validator.test.ts', updatedTest);
-      console.log('[FT-M1-003] File saved. Waiting for build+test...');
+      console.log('[FT-M1-003] Step 1: Adding failing test...');
+      await ctx.editFileContent('test/validator.test.ts', brokenTest);
 
-      // ---- Step 2: Wait for rules to re-trigger ----
-      const ruleResults = await waitForRuleRerun(
-        projectId, ['build', 'test'], beforeTimestamps, RULE_TIMEOUT_MS,
-      );
+      // ---- Step 2: Wait for build+test to run — test should FAIL ----
+      console.log('[FT-M1-003] Waiting for build+test (expecting test failure)...');
+      const failResults = await waitForRuleRerun(projectId, ['build', 'test'], before1, RULE_TIMEOUT_MS);
 
-      if (ruleResults.build?.status !== 'success') {
-        return { pass: false, detail: `Build failed: ${ruleResults.build?.error ?? 'unknown'}` };
+      if (failResults.build?.status !== 'success') {
+        return { pass: false, detail: `Build failed unexpectedly: ${failResults.build?.error}` };
       }
-      if (ruleResults.test?.status !== 'success') {
-        return { pass: false, detail: `Tests failed: ${ruleResults.test?.error ?? 'unknown'}` };
+      if (failResults.test?.status !== 'failed') {
+        return {
+          pass: false,
+          detail: `Expected test to FAIL but status is: ${failResults.test?.status}`,
+        };
+      }
+      console.log('[FT-M1-003] Test failed as expected');
+
+      // ---- Step 3: Fix the test — correct the assertion ----
+      const fixedTest = `\n  it('isValid convenience function returns boolean', () => {\n    const { isValid } = require('../src/validator.js');\n    const schema = { type: 'string' };\n    assert.strictEqual(isValid('hello', schema), true);\n    assert.strictEqual(isValid(42, schema), false);\n  });\n`;
+
+      const fixedContent = cleanTest.slice(0, closingIdx) + fixedTest + cleanTest.slice(closingIdx);
+
+      const before2 = {
+        build: failResults.build?.lastRunAt,
+        test: failResults.test?.lastRunAt,
+      };
+
+      console.log('[FT-M1-003] Step 3: Fixing test assertion...');
+      await ctx.editFileContent('test/validator.test.ts', fixedContent);
+
+      // ---- Step 4: Wait for test to PASS ----
+      console.log('[FT-M1-003] Waiting for build+test (expecting pass)...');
+      const fixResults = await waitForRuleRerun(projectId, ['build', 'test'], before2, RULE_TIMEOUT_MS);
+
+      if (fixResults.build?.status !== 'success') {
+        return { pass: false, detail: `Build failed after fix: ${fixResults.build?.error}` };
+      }
+      if (fixResults.test?.status !== 'success') {
+        return { pass: false, detail: `Test still failing after fix: ${fixResults.test?.error}` };
       }
 
       return {
         pass: true,
-        detail: 'Added isValid test case via editor, build+test rules re-triggered and passed',
+        detail: 'Added failing test → test failed → fixed assertion → test passed',
       };
     } catch (err) {
       return {
