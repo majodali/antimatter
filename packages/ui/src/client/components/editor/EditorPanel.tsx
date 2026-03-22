@@ -102,7 +102,20 @@ export function EditorPanel() {
       const startLine = err.line ?? 1;
       const startCol = err.column ?? 1;
       const endLine = err.endLine ?? startLine;
-      const endCol = err.endColumn ?? (startCol + 1);
+      let endCol = err.endColumn ?? 0;
+
+      // When endColumn is not provided, try to highlight the word at the error position
+      if (!endCol && model) {
+        const wordInfo = model.getWordAtPosition({ lineNumber: startLine, column: startCol });
+        if (wordInfo) {
+          endCol = wordInfo.endColumn;
+        } else {
+          // No word found — highlight to end of line
+          const lineContent = model.getLineContent(startLine);
+          endCol = lineContent.length + 1;
+        }
+      }
+      if (!endCol) endCol = startCol + 1;
       const cssClass = styleToClass[err.errorType.highlightStyle] ?? 'squiggly-error';
 
       return {
@@ -126,20 +139,30 @@ export function EditorPanel() {
     decorationsRef.current = editor.deltaDecorations(decorationsRef.current, decorations);
 
     // Also set markers for the problems widget (F8 navigation, etc.)
-    const markers: monacoEditor.IMarkerData[] = fileErrors.map((err) => ({
-      severity:
-        err.errorType.name === 'Warning' || err.errorType.name === 'Info'
-          ? err.errorType.name === 'Info'
-            ? monaco.MarkerSeverity.Info
-            : monaco.MarkerSeverity.Warning
-          : monaco.MarkerSeverity.Error,
-      message: err.message,
-      startLineNumber: err.line ?? 1,
-      startColumn: err.column ?? 1,
-      endLineNumber: err.endLine ?? (err.line ?? 1),
-      endColumn: err.endColumn ?? ((err.column ?? 1) + 1),
-      source: err.toolId,
-    }));
+    const markers: monacoEditor.IMarkerData[] = fileErrors.map((err) => {
+      const sLine = err.line ?? 1;
+      const sCol = err.column ?? 1;
+      let eCol = err.endColumn ?? 0;
+      if (!eCol && model) {
+        const w = model.getWordAtPosition({ lineNumber: sLine, column: sCol });
+        eCol = w ? w.endColumn : (model.getLineContent(sLine).length + 1);
+      }
+      if (!eCol) eCol = sCol + 1;
+      return {
+        severity:
+          err.errorType.name === 'Warning' || err.errorType.name === 'Info'
+            ? err.errorType.name === 'Info'
+              ? monaco.MarkerSeverity.Info
+              : monaco.MarkerSeverity.Warning
+            : monaco.MarkerSeverity.Error,
+        message: err.message,
+        startLineNumber: sLine,
+        startColumn: sCol,
+        endLineNumber: err.endLine ?? sLine,
+        endColumn: eCol,
+        source: err.toolId,
+      };
+    });
 
     monaco.editor.setModelMarkers(model, 'project-errors', markers);
 

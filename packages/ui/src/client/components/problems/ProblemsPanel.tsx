@@ -43,7 +43,7 @@ function ErrorRow({
   onNavigate,
 }: {
   error: ProjectError;
-  onNavigate: (file: string, line?: number) => void;
+  onNavigate: (file: string, line?: number, column?: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const Icon = getErrorIcon(error.errorType.icon);
@@ -60,7 +60,7 @@ function ErrorRow({
           if (hasDetail) {
             setExpanded(!expanded);
           } else {
-            onNavigate(error.file, error.line);
+            onNavigate(error.file, error.line, error.column);
           }
         }}
       >
@@ -79,7 +79,7 @@ function ErrorRow({
           className="text-muted-foreground flex-shrink-0 cursor-pointer hover:text-foreground"
           onClick={(e) => {
             e.stopPropagation();
-            onNavigate(error.file, error.line);
+            onNavigate(error.file, error.line, error.column);
           }}
         >
           {location}
@@ -112,16 +112,29 @@ export function ProblemsPanel() {
 
   const fileGroups = Array.from(byFile.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
-  function handleNavigate(file: string, _line?: number) {
+  function handleNavigate(file: string, line?: number, column?: number) {
     // Select in file tree AND open in editor
     selectFile(file as WorkspacePath);
-    // Directly open/activate in editor (since selectedFile no longer auto-opens)
     const editorState = useEditorStore.getState();
+
+    const revealLocation = () => {
+      // After the file is active, scroll to the error location in Monaco
+      if (line && window.__monacoEditor) {
+        const pos = { lineNumber: line, column: column ?? 1 };
+        window.__monacoEditor.setPosition(pos);
+        window.__monacoEditor.revealLineInCenter(line);
+        window.__monacoEditor.focus();
+      }
+    };
+
     if (editorState.openFiles.has(file as WorkspacePath)) {
       editorState.setActiveFile(file as WorkspacePath);
+      // Small delay to let Monaco switch to the file's model
+      setTimeout(revealLocation, 100);
     } else {
       fetchFileContent(file).then((content) => {
         editorState.openFile(file as WorkspacePath, content, detectLanguage(file));
+        setTimeout(revealLocation, 200);
       }).catch(() => {});
     }
   }
