@@ -96,7 +96,7 @@ export interface SharedConfig {
 // Default ignore patterns
 // ---------------------------------------------------------------------------
 
-const DEFAULT_WATCHER_IGNORE = ['.git/', '.vite-temp/'];
+const DEFAULT_WATCHER_IGNORE = ['.git/', '.vite-temp/', '.antimatter-cache/'];
 const DEFAULT_EXPLORER_IGNORE = [
   'node_modules/', '.antimatter-cache/', 'dist/', '.next/', '__pycache__/', '.git/',
 ];

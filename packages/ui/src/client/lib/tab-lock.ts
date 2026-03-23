@@ -11,7 +11,11 @@
  *  - beforeunload releases all locks held by this tab.
  */
 
-const TAB_ID = crypto.randomUUID();
+// Persist TAB_ID in sessionStorage so it survives hard refreshes.
+// Without this, a hard-refreshed tab gets a new UUID and its own previous
+// lock looks like it belongs to "another tab", causing clearProject().
+const TAB_ID = sessionStorage.getItem('antimatter-tab-id') ?? crypto.randomUUID();
+sessionStorage.setItem('antimatter-tab-id', TAB_ID);
 const LOCK_PREFIX = 'antimatter-project-lock-';
 const HEARTBEAT_INTERVAL_MS = 5000;
 const LOCK_TIMEOUT_MS = 15000;

@@ -267,10 +267,12 @@ export default (wf: any) => {
   );
 
   wf.rule('Build TypeScript',
-    (e: any) => e.type === 'install:success' ||
-      (e.type === 'file:change' && String(e.path).endsWith('.ts') &&
-       !String(e.path).startsWith('dist/') && !String(e.path).startsWith('.antimatter') &&
-       !String(e.path).includes('node_modules/')),
+    (e: any) => {
+      if (e.type === 'install:success') return true;
+      if (e.type !== 'file:change') return false;
+      const p = String(e.path).replace(/^\\//, '');
+      return p.endsWith('.ts') && !p.startsWith('dist/') && !p.startsWith('.antimatter') && !p.includes('node_modules/');
+    },
     async (_events: any[], state: any) => {
       wf.log('Compiling TypeScript...');
       const result = await wf.exec('npm run build 2>&1');

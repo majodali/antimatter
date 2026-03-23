@@ -24,7 +24,7 @@ import type { WorkflowEvent, EventLogEntry, EventSource } from '@antimatter/work
 // ---------------------------------------------------------------------------
 
 const MAX_ENTRIES = 10_000;        // In-memory ring buffer size
-const DEDUPE_WINDOW_MS = 2_000;    // Drop duplicate events within this window
+const DEDUPE_WINDOW_MS = 5_000;    // Suppress watcher events that duplicate recent rest-api events
 const DRAIN_INTERVAL_MS = 50;      // Batch events for this long before delivering
 const COMPACT_RETAIN = 1_000;      // Keep this many entries after checkpoint on compaction
 
@@ -161,11 +161,13 @@ export class EventLog {
         ? `${event.type}:${event.path}`
         : null;
 
-      // Check dedup window
-      if (dedupeKey) {
+      // Deduplication: only suppress watcher events that duplicate recent rest-api events.
+      // rest-api events are always accepted (they represent explicit user actions).
+      // watcher events are redundant when a rest-api event for the same path was just processed.
+      if (dedupeKey && source === 'watcher') {
         const prev = this.dedupeWindow.get(dedupeKey);
         if (prev && (now - prev.loggedAt) < DEDUPE_WINDOW_MS) {
-          continue; // Skip duplicate
+          continue; // Watcher event duplicates a recent rest-api event — skip
         }
       }
 
@@ -177,8 +179,9 @@ export class EventLog {
         event,
       };
 
-      // Update dedup window
-      if (dedupeKey) {
+      // Update dedup window — only rest-api events create dedup entries
+      // (watcher events for the same path within the window will be suppressed)
+      if (dedupeKey && source === 'rest-api') {
         this.dedupeWindow.set(dedupeKey, { seq: entry.seq, loggedAt: now });
       }
 

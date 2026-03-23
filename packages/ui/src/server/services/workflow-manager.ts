@@ -755,8 +755,9 @@ export class WorkflowManager {
       const entries = await this.env.readDirectory(dir || '.');
       for (const entry of entries) {
         const path = dir ? `${dir}/${entry.name}` : entry.name;
-        // Skip .antimatter directory and node_modules
-        if (entry.name === '.antimatter' || entry.name === 'node_modules' || entry.name === '.git') continue;
+        // Skip directories that shouldn't trigger workflow rules
+        if (entry.name === '.antimatter' || entry.name === '.antimatter-cache' ||
+            entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.git') continue;
 
         if (!entry.isDirectory) {
           try {
