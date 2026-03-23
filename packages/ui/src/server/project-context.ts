@@ -109,7 +109,7 @@ const NOISE_FILES = ['.antimatter-sync.json'];
 class FileChangeNotifier {
   private watcher: Watcher | null = null;
   private onBulkChange: (() => void) | null = null;
-  private onFilteredChanges: ((events: readonly WatchEvent[]) => void) | null = null;
+  private onFilteredChanges: ((events: readonly WatchEvent[], source?: string) => void) | null = null;
 
   private pendingBroadcast: { type: string; path: string }[] = [];
   private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -146,7 +146,7 @@ class FileChangeNotifier {
     if (filtered.length === 0) return;
 
     if (this.onFilteredChanges) {
-      this.onFilteredChanges(filtered);
+      this.onFilteredChanges(filtered, 'rest-api');
     }
 
     const uiFiltered = filtered.filter(e => !this.isExplorerIgnored(e.path));
@@ -171,7 +171,7 @@ class FileChangeNotifier {
     fs: FileSystem,
     broadcast: (msg: object) => void,
     onBulkChange?: () => void,
-    onFilteredChanges?: (events: readonly WatchEvent[]) => void,
+    onFilteredChanges?: (events: readonly WatchEvent[], source?: string) => void,
   ): void {
     this.onBulkChange = onBulkChange ?? null;
     this.onFilteredChanges = onFilteredChanges ?? null;
@@ -185,7 +185,7 @@ class FileChangeNotifier {
         if (watcherFiltered.length === 0) return;
 
         if (this.onFilteredChanges) {
-          this.onFilteredChanges(watcherFiltered);
+          this.onFilteredChanges(watcherFiltered, 'watcher');
         }
 
         const uiFiltered = watcherFiltered.filter(e => !this.isExplorerIgnored(e.path));
@@ -376,6 +376,7 @@ export class ProjectContext {
   readonly eventLogger: EventLogger;
   workflowManager!: WorkflowManager;
   errorStore!: ErrorStore;
+  private eventLog?: import('./event-log.js').EventLog;
   s3SyncScheduler: S3SyncScheduler | null = null;
 
   /** WebSocket connections scoped to this project (for broadcast isolation). */
@@ -471,11 +472,18 @@ export class ProjectContext {
       });
     });
 
+    // Event log — persistent ordered event sourcing for the workflow engine
+    const { EventLog } = await import('./services/event-log.js');
+    const eventLogPath = join(this.projectPath, '.antimatter-cache', 'events.jsonl');
+    this.eventLog = new EventLog({ logPath: eventLogPath });
+    await this.eventLog.initialize();
+
     // Workflow manager
     this.workflowManager = new WorkflowManager({
       env: this.env,
       broadcast: (msg: object) => this.broadcastToClients(msg),
       errorStore: this.errorStore,
+      eventLog: this.eventLog,
       onExecStart: () => this.config.onExecStart(),
       onExecEnd: () => this.config.onExecEnd(),
     });
@@ -511,7 +519,7 @@ export class ProjectContext {
       this.env.fileSystem,
       (msg: object) => this.broadcastToClients(msg),
       () => this.s3SyncScheduler?.sync(),
-      (events) => this.workflowManager.onFileChanges(events),
+      (events, source) => this.workflowManager.onFileChanges(events, source as any),
     );
 
     this.initialized = true;
@@ -1006,6 +1014,7 @@ export class ProjectContext {
     console.log(`[project-context:${this.projectId}] Shutting down...`);
     this.fileChangeNotifier.stop();
     this.ptyManager.stop();
+    if (this.eventLog) await this.eventLog.shutdown();
     if (this.s3SyncScheduler) await this.s3SyncScheduler.shutdown();
     await this.eventLogger.shutdown();
     // Reject all pending browser automation commands

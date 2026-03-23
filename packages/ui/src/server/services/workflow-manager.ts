@@ -56,6 +56,8 @@ export interface WorkflowManagerOptions {
   readonly onExecStart?: () => void;
   /** Called when a workflow command finishes executing (e.g., to release shutdown timer). */
   readonly onExecEnd?: () => void;
+  /** Event log for persistent, ordered, deduplicated event sourcing. Optional for backward compat. */
+  readonly eventLog?: import('./event-log.js').EventLog;
 }
 
 /** Tagged definition — pairs a file path with its loaded definition function. */
@@ -86,6 +88,7 @@ export class WorkflowManager {
   private readonly statePath: string;
   private readonly onExecStart?: () => void;
   private readonly onExecEnd?: () => void;
+  private readonly eventLog?: import('./event-log.js').EventLog;
 
   /** Tracks which files were loaded in the last definition load. */
   private loadedFiles: string[] = [];
@@ -103,6 +106,73 @@ export class WorkflowManager {
     this.statePath = options.statePath ?? '.antimatter/workflow-state.json';
     this.onExecStart = options.onExecStart;
     this.onExecEnd = options.onExecEnd;
+    this.eventLog = options.eventLog;
+
+    // Subscribe to event log drain — batched events arrive here
+    if (this.eventLog) {
+      this.eventLog.subscribe(this.handleEventLogDrain.bind(this));
+    }
+  }
+
+  /**
+   * Handle a batch of events drained from the EventLog.
+   * Extracts WorkflowEvent payloads and processes them, updating the checkpoint.
+   */
+  private handleEventLogDrain(entries: import('@antimatter/workflow').EventLogEntry[]): void {
+    if (entries.length === 0) return;
+
+    const events = entries.map(e => e.event);
+    const maxSeq = entries[entries.length - 1].seq;
+
+    // Check for automation file changes in the batch
+    for (const entry of entries) {
+      if (entry.event.path) {
+        const normalized = String(entry.event.path).replace(/^\//, '');
+        if (this.isAutomationFile(normalized)) {
+          this.changedAutomationFiles.add(normalized);
+        }
+      }
+    }
+
+    if (this.changedAutomationFiles.size > 0) {
+      this.scheduleReload();
+    }
+
+    // Filter out .antimatter/ events (workflow definitions, not project files)
+    const workflowEvents = events.filter(e =>
+      !e.path || (!String(e.path).startsWith('/.antimatter/') && !String(e.path).startsWith('.antimatter/')),
+    );
+
+    if (workflowEvents.length === 0) {
+      // Still update checkpoint even if no workflow events
+      this.updateCheckpoint(maxSeq);
+      return;
+    }
+
+    if (this.held) {
+      this.pendingEvents.push(...workflowEvents);
+      return;
+    }
+
+    this.processEventsWithCheckpoint(workflowEvents, maxSeq).catch(err => {
+      console.error('[workflow-manager] Error processing event log drain:', err);
+    });
+  }
+
+  private async processEventsWithCheckpoint(
+    events: WorkflowEvent[],
+    checkpoint: number,
+  ): Promise<WorkflowInvocationResult | null> {
+    const result = await this.processEvents(events);
+    this.updateCheckpoint(checkpoint);
+    return result;
+  }
+
+  private updateCheckpoint(seq: number): void {
+    if (this.persisted) {
+      this.persisted = { ...this.persisted, lastProcessedSeq: seq };
+      // Don't save state just for checkpoint — it'll be saved on next processEvents
+    }
   }
 
   // ---- Public API ----
@@ -186,6 +256,22 @@ export class WorkflowManager {
         timestamp: new Date().toISOString(),
       }]);
     }
+
+    // Replay unprocessed events from the event log (startup catchup)
+    if (this.eventLog) {
+      const checkpoint = this.persisted?.lastProcessedSeq ?? 0;
+      const unprocessed = this.eventLog.getEntriesSince(checkpoint);
+      if (unprocessed.length > 0) {
+        console.log(`[workflow-manager] Replaying ${unprocessed.length} events from event log (checkpoint=${checkpoint})`);
+        const events = unprocessed
+          .filter(e => e.source !== 'workflow-emit') // Don't replay audit-only events
+          .map(e => e.event);
+        if (events.length > 0) {
+          const maxSeq = unprocessed[unprocessed.length - 1].seq;
+          await this.processEventsWithCheckpoint(events, maxSeq);
+        }
+      }
+    }
   }
 
   /** Pause event processing (for batch operations like git checkout). */
@@ -214,8 +300,32 @@ export class WorkflowManager {
    * If an automation file changes, the manager auto-reloads (incrementally)
    * after a short debounce.
    */
-  onFileChanges(events: readonly WatchEvent[]): void {
-    // Check for automation file changes — track which files changed for incremental reload.
+  /**
+   * Feed file change events from the FileChangeNotifier.
+   * Converts WatchEvents to WorkflowEvents.
+   *
+   * When an EventLog is configured, events are appended to the log and
+   * delivered via the drain callback (handleEventLogDrain). Otherwise,
+   * events are processed directly (legacy path).
+   */
+  onFileChanges(events: readonly WatchEvent[], source?: import('@antimatter/workflow').EventSource): void {
+    const eventSource = source ?? 'watcher';
+
+    // Convert WatchEvent → WorkflowEvent (all events, including .antimatter/)
+    const allWorkflowEvents: WorkflowEvent[] = events.map(e => ({
+      type: e.type === 'delete' ? 'file:delete' as const : 'file:change' as const,
+      path: e.path,
+      timestamp: new Date().toISOString(),
+    }));
+
+    // If EventLog is available, route through it (dedup, persist, batch drain)
+    if (this.eventLog) {
+      this.eventLog.append(allWorkflowEvents, eventSource);
+      return;
+    }
+
+    // Legacy path (no EventLog): direct processing
+    // Check for automation file changes
     for (const e of events) {
       const normalized = e.path.replace(/^\//, '');
       if (this.isAutomationFile(normalized)) {
@@ -229,13 +339,9 @@ export class WorkflowManager {
 
     if (!this.runtime) return;
 
-    const workflowEvents: WorkflowEvent[] = events
-      .filter(e => !e.path.startsWith('/.antimatter/') && !e.path.startsWith('.antimatter/'))
-      .map(e => ({
-        type: e.type === 'delete' ? 'file:delete' as const : 'file:change' as const,
-        path: e.path,
-        timestamp: new Date().toISOString(),
-      }));
+    const workflowEvents = allWorkflowEvents.filter(e =>
+      !e.path || (!String(e.path).startsWith('/.antimatter/') && !String(e.path).startsWith('.antimatter/')),
+    );
 
     if (workflowEvents.length === 0) return;
 
@@ -417,8 +523,17 @@ export class WorkflowManager {
       updatedAt: new Date().toISOString(),
       fileDeclarations,
       ruleResults: existingResults,
+      lastProcessedSeq: this.persisted?.lastProcessedSeq,
     };
     await this.saveState();
+
+    // Record internal emitted events in the event log for audit
+    if (this.eventLog && result.emittedEvents.length > 0) {
+      this.eventLog.record(
+        result.emittedEvents as WorkflowEvent[],
+        'workflow-emit',
+      );
+    }
 
     // Broadcast partial state patch to connected clients
     this.broadcastStatePatch({

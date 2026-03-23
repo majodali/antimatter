@@ -58,4 +58,8 @@ export type {
 
   // Unified application state
   ApplicationState,
+
+  // Event log
+  EventLogEntry,
+  EventSource,
 } from './types.js';

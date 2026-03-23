@@ -498,6 +498,36 @@ export interface PersistedWorkflowState<S = unknown> {
   readonly fileManifest?: Readonly<Record<string, string>>;
   /** Accumulated rule execution results — persisted across invocations. */
   readonly ruleResults?: Readonly<Record<string, PersistedRuleResult>>;
+  /** Sequence number of the last event processed from the EventLog. */
+  readonly lastProcessedSeq?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Event Log types — persistent, ordered event sourcing
+// ---------------------------------------------------------------------------
+
+/** Source of an event entering the log. */
+export type EventSource = 'watcher' | 'rest-api' | 'workflow-emit' | 'startup';
+
+/**
+ * A single entry in the append-only event log.
+ * Events are assigned monotonic sequence numbers and persisted to JSONL.
+ */
+export interface EventLogEntry {
+  /** Monotonically increasing sequence number, assigned by the log. */
+  readonly seq: number;
+  /** ISO 8601 timestamp of when the event was appended to the log. */
+  readonly loggedAt: string;
+  /** Source of the event. */
+  readonly source: EventSource;
+  /**
+   * Deduplication key — derived from (type + path) for file events.
+   * Null for non-file events (custom workflow events, project:initialize).
+   * Events with the same dedupeKey within a time window are dropped.
+   */
+  readonly dedupeKey: string | null;
+  /** The actual workflow event payload. */
+  readonly event: WorkflowEvent;
 }
 
 /**
