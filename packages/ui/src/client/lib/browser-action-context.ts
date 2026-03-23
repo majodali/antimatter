@@ -187,22 +187,26 @@ export class BrowserActionContext implements ActionContext {
     // Wait for the file to open in the editor (the FileExplorer auto-opens new files)
     await this.settle(300);
 
-    // Set content via Monaco bridge
+    // Set content via Monaco bridge and save via editor store
     if (content && window.__monacoEditor) {
       window.__monacoEditor.setValue(content);
       await this.settle(100);
 
-      // Trigger save via Ctrl+S keyboard shortcut
-      document.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 's',
-          code: 'KeyS',
-          ctrlKey: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-      await this.settle(300);
+      // Save via the editor store's saveActiveFile, which calls api.saveFile
+      // and triggers the workspace file router's onFileChange callback.
+      // This is more reliable than dispatching Ctrl+S keyboard events which
+      // may not propagate through React's synthetic event system.
+      const { useEditorStore } = await import('../stores/editorStore.js');
+      const { useProjectStore } = await import('../stores/projectStore.js');
+      const editorStore = useEditorStore.getState();
+      const projectId = useProjectStore.getState().currentProjectId;
+
+      // Update the in-memory content so saveActiveFile persists the new value
+      if (editorStore.activeFile) {
+        editorStore.updateFileContent(editorStore.activeFile, content);
+      }
+      await editorStore.saveActiveFile(projectId ?? undefined);
+      await this.settle(200);
     }
 
     await this.delay();

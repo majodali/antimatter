@@ -267,8 +267,7 @@ export default (wf: any) => {
   );
 
   wf.rule('Build TypeScript',
-    (e: any) => e.type === 'install:success' ||
-      (e.type === 'file:change' && String(e.path).endsWith('.ts') && !String(e.path).includes('.antimatter/')),
+    (e: any) => e.type === 'install:success',
     async (_events: any[], state: any) => {
       wf.log('Compiling TypeScript...');
       const result = await wf.exec('npm run build 2>&1');
@@ -568,17 +567,14 @@ async function waitForRuleResults(
     const allPresent = ruleIds.every(id => snapshot.ruleResults[id]?.status !== undefined);
     if (allPresent) return snapshot.ruleResults;
 
-    // Log progress (every poll, use console.log so it's captured)
+    // Log progress every poll (need full visibility to debug)
     const present = ruleIds.filter(id => snapshot.ruleResults[id]?.status !== undefined);
     const running = ruleIds.filter(id => !snapshot.ruleResults[id]?.status);
     const elapsed = Math.round((Date.now() - start) / 1000);
-    // Log every 15s to avoid noise
-    if (elapsed % 15 < 4) {
-      console.log(
-        `[FT-M1-001] Waiting for rules: done=[${present.join(',')}] pending=[${running.join(',')}] ` +
-        `rules=${snapshot.ruleCount} elapsed=${elapsed}s`,
-      );
-    }
+    console.log(
+      `[FT-M1-001] Waiting for rules: done=[${present.join(',')}] pending=[${running.join(',')}] ` +
+      `rules=${snapshot.ruleCount} elapsed=${elapsed}s ruleResults=${JSON.stringify(snapshot.ruleResults)}`,
+    );
 
     await new Promise(r => setTimeout(r, 3000));
   }

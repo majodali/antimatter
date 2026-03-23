@@ -496,6 +496,17 @@ export class WorkflowManager {
         });
 
         console.log('[workflow-manager] Full refresh complete');
+
+        // If no definitions were loaded (common when file was created empty
+        // and content arrives shortly after), schedule a retry. This handles
+        // the DOM "create file then write content" race condition.
+        if (this.loadedFiles.length === 0) {
+          console.log('[workflow-manager] No definitions loaded — scheduling retry in 2s');
+          setTimeout(() => {
+            this.changedAutomationFiles.add('retry');
+            this.scheduleReload();
+          }, 2000);
+        }
       } catch (err) {
         console.error('[workflow-manager] Full refresh failed:', err);
         // Report reload errors via errorStore → triggers error patch
@@ -754,9 +765,23 @@ export class WorkflowManager {
     const absoluteCompiledPath = resolve(rootPath, compiledPath);
 
     // Ensure the compiled output directory exists
-    const { mkdir } = await import('node:fs/promises');
+    const { mkdir, readFile: fsReadFile } = await import('node:fs/promises');
     const compiledDir = resolve(rootPath, '.antimatter-cache/compiled');
     await mkdir(compiledDir, { recursive: true });
+
+    // Verify source file has content before compiling.
+    // File writes via REST API may not be fully flushed when the watcher fires.
+    // Retry up to 3 times with 200ms delay if the file is empty.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const sourceContent = await fsReadFile(absoluteSourcePath, 'utf-8');
+        if (sourceContent.trim().length > 0) break;
+        console.log(`[workflow-manager] ${filePath} is empty on attempt ${attempt + 1}, retrying...`);
+      } catch {
+        console.log(`[workflow-manager] ${filePath} not readable on attempt ${attempt + 1}, retrying...`);
+      }
+      await new Promise(r => setTimeout(r, 200));
+    }
 
     // Bundle with esbuild — resolves @antimatter/* via the source condition
     // so we don't depend on dist/ being built.

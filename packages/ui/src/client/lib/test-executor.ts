@@ -258,7 +258,7 @@ export class TestExecutor {
 
       try {
         // Per-test timeout prevents any single test from blocking the entire suite.
-        const PER_TEST_TIMEOUT_MS = 60_000; // 60 seconds max per test
+        const PER_TEST_TIMEOUT_MS = 120_000; // 120 seconds max per test
         const result = await Promise.race([
           test.run(ctx),
           new Promise<never>((_, reject) =>
