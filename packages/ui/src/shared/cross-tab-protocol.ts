@@ -33,25 +33,30 @@ export interface CrossTabRunOptions {
 }
 
 // ---- Orchestrator → Executor messages ----
+// All messages include an optional `runId` to scope communication to a specific
+// test run. Stale test tabs from previous runs will have a different runId and
+// should be ignored by the orchestrator.
 
 export type OrchestratorMessage =
-  | { type: 'ping' }
-  | { type: 'run-tests'; testIds?: string[]; options?: CrossTabRunOptions }
-  | { type: 'abort' }
-  | { type: 'cleanup'; keepOpen?: boolean }
+  | { type: 'ping'; runId?: string }
+  | { type: 'run-tests'; runId?: string; testIds?: string[]; options?: CrossTabRunOptions }
+  | { type: 'abort'; runId?: string }
+  | { type: 'cleanup'; runId?: string; keepOpen?: boolean }
   | { type: 'discover-runner' };
 
 // ---- Executor → Orchestrator messages ----
+// All messages include an optional `runId` echoed from the orchestrator's command.
+// The orchestrator filters by runId to ignore responses from stale test tabs.
 
 export type ExecutorMessage =
-  | { type: 'pong'; projectId: string }
-  | { type: 'ready'; projectId: string }
-  | { type: 'test-start'; testId: string }
-  | { type: 'test-result'; result: StoredTestResult }
-  | { type: 'run-complete'; summary: TestRunSummary }
-  | { type: 'error'; message: string }
-  | { type: 'closing' }
+  | { type: 'pong'; projectId: string; runId?: string }
+  | { type: 'ready'; projectId: string; runId?: string }
+  | { type: 'test-start'; testId: string; runId?: string }
+  | { type: 'test-result'; result: StoredTestResult; runId?: string }
+  | { type: 'run-complete'; summary: TestRunSummary; runId?: string }
+  | { type: 'error'; message: string; runId?: string }
+  | { type: 'closing'; runId?: string }
   /** Incremental log lines from the test tab (flushed periodically during execution). */
-  | { type: 'test-log'; testId: string; logs: string[] }
+  | { type: 'test-log'; testId: string; logs: string[]; runId?: string }
   /** Sent by persistent test runner tab to announce availability. */
   | { type: 'runner-available'; runnerId: string };

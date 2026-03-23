@@ -92,6 +92,8 @@ export class TestOrchestrator {
   private testProjectId: string | null = null;
   private isExternalProject = false; // true when using a pre-existing project (not disposable)
   private keepTabOpen = false;
+  /** Unique ID for this test run — filters out messages from stale test tabs. */
+  private runId: string = '';
 
   // Promise resolvers for async coordination
   private readyResolve: (() => void) | null = null;
@@ -121,6 +123,11 @@ export class TestOrchestrator {
     store.clearResults();
     store.setTestTabStatus('creating');
 
+    // Generate a unique run ID to scope BroadcastChannel messages.
+    // Stale test tabs from previous runs will send messages with a different
+    // runId which will be ignored by handleMessage.
+    this.runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
     try {
       // 1. Use provided project ID, run setup() from test modules, or create a disposable project
       if (options?.projectId) {
@@ -144,8 +151,9 @@ export class TestOrchestrator {
 
       // 2. Open test tab (persistent tab with modal fallback)
       store.setTestTabStatus('loading');
-      // Cache-bust the test tab URL to prevent browser from serving stale JS
-      const url = `/?project=${encodeURIComponent(this.testProjectId!)}&testMode=true&_t=${Date.now()}`;
+      // Include runId in URL so the test executor knows its runId from the start
+      // (before receiving run-tests). Also cache-busts to prevent stale JS.
+      const url = `/?project=${encodeURIComponent(this.testProjectId!)}&testMode=true&runId=${this.runId}`;
       this.keepTabOpen = options?.keepTabOpen ?? false;
 
       await this.openOrReuseTab(url);
@@ -154,9 +162,9 @@ export class TestOrchestrator {
       await this.waitForReady(30_000);
       store.setTestTabStatus('ready');
 
-      // 4. Send run command
+      // 4. Send run command with runId so only the current test tab responds
       store.setTestTabStatus('running');
-      this.send({ type: 'run-tests', testIds: options?.testIds, options });
+      this.send({ type: 'run-tests', runId: this.runId, testIds: options?.testIds, options });
 
       // 5. Wait for completion (results arrive incrementally via messages)
       // Timeout must exceed the longest individual test timeout (e.g. M1 rule wait = 5 min)
@@ -218,6 +226,13 @@ export class TestOrchestrator {
 
   private handleMessage(event: MessageEvent<ExecutorMessage>): void {
     const msg = event.data;
+
+    // Ignore messages from stale test tabs.
+    // Once the orchestrator has a runId, only accept messages with a matching runId.
+    // This rejects messages from old tabs that don't include runId at all.
+    if (this.runId && msg.runId !== this.runId) {
+      return;
+    }
 
     switch (msg.type) {
       case 'pong':

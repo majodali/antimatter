@@ -67,7 +67,9 @@ function ProjectGate() {
     // Dynamically import test executor to avoid bundling it in normal flow
     let cleanup: (() => void) | undefined;
     import('./lib/test-executor.js').then(({ TestExecutor }) => {
-      const executor = new TestExecutor(currentProjectId);
+      const urlParams = new URLSearchParams(window.location.search);
+      const runId = urlParams.get('runId') ?? undefined;
+      const executor = new TestExecutor(currentProjectId, runId);
 
       // Wait for app to be fully rendered AND project list loaded, then signal ready.
       // The project must be in the store's projects array so Header renders correctly.

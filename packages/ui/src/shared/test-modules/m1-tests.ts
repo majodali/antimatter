@@ -250,7 +250,7 @@ describe('validate', () => {
 
 export default (wf: any) => {
   wf.rule('Install dependencies',
-    (e: any) => e.type === 'file:change' && String(e.path) === 'package.json',
+    (e: any) => e.type === 'file:change' && String(e.path).replace(/^\\//, '') === 'package.json',
     async (_events: any[], state: any) => {
       wf.log('Installing dependencies...');
       const result = await wf.exec('npm install --include=dev 2>&1');
@@ -268,7 +268,7 @@ export default (wf: any) => {
 
   wf.rule('Build TypeScript',
     (e: any) => e.type === 'install:success' ||
-      (e.type === 'file:change' && String(e.path).endsWith('.ts') && !String(e.path).startsWith('.antimatter/')),
+      (e.type === 'file:change' && String(e.path).endsWith('.ts') && !String(e.path).includes('.antimatter/')),
     async (_events: any[], state: any) => {
       wf.log('Compiling TypeScript...');
       const result = await wf.exec('npm run build 2>&1');
@@ -334,17 +334,19 @@ const BUILD_ARTIFACTS = [
 ];
 
 // Order in which files should be created via DOM (directories first, then files)
+// Order matters: .antimatter/build.ts FIRST (after dirs) so workflow rules
+// are loaded before package.json triggers the install rule.
 const FILE_CREATION_ORDER = [
+  { type: 'dir' as const, path: '.antimatter' },
   { type: 'dir' as const, path: 'src' },
   { type: 'dir' as const, path: 'test' },
-  { type: 'dir' as const, path: '.antimatter' },
+  { type: 'file' as const, path: '.antimatter/build.ts' },
   { type: 'file' as const, path: 'package.json' },
   { type: 'file' as const, path: 'tsconfig.json' },
   { type: 'file' as const, path: 'src/types.ts' },
   { type: 'file' as const, path: 'src/validator.ts' },
   { type: 'file' as const, path: 'src/index.ts' },
   { type: 'file' as const, path: 'test/validator.test.ts' },
-  { type: 'file' as const, path: '.antimatter/build.ts' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -661,18 +663,22 @@ const setupAndVerifyProject: TestModule = {
    * starts the workspace (ALB routing + project context initialization).
    */
   setup: async () => {
-    console.log(`[FT-M1-001:setup] Finding or creating '${PROJECT_NAME}' project...`);
+    console.log(`[FT-M1-001:setup] Ensuring clean '${PROJECT_NAME}' project...`);
 
-    let projectId: string;
+    // Always start fresh — delete any existing project to avoid stale
+    // workflow state, cached node_modules, partial file sets, or leftover
+    // modifications from previous FT-M1-002/003 runs.
     const existing = await findProject(PROJECT_NAME);
     if (existing) {
-      projectId = existing.id;
-      console.log(`[FT-M1-001:setup] Found existing project: ${projectId}`);
-    } else {
-      const created = await createProjectByName(PROJECT_NAME);
-      projectId = created.id;
-      console.log(`[FT-M1-001:setup] Created new project: ${projectId}`);
+      console.log(`[FT-M1-001:setup] Deleting existing project ${existing.id}...`);
+      await deleteProjectById(existing.id);
+      // Brief pause to let the workspace server clean up the project context
+      await new Promise(r => setTimeout(r, 2000));
     }
+
+    const created = await createProjectByName(PROJECT_NAME);
+    const projectId = created.id;
+    console.log(`[FT-M1-001:setup] Created fresh project: ${projectId}`);
 
     // Start workspace (shared mode reuses existing EC2 + creates ALB routing)
     console.log(`[FT-M1-001:setup] Starting workspace...`);
@@ -699,36 +705,19 @@ const setupAndVerifyProject: TestModule = {
       return { pass: false, detail: 'No project ID in URL — test tab not loaded correctly' };
     }
 
-    let createdFiles = false;
-
     try {
-      // ---- Step 1: Check if files already exist (project may be from previous run) ----
-      const tree = await ctx.getFileTree();
-      const hasFiles = tree.length > 0 && tree.some((f: any) =>
-        f.name === 'package.json' || f.path === 'package.json',
-      );
-
-      // ---- Step 2: Create files via DOM if this is a fresh project ----
-      if (!hasFiles) {
-        console.log(`[FT-M1-001] Creating ${FILE_CREATION_ORDER.length} files/dirs via DOM...`);
-        createdFiles = true;
-
-        for (const item of FILE_CREATION_ORDER) {
-          if (item.type === 'dir') {
-            console.log(`[FT-M1-001] mkdir: ${item.path}`);
-            await ctx.mkdir(item.path);
-          } else {
-            console.log(`[FT-M1-001] writeFile: ${item.path}`);
-            await ctx.writeFile(item.path, PROJECT_FILES[item.path]);
-          }
+      // ---- Step 1: Create all files via DOM (project is always fresh from setup) ----
+      console.log(`[FT-M1-001] Creating ${FILE_CREATION_ORDER.length} files/dirs via DOM...`);
+      for (const item of FILE_CREATION_ORDER) {
+        if (item.type === 'dir') {
+          console.log(`[FT-M1-001] mkdir: ${item.path}`);
+          await ctx.mkdir(item.path);
+        } else {
+          console.log(`[FT-M1-001] writeFile: ${item.path}`);
+          await ctx.writeFile(item.path, PROJECT_FILES[item.path]);
         }
-        console.log(`[FT-M1-001] All files created via DOM`);
-      } else {
-        console.log(`[FT-M1-001] Project already has files — skipping creation`);
-        // Always ensure .antimatter/build.ts is up to date (workflow rules may have changed)
-        console.log(`[FT-M1-001] Updating .antimatter/build.ts to ensure workflow rules are current...`);
-        await ctx.editFileContent('.antimatter/build.ts', PROJECT_FILES['.antimatter/build.ts']);
       }
+      console.log(`[FT-M1-001] All files created via DOM`);
 
       // ---- Step 3: Verify all source files exist on workspace ----
       const wsStart = Date.now();
@@ -809,8 +798,8 @@ const setupAndVerifyProject: TestModule = {
       return {
         pass: true,
         detail:
-          `Project '${PROJECT_NAME}' verified: ` +
-          `${Object.keys(PROJECT_FILES).length} source files (created via DOM: ${createdFiles}), ` +
+          `Project '${PROJECT_NAME}' created: ` +
+          `${Object.keys(PROJECT_FILES).length} source files via DOM, ` +
           `${BUILD_ARTIFACTS.length} build artifacts, ` +
           `all 3 rules passed (install/build/test), ` +
           `S3 sync confirmed.`,
@@ -1053,14 +1042,22 @@ const addTestAndVerify: TestModule = {
       console.log('[FT-M1-003] Opening test/validator.test.ts...');
       const currentTest = await ctx.readFile('test/validator.test.ts');
 
-      // Remove any previous isValid test and markers
+      // Remove any previous isValid test and markers, and ensure isValid is imported
       let cleanTest = currentTest
         .replace(/\n\s*it\('isValid convenience[\s\S]*?\}\);/g, '')
         .replace(/\/\/ FT-M1-003 .*\n?/g, '')
         .trimEnd() + '\n';
 
+      // Ensure isValid is in the import from ../src/validator.js
+      if (!cleanTest.includes('isValid')) {
+        cleanTest = cleanTest.replace(
+          /import \{ validate \} from '\.\.\/src\/validator\.js';/,
+          "import { validate, isValid } from '../src/validator.js';",
+        );
+      }
+
       // Add a test with a WRONG assertion (expects isValid('hello', numberSchema) to be true)
-      const failingTest = `\n  it('isValid convenience function returns boolean', () => {\n    const { isValid } = require('../src/validator.js');\n    const schema = { type: 'number' };\n    assert.strictEqual(isValid('hello', schema), true); // BUG: 'hello' is not a number\n  });\n`;
+      const failingTest = `\n  it('isValid convenience function returns boolean', () => {\n    const schema: Schema = { type: 'number' };\n    assert.strictEqual(isValid('hello', schema), true); // BUG: 'hello' is not a number\n  });\n`;
 
       const closingIdx = cleanTest.lastIndexOf('});');
       if (closingIdx === -1) {
@@ -1077,7 +1074,7 @@ const addTestAndVerify: TestModule = {
       console.log('[FT-M1-003] Test failed as expected');
 
       // ---- Step 3: Fix the test — correct the assertion ----
-      const fixedTest = `\n  it('isValid convenience function returns boolean', () => {\n    const { isValid } = require('../src/validator.js');\n    const schema = { type: 'string' };\n    assert.strictEqual(isValid('hello', schema), true);\n    assert.strictEqual(isValid(42, schema), false);\n  });\n`;
+      const fixedTest = `\n  it('isValid convenience function returns boolean', () => {\n    const schema: Schema = { type: 'string' };\n    assert.strictEqual(isValid('hello', schema), true);\n    assert.strictEqual(isValid(42, schema), false);\n  });\n`;
 
       const fixedContent = cleanTest.slice(0, closingIdx) + fixedTest + cleanTest.slice(closingIdx);
 

@@ -104,9 +104,12 @@ export class TestExecutor {
   private channel: BroadcastChannel;
   private projectId: string;
   private aborted = false;
+  /** RunId from the orchestrator — echoed on all outgoing messages. */
+  private runId: string | undefined;
 
-  constructor(projectId: string) {
+  constructor(projectId: string, runId?: string) {
     this.projectId = projectId;
+    this.runId = runId;
     this.channel = new BroadcastChannel(TEST_CHANNEL_NAME);
     this.channel.onmessage = this.handleMessage.bind(this);
   }
@@ -137,8 +140,12 @@ export class TestExecutor {
 
   /**
    * Send a message to the orchestrator tab.
+   * Automatically includes the runId if one has been received.
    */
   private send(msg: ExecutorMessage): void {
+    if (this.runId) {
+      (msg as any).runId = this.runId;
+    }
     this.channel.postMessage(msg);
   }
 
@@ -154,6 +161,13 @@ export class TestExecutor {
         break;
 
       case 'run-tests':
+        // Only respond to run-tests if runId matches (or executor has no runId yet)
+        if (this.runId && msg.runId && msg.runId !== this.runId) {
+          console.log(`[test-executor] Ignoring run-tests with different runId: ${msg.runId} (mine: ${this.runId})`);
+          return;
+        }
+        // Store/confirm the runId so all responses are scoped to this run
+        if (msg.runId) this.runId = msg.runId;
         try {
           await this.executeTests(msg.testIds, msg.options);
         } catch (err) {
