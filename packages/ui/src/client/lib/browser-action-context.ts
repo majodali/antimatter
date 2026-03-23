@@ -133,9 +133,66 @@ export class BrowserActionContext implements ActionContext {
     );
   }
 
+  // ---- Helpers ----
+
+  /**
+   * Wait for the file explorer to be in an idle state before starting a new
+   * file/folder creation. Mimics how a user would wait for:
+   * - Any pending creation input to disappear (previous creation completing)
+   * - Loading spinner to clear
+   * - The "New File" / "New Folder" button to be present and enabled
+   */
+  private async waitForExplorerIdle(operation: string): Promise<void> {
+    const deadline = Date.now() + 10_000; // 10s max wait
+    const interval = 100;
+
+    while (Date.now() < deadline) {
+      // Wait for any active creation input to disappear
+      const createInput = queryElement('file-explorer-create-input');
+      if (createInput) {
+        await new Promise(r => setTimeout(r, interval));
+        continue;
+      }
+
+      // Wait for loading state to clear
+      const loading = queryElement('file-explorer-loading');
+      if (loading) {
+        await new Promise(r => setTimeout(r, interval));
+        continue;
+      }
+
+      // Check that the New File button exists
+      const newFileBtn = queryElement('file-explorer-new-file-btn');
+      if (!newFileBtn) {
+        await new Promise(r => setTimeout(r, interval));
+        continue;
+      }
+
+      // Check button is not disabled
+      if ((newFileBtn as HTMLButtonElement).disabled) {
+        await new Promise(r => setTimeout(r, interval));
+        continue;
+      }
+
+      // Explorer is idle — ready for new creation
+      return;
+    }
+
+    throw new Error(
+      `${operation}: File explorer not idle after 10s. ` +
+      `createInput=${!!queryElement('file-explorer-create-input')}, ` +
+      `loading=${!!queryElement('file-explorer-loading')}, ` +
+      `newFileBtn=${!!queryElement('file-explorer-new-file-btn')}`,
+    );
+  }
+
   // ---- Files ----
 
   async writeFile(path: string, content: string): Promise<void> {
+    // Wait for the file explorer to be idle before starting a new file creation.
+    // A user would see the loading spinner or active creation input and wait.
+    await this.waitForExplorerIdle('writeFile');
+
     // Click the "New File" button in the file explorer
     await clickElement('file-explorer-new-file-btn', 'writeFile');
 
@@ -274,6 +331,9 @@ export class BrowserActionContext implements ActionContext {
   }
 
   async mkdir(path: string): Promise<void> {
+    // Wait for the file explorer to be idle
+    await this.waitForExplorerIdle('mkdir');
+
     // Click the "New Folder" button
     await clickElement('file-explorer-new-folder-btn', 'mkdir');
 
