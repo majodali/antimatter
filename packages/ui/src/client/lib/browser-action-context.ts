@@ -537,33 +537,27 @@ export class BrowserActionContext implements ActionContext {
     window.__monacoEditor.setValue(content);
     await this.settle(100);
 
-    // Trigger save via Ctrl+S
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 's',
-        code: 'KeyS',
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    await this.settle(300);
+    // Save via the editor store (more reliable than Ctrl+S keyboard dispatch)
+    const { useEditorStore } = await import('../stores/editorStore.js');
+    const { useProjectStore } = await import('../stores/projectStore.js');
+    const editorStore = useEditorStore.getState();
+    const projectId = useProjectStore.getState().currentProjectId;
+
+    if (editorStore.activeFile) {
+      editorStore.updateFileContent(editorStore.activeFile, content);
+    }
+    await editorStore.saveActiveFile(projectId ?? undefined);
+    await this.settle(200);
 
     await this.delay();
   }
 
   async saveActiveFile(): Promise<void> {
-    // Dispatch Ctrl+S keyboard event
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 's',
-        code: 'KeyS',
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    await this.settle(300);
+    const { useEditorStore } = await import('../stores/editorStore.js');
+    const { useProjectStore } = await import('../stores/projectStore.js');
+    const projectId = useProjectStore.getState().currentProjectId;
+    await useEditorStore.getState().saveActiveFile(projectId ?? undefined);
+    await this.settle(200);
     await this.delay();
   }
 

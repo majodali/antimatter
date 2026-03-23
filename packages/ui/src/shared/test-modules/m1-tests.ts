@@ -267,7 +267,10 @@ export default (wf: any) => {
   );
 
   wf.rule('Build TypeScript',
-    (e: any) => e.type === 'install:success',
+    (e: any) => e.type === 'install:success' ||
+      (e.type === 'file:change' && String(e.path).endsWith('.ts') &&
+       !String(e.path).startsWith('dist/') && !String(e.path).startsWith('.antimatter') &&
+       !String(e.path).includes('node_modules/')),
     async (_events: any[], state: any) => {
       wf.log('Compiling TypeScript...');
       const result = await wf.exec('npm run build 2>&1');
@@ -487,6 +490,8 @@ interface RuleResult {
 
 interface WorkflowSnapshot {
   ruleResults: Record<string, RuleResult>;
+  /** Workflow state set by rule actions (e.g. state.build = { status: 'failed' }) */
+  workflowState: Record<string, any>;
   logs: { message: string; level: string; timestamp: string }[];
   loadedFiles: string[];
   ruleCount: number;
@@ -505,17 +510,18 @@ async function getWorkflowSnapshot(
     );
     if (!res.ok) {
       console.log(`[FT-M1-001] application-state returned ${res.status} ${res.statusText}`);
-      return { ruleResults: {}, logs: [], loadedFiles: [], ruleCount: 0, lastInvocationRules: [] };
+      return { ruleResults: {}, workflowState: {}, logs: [], loadedFiles: [], ruleCount: 0, lastInvocationRules: [] };
     }
     const contentType = res.headers.get('content-type') ?? '';
     if (!contentType.includes('application/json')) {
       console.log(`[FT-M1-001] application-state returned non-JSON: ${contentType}`);
-      return { ruleResults: {}, logs: [], loadedFiles: [], ruleCount: 0, lastInvocationRules: [] };
+      return { ruleResults: {}, workflowState: {}, logs: [], loadedFiles: [], ruleCount: 0, lastInvocationRules: [] };
     }
     const data = await res.json();
     const rules = data.declarations?.rules ?? [];
     return {
       ruleResults: (data.ruleResults ?? {}) as Record<string, RuleResult>,
+      workflowState: (data.workflowState ?? {}) as Record<string, any>,
       logs: data.lastInvocation?.logs ?? [],
       loadedFiles: data.loadedFiles ?? [],
       ruleCount: rules.length,
@@ -595,14 +601,17 @@ async function waitForRuleResults(
  */
 /**
  * Wait for specific rules to reach expected statuses.
- * Uses status matching (not timestamp comparison) because builds can
- * complete within the same polling interval as the event that triggered them.
+ *
+ * Checks `workflowState[ruleId].status` which is set by the rule action
+ * (e.g. `state.build = { status: 'failed' }`). This is distinct from
+ * `ruleResults[ruleId].status` which tracks whether the rule action
+ * completed without throwing (always 'success' unless the action threw).
  */
 async function waitForRuleStatus(
   projectId: string,
   expectedStatuses: Record<string, 'success' | 'failed'>,
   timeoutMs: number,
-): Promise<Record<string, RuleResult>> {
+): Promise<Record<string, any>> {
   const start = Date.now();
   let lastLogCount = 0;
 
@@ -617,16 +626,16 @@ async function waitForRuleStatus(
       lastLogCount = snapshot.logs.length;
     }
 
-    // Check if all target rules have the expected status
+    // Check workflowState[ruleId].status (set by rule actions)
     const allMatch = Object.entries(expectedStatuses).every(([id, expected]) =>
-      snapshot.ruleResults[id]?.status === expected,
+      snapshot.workflowState[id]?.status === expected,
     );
 
-    if (allMatch) return snapshot.ruleResults;
+    if (allMatch) return snapshot.workflowState;
 
     const elapsed = Math.round((Date.now() - start) / 1000);
     const status = Object.entries(expectedStatuses).map(([id, expected]) => {
-      const actual = snapshot.ruleResults[id]?.status ?? 'none';
+      const actual = snapshot.workflowState[id]?.status ?? 'none';
       return `${id}:${actual}(want=${expected})`;
     });
     console.log(`[M1] waitForRuleStatus: [${status.join(', ')}] elapsed=${elapsed}s`);
@@ -636,8 +645,8 @@ async function waitForRuleStatus(
 
   const snapshot = await getWorkflowSnapshot(projectId);
   const missing = Object.entries(expectedStatuses)
-    .filter(([id, expected]) => snapshot.ruleResults[id]?.status !== expected)
-    .map(([id, expected]) => `${id}: want=${expected}, got=${snapshot.ruleResults[id]?.status ?? 'none'}`);
+    .filter(([id, expected]) => snapshot.workflowState[id]?.status !== expected)
+    .map(([id, expected]) => `${id}: want=${expected}, got=${snapshot.workflowState[id]?.status ?? 'none'}`);
   throw new Error(
     `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for rule statuses: [${missing.join(', ')}]`,
   );
@@ -743,12 +752,13 @@ const setupAndVerifyProject: TestModule = {
         RULE_TIMEOUT_MS,
       );
 
-      // Verify all rules passed
+      // Verify all rules passed by checking workflowState (set by rule actions)
+      const finalSnapshot = await getWorkflowSnapshot(projectId);
       const failedRules: string[] = [];
       for (const ruleId of ['install', 'build', 'test']) {
-        const result = ruleResults[ruleId];
-        if (result?.status !== 'success') {
-          failedRules.push(`${ruleId}: ${result?.status ?? 'no result'} — ${result?.error ?? 'unknown'}`);
+        const stateEntry = finalSnapshot.workflowState[ruleId];
+        if (stateEntry?.status !== 'success') {
+          failedRules.push(`${ruleId}: ${stateEntry?.status ?? 'no result'}`);
         }
       }
       if (failedRules.length > 0) {
@@ -911,27 +921,24 @@ const modifyAndRebuild: TestModule = {
       console.log('[FT-M1-002] Step 1: Editing with type error...');
       await ctx.editFileContent('src/validator.ts', brokenContent);
 
-      // Write directly via workspace API and explicitly emit file:change event
-      try {
-        const authHdrs = await getAuthHeaders();
-        console.log('[FT-M1-002] Got auth headers, writing via API...');
-        const writeRes = await fetch(`/workspace/${encodeURIComponent(projectId)}/api/files/write`, {
-          method: 'POST',
-          headers: { ...authHdrs, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: 'src/validator.ts', content: brokenContent }),
-        });
-        console.log(`[FT-M1-002] Direct API write: ${writeRes.status}`);
+      // Verify the file was saved with the broken content
+      const verifyContent = await ctx.readFile('src/validator.ts');
+      const hasBug = verifyContent.includes("return 'yes'");
+      console.log(`[FT-M1-002] File saved with bug: ${hasBug}, length=${verifyContent.length}`);
 
-        // Explicitly emit file:change to workflow engine
-        console.log('[FT-M1-002] Emitting file:change to workflow...');
-        const emitRes = await fetch(`/workspace/${encodeURIComponent(projectId)}/api/workflow/emit`, {
-          method: 'POST',
-          headers: { ...authHdrs, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ event: { type: 'file:change', path: 'src/validator.ts' } }),
-        });
-        console.log(`[FT-M1-002] Workflow emit: ${emitRes.status}`);
-      } catch (writeErr) {
-        console.error(`[FT-M1-002] Direct write/emit failed: ${writeErr}`);
+      // Also verify via workspace API
+      const wsContent = await (async () => {
+        const hdrs = await getAuthHeaders();
+        const r = await fetch(`/workspace/${encodeURIComponent(projectId)}/api/files/read?path=${encodeURIComponent('src/validator.ts')}`, { headers: hdrs });
+        if (!r.ok) return null;
+        const d = await r.json();
+        return d.content as string;
+      })();
+      const wsHasBug = wsContent?.includes("return 'yes'") ?? false;
+      console.log(`[FT-M1-002] Workspace file has bug: ${wsHasBug}, length=${wsContent?.length ?? 0}`);
+
+      if (!wsHasBug) {
+        console.log('[FT-M1-002] WARNING: workspace file does not have the bug! Save may have failed.');
       }
 
       // ---- Step 2: Wait for build to FAIL ----
