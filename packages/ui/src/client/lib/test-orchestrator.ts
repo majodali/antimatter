@@ -144,7 +144,8 @@ export class TestOrchestrator {
 
       // 2. Open test tab (persistent tab with modal fallback)
       store.setTestTabStatus('loading');
-      const url = `/?project=${encodeURIComponent(this.testProjectId!)}&testMode=true`;
+      // Cache-bust the test tab URL to prevent browser from serving stale JS
+      const url = `/?project=${encodeURIComponent(this.testProjectId!)}&testMode=true&_t=${Date.now()}`;
       this.keepTabOpen = options?.keepTabOpen ?? false;
 
       await this.openOrReuseTab(url);

@@ -595,10 +595,14 @@ async function waitForRuleResults(
  * Used by FT-M1-002+ which modify files in an already-built project.
  * Returns the updated rule results, or throws on timeout.
  */
-async function waitForRuleRerun(
+/**
+ * Wait for specific rules to reach expected statuses.
+ * Uses status matching (not timestamp comparison) because builds can
+ * complete within the same polling interval as the event that triggered them.
+ */
+async function waitForRuleStatus(
   projectId: string,
-  ruleIds: string[],
-  beforeTimestamps: Record<string, string | undefined>,
+  expectedStatuses: Record<string, 'success' | 'failed'>,
   timeoutMs: number,
 ): Promise<Record<string, RuleResult>> {
   const start = Date.now();
@@ -615,29 +619,29 @@ async function waitForRuleRerun(
       lastLogCount = snapshot.logs.length;
     }
 
-    // Check if all target rules have a NEWER timestamp than before
-    const allRerun = ruleIds.every(id => {
-      const current = snapshot.ruleResults[id]?.lastRunAt;
-      const before = beforeTimestamps[id];
-      return current && current !== before;
-    });
+    // Check if all target rules have the expected status
+    const allMatch = Object.entries(expectedStatuses).every(([id, expected]) =>
+      snapshot.ruleResults[id]?.status === expected,
+    );
 
-    if (allRerun) return snapshot.ruleResults;
+    if (allMatch) return snapshot.ruleResults;
 
     const elapsed = Math.round((Date.now() - start) / 1000);
-    const status = ruleIds.map(id => {
-      const current = snapshot.ruleResults[id]?.lastRunAt;
-      const before = beforeTimestamps[id];
-      const reran = current && current !== before;
-      return `${id}:${reran ? snapshot.ruleResults[id]?.status : 'waiting'}(cur=${current?.slice(11,19) ?? 'null'},before=${before?.slice(11,19) ?? 'null'})`;
+    const status = Object.entries(expectedStatuses).map(([id, expected]) => {
+      const actual = snapshot.ruleResults[id]?.status ?? 'none';
+      return `${id}:${actual}(want=${expected})`;
     });
-    console.log(`[M1] waitForRuleRerun: [${status.join(', ')}] elapsed=${elapsed}s`);
+    console.log(`[M1] waitForRuleStatus: [${status.join(', ')}] elapsed=${elapsed}s`);
 
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 2000));
   }
 
+  const snapshot = await getWorkflowSnapshot(projectId);
+  const missing = Object.entries(expectedStatuses)
+    .filter(([id, expected]) => snapshot.ruleResults[id]?.status !== expected)
+    .map(([id, expected]) => `${id}: want=${expected}, got=${snapshot.ruleResults[id]?.status ?? 'none'}`);
   throw new Error(
-    `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for rules to re-run: [${ruleIds.join(', ')}]`,
+    `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for rule statuses: [${missing.join(', ')}]`,
   );
 }
 
@@ -919,11 +923,6 @@ const modifyAndRebuild: TestModule = {
 
       const brokenContent = cleanContent + brokenIsValid;
 
-      // Record timestamps before edit
-      const before1 = {
-        build: snapshot.ruleResults.build?.lastRunAt,
-      };
-
       console.log('[FT-M1-002] Step 1: Editing with type error...');
       await ctx.editFileContent('src/validator.ts', brokenContent);
 
@@ -952,14 +951,7 @@ const modifyAndRebuild: TestModule = {
 
       // ---- Step 2: Wait for build to FAIL ----
       console.log('[FT-M1-002] Waiting for build to fail...');
-      const failResults = await waitForRuleRerun(projectId, ['build'], before1, RULE_TIMEOUT_MS);
-
-      if (failResults.build?.status !== 'failed') {
-        return {
-          pass: false,
-          detail: `Expected build to FAIL with type error, but status is: ${failResults.build?.status}`,
-        };
-      }
+      await waitForRuleStatus(projectId, { build: 'failed' }, RULE_TIMEOUT_MS);
       console.log('[FT-M1-002] Build failed as expected');
 
       // ---- Step 3: Verify errors appear in Problems panel ----
@@ -987,23 +979,12 @@ const modifyAndRebuild: TestModule = {
 
       const fixedContent = cleanContent + fixedIsValid;
 
-      const before2 = {
-        build: failResults.build?.lastRunAt,
-      };
-
       console.log('[FT-M1-002] Step 4: Fixing type error...');
       await ctx.editFileContent('src/validator.ts', fixedContent);
 
       // ---- Step 5: Wait for build to SUCCEED ----
       console.log('[FT-M1-002] Waiting for build to succeed...');
-      const fixResults = await waitForRuleRerun(projectId, ['build'], before2, RULE_TIMEOUT_MS);
-
-      if (fixResults.build?.status !== 'success') {
-        return {
-          pass: false,
-          detail: `Expected build to PASS after fix, but status is: ${fixResults.build?.status}`,
-        };
-      }
+      await waitForRuleStatus(projectId, { build: 'success' }, RULE_TIMEOUT_MS);
 
       // ---- Step 6: Verify errors cleared from Problems panel ----
       await new Promise(r => setTimeout(r, 1000)); // Give DOM time to update
@@ -1087,29 +1068,12 @@ const addTestAndVerify: TestModule = {
       }
       const brokenTest = cleanTest.slice(0, closingIdx) + failingTest + cleanTest.slice(closingIdx);
 
-      // Record timestamps
-      const snapshot = await getWorkflowSnapshot(projectId);
-      const before1 = {
-        build: snapshot.ruleResults.build?.lastRunAt,
-        test: snapshot.ruleResults.test?.lastRunAt,
-      };
-
       console.log('[FT-M1-003] Step 1: Adding failing test...');
       await ctx.editFileContent('test/validator.test.ts', brokenTest);
 
       // ---- Step 2: Wait for build+test to run — test should FAIL ----
       console.log('[FT-M1-003] Waiting for build+test (expecting test failure)...');
-      const failResults = await waitForRuleRerun(projectId, ['build', 'test'], before1, RULE_TIMEOUT_MS);
-
-      if (failResults.build?.status !== 'success') {
-        return { pass: false, detail: `Build failed unexpectedly: ${failResults.build?.error}` };
-      }
-      if (failResults.test?.status !== 'failed') {
-        return {
-          pass: false,
-          detail: `Expected test to FAIL but status is: ${failResults.test?.status}`,
-        };
-      }
+      await waitForRuleStatus(projectId, { build: 'success', test: 'failed' }, RULE_TIMEOUT_MS);
       console.log('[FT-M1-003] Test failed as expected');
 
       // ---- Step 3: Fix the test — correct the assertion ----
@@ -1117,24 +1081,12 @@ const addTestAndVerify: TestModule = {
 
       const fixedContent = cleanTest.slice(0, closingIdx) + fixedTest + cleanTest.slice(closingIdx);
 
-      const before2 = {
-        build: failResults.build?.lastRunAt,
-        test: failResults.test?.lastRunAt,
-      };
-
       console.log('[FT-M1-003] Step 3: Fixing test assertion...');
       await ctx.editFileContent('test/validator.test.ts', fixedContent);
 
       // ---- Step 4: Wait for test to PASS ----
       console.log('[FT-M1-003] Waiting for build+test (expecting pass)...');
-      const fixResults = await waitForRuleRerun(projectId, ['build', 'test'], before2, RULE_TIMEOUT_MS);
-
-      if (fixResults.build?.status !== 'success') {
-        return { pass: false, detail: `Build failed after fix: ${fixResults.build?.error}` };
-      }
-      if (fixResults.test?.status !== 'success') {
-        return { pass: false, detail: `Test still failing after fix: ${fixResults.test?.error}` };
-      }
+      await waitForRuleStatus(projectId, { build: 'success', test: 'success' }, RULE_TIMEOUT_MS);
 
       return {
         pass: true,
