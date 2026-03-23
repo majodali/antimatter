@@ -56,7 +56,7 @@ export class AntimatterEnvStack extends cdk.Stack {
           originAccessIdentity: oai,
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
       },
       defaultRootObject: 'index.html',
       errorResponses: [
