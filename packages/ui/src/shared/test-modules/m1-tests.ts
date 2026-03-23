@@ -927,6 +927,29 @@ const modifyAndRebuild: TestModule = {
       console.log('[FT-M1-002] Step 1: Editing with type error...');
       await ctx.editFileContent('src/validator.ts', brokenContent);
 
+      // Write directly via workspace API and explicitly emit file:change event
+      try {
+        const authHdrs = await getAuthHeaders();
+        console.log('[FT-M1-002] Got auth headers, writing via API...');
+        const writeRes = await fetch(`/workspace/${encodeURIComponent(projectId)}/api/files/write`, {
+          method: 'POST',
+          headers: { ...authHdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: 'src/validator.ts', content: brokenContent }),
+        });
+        console.log(`[FT-M1-002] Direct API write: ${writeRes.status}`);
+
+        // Explicitly emit file:change to workflow engine
+        console.log('[FT-M1-002] Emitting file:change to workflow...');
+        const emitRes = await fetch(`/workspace/${encodeURIComponent(projectId)}/api/workflow/emit`, {
+          method: 'POST',
+          headers: { ...authHdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: { type: 'file:change', path: 'src/validator.ts' } }),
+        });
+        console.log(`[FT-M1-002] Workflow emit: ${emitRes.status}`);
+      } catch (writeErr) {
+        console.error(`[FT-M1-002] Direct write/emit failed: ${writeErr}`);
+      }
+
       // ---- Step 2: Wait for build to FAIL ----
       console.log('[FT-M1-002] Waiting for build to fail...');
       const failResults = await waitForRuleRerun(projectId, ['build'], before1, RULE_TIMEOUT_MS);
