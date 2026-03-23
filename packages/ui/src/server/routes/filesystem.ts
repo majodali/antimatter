@@ -42,6 +42,16 @@ export type WorkspaceForwarder = (
   query?: Record<string, string>,
 ) => Promise<void>;
 
+/**
+ * Callback to notify the workflow engine of file mutations.
+ * Called after successful write/delete/mkdir/move/copy operations.
+ * The path is workspace-relative (e.g. 'src/validator.ts').
+ * The type is 'change' for writes/mkdir/move/copy, 'delete' for deletions.
+ */
+export type FileChangeNotify = (
+  paths: { path: string; type: 'change' | 'delete' }[],
+) => void;
+
 export interface FileRouterOptions {
   /** Returns the current explorerIgnore patterns for filtering file tree responses. */
   getExplorerIgnore?: () => string[];
@@ -52,6 +62,13 @@ export interface FileRouterOptions {
    * pick up the change on the next S3 sync cycle.
    */
   workspaceForwarder?: WorkspaceForwarder;
+  /**
+   * When provided, mutation routes emit file:change/file:delete events directly
+   * to the workflow engine. This ensures workflow rules trigger reliably even
+   * when the filesystem watcher (inotify) doesn't detect the change.
+   * The workflow manager should deduplicate against watcher-sourced events.
+   */
+  onFileChange?: FileChangeNotify;
 }
 
 export function createFileRouter(workspace: WorkspaceService, options?: FileRouterOptions): Router {
@@ -112,6 +129,8 @@ export function createFileRouter(workspace: WorkspaceService, options?: FileRout
         return res.status(400).json({ error: 'Path and content are required' });
       }
       await workspace.writeFile(path, content);
+      // Notify workflow engine of the mutation (deduplicates with watcher events)
+      options?.onFileChange?.([{ path, type: 'change' }]);
       // Best-effort forward to workspace server so file watcher + workflow trigger
       options?.workspaceForwarder?.('/write', 'POST', { path, content }).catch(err => {
         console.warn('[file-router] Workspace forward failed for write:', err.message ?? err);
@@ -133,6 +152,7 @@ export function createFileRouter(workspace: WorkspaceService, options?: FileRout
         return res.status(400).json({ error: 'Path is required' });
       }
       await workspace.mkdir(path);
+      options?.onFileChange?.([{ path, type: 'change' }]);
       options?.workspaceForwarder?.('/mkdir', 'POST', { path }).catch(err => {
         console.warn('[file-router] Workspace forward failed for mkdir:', err.message ?? err);
       });
@@ -153,6 +173,7 @@ export function createFileRouter(workspace: WorkspaceService, options?: FileRout
         return res.status(400).json({ error: 'Path parameter is required' });
       }
       await workspace.deleteFile(path);
+      options?.onFileChange?.([{ path, type: 'delete' }]);
       options?.workspaceForwarder?.('/delete', 'DELETE', undefined, { path }).catch(err => {
         console.warn('[file-router] Workspace forward failed for delete:', err.message ?? err);
       });
@@ -199,6 +220,13 @@ export function createFileRouter(workspace: WorkspaceService, options?: FileRout
           errors.push(`${src} → ${dest}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
+      if (moved > 0) {
+        const changes = entries.map((e: any) => [
+          { path: e.src, type: 'delete' as const },
+          { path: e.dest, type: 'change' as const },
+        ]).flat();
+        options?.onFileChange?.(changes);
+      }
       options?.workspaceForwarder?.('/move', 'POST', { entries }).catch(err => {
         console.warn('[file-router] Workspace forward failed for move:', err.message ?? err);
       });
@@ -227,6 +255,10 @@ export function createFileRouter(workspace: WorkspaceService, options?: FileRout
         } catch (err) {
           errors.push(`${src} → ${dest}: ${err instanceof Error ? err.message : String(err)}`);
         }
+      }
+      if (copied > 0) {
+        const changes = entries.map((e: any) => ({ path: e.dest, type: 'change' as const }));
+        options?.onFileChange?.(changes);
       }
       options?.workspaceForwarder?.('/copy', 'POST', { entries }).catch(err => {
         console.warn('[file-router] Workspace forward failed for copy:', err.message ?? err);

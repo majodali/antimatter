@@ -133,6 +133,28 @@ class FileChangeNotifier {
   setExplorerIgnore(patterns: string[]): void { this.explorerIgnorePatterns = patterns; }
   getExplorerIgnore(): string[] { return this.explorerIgnorePatterns; }
 
+  /**
+   * Emit synthetic file change events (from REST API mutations).
+   * Follows the same filtering and routing as the filesystem watcher callback,
+   * ensuring workflow rules trigger reliably even when inotify doesn't fire.
+   * Deduplication with watcher events is handled by the workflow manager's
+   * serialized event processing.
+   */
+  emitSynthetic(events: readonly { type: 'change' | 'delete'; path: string }[]): void {
+    const asWatch: WatchEvent[] = events.map(e => ({ type: e.type, path: e.path }));
+    const filtered = asWatch.filter(e => !this.isWatcherIgnored(e.path));
+    if (filtered.length === 0) return;
+
+    if (this.onFilteredChanges) {
+      this.onFilteredChanges(filtered);
+    }
+
+    const uiFiltered = filtered.filter(e => !this.isExplorerIgnored(e.path));
+    if (uiFiltered.length > 0) {
+      this.queueBroadcast(uiFiltered);
+    }
+  }
+
   private isWatcherIgnored(path: string): boolean {
     const normalized = path.startsWith('/') ? path.slice(1) : path;
     return this.watcherIgnorePatterns.some(p => normalized.startsWith(p))
@@ -724,6 +746,16 @@ export class ProjectContext {
     // Mount project-scoped API routes
     router.use('/api/files', createFileRouter(this.workspace, {
       getExplorerIgnore: () => this.fileChangeNotifier.getExplorerIgnore(),
+      onFileChange: (changes) => {
+        // Emit file:change/file:delete events directly to the workflow manager
+        // so REST API writes reliably trigger workflow rules (supplements fs watcher).
+        // The workflow manager deduplicates via its debounced event processing.
+        const events = changes.map(c => ({
+          type: c.type === 'delete' ? 'delete' as const : 'change' as const,
+          path: c.path.startsWith('/') ? c.path : `/${c.path}`,
+        }));
+        this.fileChangeNotifier.emitSynthetic(events);
+      },
     }));
     router.use('/api/build', createBuildRouter(this.workspace, {}));
     router.use('/api/agent', createAgentRouter(this.workspace, {
