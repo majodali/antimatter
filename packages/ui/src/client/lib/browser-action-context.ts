@@ -273,12 +273,25 @@ export class BrowserActionContext implements ActionContext {
     // Open the file by clicking on it in the file tree
     await this.openFileInEditor(path);
 
-    // Read content from Monaco editor
-    if (!window.__monacoEditor) {
-      throw new Error('Monaco editor not available — cannot read file content');
+    // Wait for Monaco to load the correct file's model
+    const fileName = path.split('/').pop() ?? path;
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const editor = window.__monacoEditor;
+      if (editor) {
+        const model = editor.getModel();
+        if (model) {
+          const uri = model.uri?.path ?? model.uri?.toString() ?? '';
+          if (uri.includes(fileName)) break;
+        }
+      }
+      await new Promise(r => setTimeout(r, 100));
     }
 
-    await this.settle(200);
+    if (!window.__monacoEditor?.getModel()) {
+      throw new Error(`Monaco editor model not ready for ${path} after 10s`);
+    }
+
     return window.__monacoEditor.getValue();
   }
 
@@ -587,11 +600,28 @@ export class BrowserActionContext implements ActionContext {
   async editFileContent(path: string, content: string): Promise<void> {
     // Open the file first
     await this.openFileInEditor(path);
-    await this.settle(200);
 
-    // Set content via Monaco bridge
-    if (!window.__monacoEditor) {
-      throw new Error('Monaco editor not available — cannot edit file content');
+    // Wait for Monaco to have the correct file's model loaded.
+    // The editor instance exists (window.__monacoEditor) but the model
+    // may not be attached yet, or may still be the previous file's model.
+    const fileName = path.split('/').pop() ?? path;
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const editor = window.__monacoEditor;
+      if (editor) {
+        const model = editor.getModel();
+        if (model) {
+          const uri = model.uri?.path ?? model.uri?.toString() ?? '';
+          if (uri.includes(fileName)) {
+            break; // Correct model is loaded
+          }
+        }
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    if (!window.__monacoEditor?.getModel()) {
+      throw new Error(`Monaco editor model not ready for ${path} after 10s`);
     }
 
     window.__monacoEditor.setValue(content);
