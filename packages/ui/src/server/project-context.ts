@@ -86,6 +86,8 @@ export interface SharedConfig {
   eventBusName: string;
   getDeployLambdaClient: () => DeployLambdaClient;
   getDeployCloudfrontClient: () => DeployCloudfrontClient;
+  /** S3 bucket for the public website (CloudFront origin). Used for package publishing. */
+  websiteBucket: string;
   /** Called when a workflow command starts — holds global idle shutdown. */
   onExecStart: () => void;
   /** Called when a workflow command ends — releases global idle shutdown hold. */

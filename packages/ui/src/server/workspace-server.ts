@@ -51,6 +51,7 @@ import type { SharedConfig } from './project-context.js';
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const PROJECT_ID = process.env.PROJECT_ID || '';
 const PROJECTS_BUCKET = process.env.PROJECTS_BUCKET || '';
+const WEBSITE_BUCKET = process.env.WEBSITE_BUCKET || '';
 const SESSION_TOKEN = process.env.SESSION_TOKEN || '';
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/workspace/data';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
@@ -209,6 +210,7 @@ const contextInitPromises = new Map<string, Promise<ProjectContext>>();
 const sharedConfig: SharedConfig = {
   workspaceRoot: WORKSPACE_ROOT,
   projectsBucket: PROJECTS_BUCKET,
+  websiteBucket: WEBSITE_BUCKET,
   anthropicApiKey: ANTHROPIC_API_KEY,
   s3Client: new S3Client({}),
   ssmClient: new SSMClient({}),

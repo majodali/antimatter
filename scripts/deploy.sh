@@ -40,6 +40,12 @@ resolve_bucket() {
     --output text 2>/dev/null
 }
 
+resolve_website_bucket() {
+  aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+    --query "Stacks[0].Outputs[?OutputKey=='WebsiteBucketName'].OutputValue" \
+    --output text 2>/dev/null
+}
+
 resolve_instance() {
   aws ec2 describe-instances \
     --filters "Name=tag:Name,Values=*antimatter-workspace*" "Name=instance-state-name,Values=running" \
@@ -99,16 +105,29 @@ if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
 else
   log "Restarting workspace server on $INSTANCE_ID..."
 
+  # Resolve website bucket for package publishing
+  WEBSITE_BUCKET=$(resolve_website_bucket)
+  if [ -z "$WEBSITE_BUCKET" ] || [ "$WEBSITE_BUCKET" = "None" ]; then
+    warn "Could not resolve website bucket — WEBSITE_BUCKET will not be set"
+    WEBSITE_BUCKET=""
+  fi
+
   # Steps:
-  # 1. Ensure config.env has the correct bucket name (fixes stale config from old stacks)
+  # 1. Ensure config.env has the correct bucket names (fixes stale config from old stacks)
   # 2. Download the bundle directly from S3 (don't rely on systemd ExecStartPre which
   #    may have a stale bucket reference)
   # 3. Restart the workspace server via systemctl
   # 4. Verify the new bundle is loaded and healthy
+  WS_CMDS="sed -i \"s|PROJECTS_BUCKET=.*|PROJECTS_BUCKET=${BUCKET}|\" /opt/antimatter/config.env"
+  if [ -n "$WEBSITE_BUCKET" ]; then
+    WS_CMDS="${WS_CMDS} && (grep -q WEBSITE_BUCKET /opt/antimatter/config.env && sed -i \"s|WEBSITE_BUCKET=.*|WEBSITE_BUCKET=${WEBSITE_BUCKET}|\" /opt/antimatter/config.env || echo \"WEBSITE_BUCKET=${WEBSITE_BUCKET}\" >> /opt/antimatter/config.env)"
+  fi
+  WS_CMDS="${WS_CMDS} && aws s3 cp s3://${BUCKET}/workspace-server/workspace-server.js /opt/antimatter/workspace-server.js && systemctl restart workspace-server && sleep 5 && systemctl is-active workspace-server && echo Service_active || echo WARNING_service_not_active && ls -la /opt/antimatter/workspace-server.js && curl -sf http://localhost:8080/health && echo Health_check_OK || echo WARNING_health_check_failed"
+
   CMD_ID=$(MSYS_NO_PATHCONV=1 aws ssm send-command \
     --instance-ids "$INSTANCE_ID" \
     --document-name "AWS-RunShellScript" \
-    --parameters '{"commands":["sed -i \"s|PROJECTS_BUCKET=.*|PROJECTS_BUCKET='"$BUCKET"'|\" /opt/antimatter/config.env","aws s3 cp s3://'"$BUCKET"'/workspace-server/workspace-server.js /opt/antimatter/workspace-server.js","systemctl restart workspace-server","sleep 5","systemctl is-active workspace-server && echo Service_active || echo WARNING_service_not_active","ls -la /opt/antimatter/workspace-server.js","curl -sf http://localhost:8080/health && echo Health_check_OK || echo WARNING_health_check_failed"]}' \
+    --parameters "{\"commands\":[\"${WS_CMDS}\"]}" \
     --query 'Command.CommandId' \
     --output text 2>/dev/null)
 

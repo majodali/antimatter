@@ -64,13 +64,13 @@ export class AntimatterEnvStack extends cdk.Stack {
           httpStatus: 404,
           responseHttpStatus: 200,
           responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
+          ttl: cdk.Duration.seconds(0),
         },
         {
           httpStatus: 403,
           responseHttpStatus: 200,
           responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
+          ttl: cdk.Duration.seconds(0),
         },
       ],
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
@@ -342,6 +342,11 @@ export class AntimatterEnvStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'WebsiteURL', {
       value: `https://${distribution.distributionDomainName}`,
       description: `CloudFront URL for environment ${envId}`,
+    });
+
+    new cdk.CfnOutput(this, 'WebsiteBucketName', {
+      value: websiteBucket.bucketName,
+      description: `Website S3 bucket for environment ${envId}`,
     });
 
     new cdk.CfnOutput(this, 'ApiURL', {

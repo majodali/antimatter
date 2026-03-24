@@ -886,17 +886,18 @@ export class WorkflowManager {
     await mkdir(compiledDir, { recursive: true });
 
     // Verify source file has content before compiling.
-    // File writes via REST API may not be fully flushed when the watcher fires.
-    // Retry up to 3 times with 200ms delay if the file is empty.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const sourceContent = await fsReadFile(absoluteSourcePath, 'utf-8');
-        if (sourceContent.trim().length > 0) break;
-        console.log(`[workflow-manager] ${filePath} is empty on attempt ${attempt + 1}, retrying...`);
-      } catch {
-        console.log(`[workflow-manager] ${filePath} not readable on attempt ${attempt + 1}, retrying...`);
+    // The DOM file creation flow creates an empty file first, then writes content
+    // in a separate API call. Skip empty files — the content write will trigger
+    // another file:change event which will schedule a new reload.
+    try {
+      const sourceContent = await fsReadFile(absoluteSourcePath, 'utf-8');
+      if (sourceContent.trim().length === 0) {
+        console.log(`[workflow-manager] ${filePath} is empty — skipping (will reload when content arrives)`);
+        return null;
       }
-      await new Promise(r => setTimeout(r, 200));
+    } catch {
+      console.log(`[workflow-manager] ${filePath} not readable — skipping`);
+      return null;
     }
 
     // Bundle with esbuild — resolves @antimatter/* via the source condition
