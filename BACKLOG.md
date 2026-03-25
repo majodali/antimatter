@@ -73,10 +73,12 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 - Lambda dual-write (forward mutations to workspace when running)
 - File explorer indicators (error/changed markers on tree nodes)
 - Multi-select for bulk operations
+- File search (find files by name/path, Cmd+P integration)
 
 **Usability:**
 - File explorer error indicators on tree nodes
 - Tab overflow: replace scrollbar with left/right navigation buttons
+- Show/hide dot files in explorer (toggle for .gitignore, .antimatter, etc.)
 
 ### Projects Service
 
@@ -121,6 +123,8 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 **Remaining work:**
 - Build panel: display rule list with status, manual execution, widget rendering
 - Widget system: button/toggle/status widgets from workflow declarations
+- Build commands executed in terminal (visible output, not hidden subprocess)
+- Review build and deploy panel layout
 - In-browser type checking (Monaco language services without workspace round-trip)
 
 ### Tests Service
@@ -137,6 +141,10 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 | FT-XTAB-006 | Header dropdown shows lock icon for locked projects | test-implemented (missing data-testid) |
 
 **Remaining work:**
+- Display all project tests in test panel (not just functional tests)
+- Test results persisted in backend (workspace + S3), dynamically updated
+- Tests with multiple runners show results per runner (columns in test panel)
+- Double-click on test result navigates to the test case source
 - In-IDE test runner panel (run and view results without terminal)
 - Test definitions as project-registered resources
 - Headless test execution (server-side Puppeteer)
@@ -204,6 +212,7 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 **Usability:**
 - Problems panel click/double-click navigation to exact position ✅ (implemented)
 - Editor error highlighting uses word boundary ✅ (implemented)
+- Double-click on UI elements (panels, buttons, labels) should not highlight element text (prevent user-select on interactive elements)
 
 ### Terminal
 
@@ -224,14 +233,18 @@ Prioritized items ready for implementation. Pulled from Tier 2, ordered by impac
 |----------|------|---------|-------------|
 | 1 | **Chat panel simplification** | Agents | Migrate from SSE to WebSocket send+subscribe. Remove streaming code, simplify to fire-and-forget command + event subscription. |
 | 2 | **File annotations** | Files | Unified annotation model — errors, warnings, bookmarks. Source-agnostic (tsc, eslint, custom). Powers Problems panel, editor decorations, file explorer indicators. |
-| 3 | **Build/Deploy panel** | Builds | Display workflow rules with status, manual execution. Render widget declarations from build.ts/deploy.ts. |
-| 4 | **M2 planning** | All | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
-| 5 | **Git panel UI** | Projects | Visual stage/unstage, commit message entry, push/pull buttons. Requires the Git API tests (FT-PROJ-004/005) as foundation. |
-| 6 | **Command palette** | ClientAutomation | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
-| 7 | **Full-text search** | Files | Search across project files with results panel (Cmd+Shift+F). |
-| 8 | **Functional demos** | Tests | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
-| 9 | **FT-XTAB-006 fix** | Tests | Add `data-testid="project-lock-icon"` to Header lock indicators. |
-| 10 | **FT-WS-001 fix** | Workspace | Fix test isolation — file tree empties after earlier DOM tests. |
+| 3 | **Build/Deploy panel review** | Builds | Review layout. Display workflow rules with status, manual execution. Build commands in terminal. Render widget declarations from build.ts/deploy.ts. |
+| 4 | **Test panel improvements** | Tests | Display all project tests. Persist results to backend (workspace + S3). Multiple runner columns. Double-click navigates to test source. |
+| 5 | **M2 planning** | All | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
+| 6 | **Git panel UI** | Projects | Visual stage/unstage, commit message entry, push/pull buttons. |
+| 7 | **UI polish: prevent text selection** | Editor | Double-click on interactive UI elements should not highlight text. Apply `user-select: none` to panels, buttons, labels, tree items. |
+| 8 | **File search** | Files | Find files by name/path. Integrates with command palette (Cmd+P). |
+| 9 | **Show/hide dot files** | Files | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
+| 10 | **Command palette** | ClientAutomation | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
+| 11 | **Full-text search** | Files | Search across project files with results panel (Cmd+Shift+F). |
+| 12 | **Functional demos** | Tests | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
+| 13 | **FT-XTAB-006 fix** | Tests | Add `data-testid="project-lock-icon"` to Header lock indicators. |
+| 14 | **FT-WS-001 fix** | Workspace | Fix test isolation — file tree empties after earlier DOM tests. |
 
 ---
 
