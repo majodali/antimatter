@@ -159,6 +159,11 @@ class WorkspaceConnection {
     }
   }
 
+  /** Whether the WebSocket is currently connected and ready to send. */
+  isConnected(): boolean {
+    return this.state === 'CONNECTED' && this.ws?.readyState === WebSocket.OPEN;
+  }
+
   /** Get the underlying WebSocket (for legacy compatibility). */
   getWebSocket(): WebSocket | null {
     return this.ws;
@@ -166,6 +171,8 @@ class WorkspaceConnection {
 
   /**
    * Subscribe to incoming messages, optionally filtered by message type.
+   * Supports prefix matching with '*' suffix (e.g., 'agents.chats.*' matches
+   * 'agents.chats.message', 'agents.chats.done', etc.).
    * Returns an unsubscribe function.
    */
   onMessage(handler: MessageHandler, filter?: { type?: string }): () => void {
@@ -270,9 +277,12 @@ class WorkspaceConnection {
         this.lastPongTime = Date.now();
       }
 
-      // Dispatch to type-filtered subscribers
+      // Dispatch to type-filtered subscribers (supports prefix matching with '*' suffix)
       for (const sub of this.messageSubscriptions) {
-        if (!sub.type || sub.type === msg.type) {
+        const matches = !sub.type
+          || sub.type === msg.type
+          || (sub.type.endsWith('*') && msg.type?.startsWith(sub.type.slice(0, -1)));
+        if (matches) {
           try {
             sub.handler(msg);
           } catch (err) {

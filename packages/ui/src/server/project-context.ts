@@ -895,6 +895,16 @@ export class ProjectContext {
               console.error(`[project-context:${this.projectId}] Workflow reload failed:`, err);
             });
             break;
+          case 'agents.chats.send':
+            // Chat message via WebSocket — same pipeline as REST POST /agent/chat
+            if (msg.message) {
+              import('./routes/agent.js').then(({ processChatMessage }) => {
+                processChatMessage(msg.message, this.workspace, (m: object) => this.broadcastToClients(m));
+              }).catch(err => {
+                console.error(`[project-context:${this.projectId}] Chat send failed:`, err);
+              });
+            }
+            break;
           case 'automation-response':
             this.handleAutomationResponse(msg);
             break;

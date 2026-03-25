@@ -48,19 +48,19 @@ export function ChatPanel() {
     }
   }, []);
 
-  // Subscribe to agent:chat WebSocket events
+  // Subscribe to canonical agent chat WebSocket events (agents.chats.*)
   useEffect(() => {
     const unsub = workspaceConnection.onMessage((msg: any) => {
       const msgId = streamingMsgIdRef.current;
       if (!msgId) return;
 
-      switch (msg.event) {
-        case 'text':
+      switch (msg.type) {
+        case 'agents.chats.message':
           if (msg.delta) {
             useChatStore.getState().appendToMessage(msgId, msg.delta);
           }
           break;
-        case 'tool-call':
+        case 'agents.chats.toolCall':
           if (msg.toolCall) {
             useChatStore.getState().appendToMessage(
               msgId,
@@ -68,24 +68,24 @@ export function ChatPanel() {
             );
           }
           break;
-        case 'tool-result':
+        case 'agents.chats.toolResult':
           // Tool results handled server-side
           break;
-        case 'handoff':
+        case 'agents.chats.handoff':
           eventLog.info('chat', `Agent handoff: ${msg.fromRole} → ${msg.toRole}`);
           useChatStore.getState().addMessage({
             role: 'system',
             content: `Agent handoff: ${msg.fromRole} → ${msg.toRole}`,
           });
           break;
-        case 'error':
+        case 'agents.chats.error':
           eventLog.error('chat', 'Agent error', msg.error);
           useChatStore.getState().appendToMessage(msgId, `\n\n**Error:** ${msg.error}`);
           useChatStore.getState().finalizeStreaming();
           useChatStore.getState().setTyping(false);
           streamingMsgIdRef.current = null;
           break;
-        case 'done':
+        case 'agents.chats.done':
           eventLog.info('chat', 'Response complete');
           if (msg.agentRole) {
             useChatStore.getState().setMessageAgentRole(msgId, msg.agentRole);
@@ -95,7 +95,7 @@ export function ChatPanel() {
           streamingMsgIdRef.current = null;
           break;
       }
-    }, { type: 'agent:chat' });
+    }, { type: 'agents.chats.*' });
 
     return unsub;
   }, []);

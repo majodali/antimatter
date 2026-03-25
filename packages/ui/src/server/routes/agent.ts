@@ -13,8 +13,9 @@ export function createAgentRouter(workspace: WorkspaceService, options?: AgentRo
    * POST /chat — fire-and-forget chat endpoint.
    *
    * Accepts a message, starts processing asynchronously, and returns immediately.
-   * Chat events are broadcast over the WebSocket as `agent:chat` messages.
-   * Falls back to synchronous JSON response if no broadcast function is available.
+   * Chat events are broadcast over the WebSocket using canonical service-interface
+   * event types (agents.chats.*). Falls back to synchronous JSON response when
+   * no broadcast function is available (Lambda).
    */
   router.post('/chat', async (req, res) => {
     try {
@@ -25,45 +26,9 @@ export function createAgentRouter(workspace: WorkspaceService, options?: AgentRo
       }
 
       if (options?.broadcast) {
-        const broadcast = options.broadcast;
-
         // Return immediately — events delivered via WebSocket
         res.json({ accepted: true });
-
-        // Process in background
-        try {
-          const result = await workspace.chatStream(
-            message,
-            {
-              onText: (delta) => {
-                broadcast({ type: 'agent:chat', event: 'text', delta });
-              },
-              onToolCall: (toolCall) => {
-                broadcast({ type: 'agent:chat', event: 'tool-call', toolCall });
-              },
-              onToolResult: (toolResult) => {
-                broadcast({ type: 'agent:chat', event: 'tool-result', toolResult });
-              },
-              onHandoff: (fromRole, toRole) => {
-                broadcast({ type: 'agent:chat', event: 'handoff', fromRole, toRole });
-              },
-            },
-          );
-
-          broadcast({
-            type: 'agent:chat',
-            event: 'done',
-            response: result.response.content,
-            usage: result.response.usage,
-            agentRole: result.agentRole,
-          });
-        } catch (error) {
-          broadcast({
-            type: 'agent:chat',
-            event: 'error',
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        processChatMessage(message, workspace, options.broadcast);
       } else {
         // No broadcast — synchronous JSON response (Lambda/fallback)
         const result = await workspace.chat(message);
@@ -160,4 +125,55 @@ export function createAgentRouter(workspace: WorkspaceService, options?: AgentRo
   });
 
   return router;
+}
+
+/**
+ * Process a chat message asynchronously, broadcasting events over WebSocket.
+ * Extracted so both REST POST and WebSocket send can use the same pipeline.
+ *
+ * Events use canonical service-interface types:
+ * - agents.chats.message  — incremental text delta
+ * - agents.chats.toolCall — tool invocation
+ * - agents.chats.toolResult — tool execution result
+ * - agents.chats.done     — completion with full response + usage
+ * - agents.chats.error    — processing error
+ */
+export function processChatMessage(
+  message: string,
+  workspace: WorkspaceService,
+  broadcast: (msg: object) => void,
+): void {
+  (async () => {
+    try {
+      const result = await workspace.chatStream(
+        message,
+        {
+          onText: (delta) => {
+            broadcast({ type: 'agents.chats.message', delta });
+          },
+          onToolCall: (toolCall) => {
+            broadcast({ type: 'agents.chats.toolCall', toolCall });
+          },
+          onToolResult: (toolResult) => {
+            broadcast({ type: 'agents.chats.toolResult', toolResult });
+          },
+          onHandoff: (fromRole, toRole) => {
+            broadcast({ type: 'agents.chats.handoff', fromRole, toRole });
+          },
+        },
+      );
+
+      broadcast({
+        type: 'agents.chats.done',
+        response: result.response.content,
+        usage: result.response.usage,
+        agentRole: result.agentRole,
+      });
+    } catch (error) {
+      broadcast({
+        type: 'agents.chats.error',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  })();
 }

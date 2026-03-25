@@ -115,12 +115,7 @@ function unwrapOrThrow<T>(response: ServiceResponse<T>, context: string): T {
 // Workspace-aware base URL helpers (shared routing state from rest-transport)
 // ---------------------------------------------------------------------------
 
-function agentBase(projectId?: string): string {
-  if (projectId && _hasActiveWorkspace(projectId)) {
-    return `/workspace/${projectId}/api/agent`;
-  }
-  return projectId ? `/api/projects/${projectId}/agent` : '/api/agent';
-}
+// agentBase removed — agent operations wired through ServiceClient + WebSocket.
 
 function buildBase(projectId?: string): string {
   if (projectId && _hasActiveWorkspace(projectId)) {
@@ -288,29 +283,27 @@ export async function clearChatHistory(projectId?: string): Promise<void> {
   unwrapOrThrow(res, 'clearChatHistory');
 }
 
-export interface ChatStreamEvent {
-  type: 'text' | 'tool-call' | 'tool-result' | 'done' | 'error' | 'handoff';
-  delta?: string;
-  toolCall?: { id: string; name: string; parameters: Record<string, unknown> };
-  toolResult?: { toolCallId: string; content: string; isError?: boolean };
-  response?: string;
-  usage?: { inputTokens: number; outputTokens: number };
-  agentRole?: string;
-  fromRole?: string;
-  toRole?: string;
-  error?: string;
-}
+// ChatStreamEvent removed — events use canonical service-interface types
+// (agents.chats.message, agents.chats.toolCall, agents.chats.done, etc.)
+// delivered over WebSocket. Subscribe via:
+//   workspaceConnection.onMessage(handler, { type: 'agents.chats.*' })
 
 /**
- * Send a chat message to the agent. The server processes it asynchronously
- * and broadcasts incremental events over the WebSocket as `agent:chat` messages.
+ * Send a chat message to the agent via WebSocket.
  *
- * The caller should subscribe to WebSocket `agent:chat` events via
- * `workspaceConnection.onMessage(handler, { type: 'agent:chat' })` before calling this.
- *
- * @returns immediately once the server accepts the message
+ * The server processes it asynchronously and broadcasts incremental events
+ * over the WebSocket as `agents.chats.*` messages. Falls back to REST POST
+ * when the WebSocket is not connected.
  */
 export async function sendChatMessage(message: string, projectId?: string): Promise<void> {
+  // Prefer WebSocket when connected — avoids the REST round-trip
+  const { workspaceConnection } = await import('./workspace-connection.js');
+  if (workspaceConnection.isConnected()) {
+    workspaceConnection.send({ type: 'agents.chats.send', message });
+    return;
+  }
+
+  // Fallback to REST when WebSocket is down
   const pid = projectId ?? '';
   const res = await client.command(
     { type: 'agents.chats.send', projectId: pid, message } as any,
@@ -497,16 +490,22 @@ export async function getWorkspaceWsUrl(projectId: string, sessionToken: string)
 // ---------------------------------------------------------------------------
 
 export async function fetchChatHistory(projectId?: string): Promise<any[]> {
-  const { messages } = await apiFetch<{ messages: any[] }>(`${agentBase(projectId)}/chat/history`);
-  return messages;
+  const pid = projectId ?? '';
+  const res = await client.query(
+    { type: 'agents.chats.history', projectId: pid } as any,
+    pid || undefined,
+  );
+  const data = unwrapOrThrow(res, 'fetchChatHistory');
+  return (data as any).messages ?? [];
 }
 
 export async function saveChatHistory(messages: any[], projectId?: string): Promise<void> {
-  await apiFetch<{ success: boolean }>(`${agentBase(projectId)}/chat/history`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
-  });
+  const pid = projectId ?? '';
+  const res = await client.command(
+    { type: 'agents.chats.history', projectId: pid, messages } as any,
+    pid || undefined,
+  );
+  unwrapOrThrow(res, 'saveChatHistory');
 }
 
 // ---------------------------------------------------------------------------
