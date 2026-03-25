@@ -27,6 +27,86 @@ const HAND_CRAFTED_OPS = new Set([
   'workspaces.status',
 ]);
 
+// Operations defined in service-interface but not yet implemented on the server.
+// These are skipped to avoid registering tools that would always fail.
+const NOT_YET_AVAILABLE = new Set([
+  // File annotations — ErrorStore exists but no REST endpoint yet
+  'files.annotate',
+  'files.clearAnnotations',
+  'files.annotations',
+  // Agent chat — works via REST+WebSocket but not automation API
+  'agents.chats.create',
+  'agents.chats.send',
+  'agents.chats.delete',
+  'agents.chats.list',
+  'agents.chats.get',
+  'agents.chats.history',
+  // Deployed resources — not implemented
+  'deployedResources.register',
+  'deployedResources.deregister',
+  'deployedResources.update',
+  'deployedResources.list',
+  'deployedResources.get',
+  // Terminals — not exposed via automation API
+  'workspaces.terminals.create',
+  'workspaces.terminals.close',
+  'workspaces.terminals.list',
+  // Tests
+  'tests.register',
+  'tests.runners',
+  // Auth
+  'auth.currentUser',
+  // Build config (no direct automation command)
+  'builds.configurations.set',
+  'builds.configurations.list',
+  'builds.rules.list',
+  'builds.triggers.list',
+  // Observability
+  'observability.events.list',
+  // Client automation
+  'clients.list',
+  'clients.automation.execute',
+]);
+
+// ---------------------------------------------------------------------------
+// Service-interface → automation command name translation
+// ---------------------------------------------------------------------------
+// The service-interface uses plural namespaces (files.write, projects.status)
+// while the automation API uses singular names (file.write, git.status).
+// This map translates for workspace/browser operations dispatched via automation API.
+
+const AUTOMATION_COMMAND_MAP: Record<string, string> = {
+  // Files
+  'files.read':             'file.read',
+  'files.write':            'file.write',
+  'files.delete':           'file.delete',
+  'files.mkdir':            'file.mkdir',
+  'files.tree':             'file.tree',
+  'files.move':             'file.move',
+  'files.copy':             'file.copy',
+  'files.exists':           'file.exists',
+  // Git (projects.* VCS operations map to git.*)
+  'projects.status':        'git.status',
+  'projects.stage':         'git.stage',
+  'projects.unstage':       'git.unstage',
+  'projects.commit':        'git.commit',
+  'projects.push':          'git.push',
+  'projects.pull':          'git.pull',
+  // Build/workflow
+  'builds.triggers.invoke': 'workflow.emit',
+  'builds.results.list':    'build.results',
+  // Tests (browser-relayed)
+  'tests.list':             'tests.list',
+  'tests.results':          'tests.results',
+  // Editor (browser-relayed)
+  'clients.automation.execute': 'commands.list',
+  // Workflow
+  'workflow.state':         'workflow.state',
+  'workflow.errors':        'workflow.errors',
+  // Client
+  'clients.list':           'commands.list',
+};
+
 // ---------------------------------------------------------------------------
 // Platform operations that go through Lambda REST, not automation API
 // ---------------------------------------------------------------------------
@@ -72,8 +152,9 @@ export function registerGeneratedTools(
   let registered = 0;
 
   for (const [opType, meta] of Object.entries(ALL_OPERATIONS)) {
-    // Skip hand-crafted overrides
+    // Skip hand-crafted overrides and unimplemented operations
     if (HAND_CRAFTED_OPS.has(opType)) continue;
+    if (NOT_YET_AVAILABLE.has(opType)) continue;
 
     const toolName = toToolName(opType);
 
@@ -101,7 +182,9 @@ export function registerGeneratedTools(
         }
 
         // Workspace and browser operations go through automation API
-        const result = await client.execute(opType, opParams, pid);
+        // Translate service-interface operation type to automation command name
+        const automationCmd = AUTOMATION_COMMAND_MAP[opType] ?? opType;
+        const result = await client.execute(automationCmd, opParams, pid);
 
         if (!result.ok) {
           return {
