@@ -13,339 +13,242 @@
 - **in-progress** — Work underway (design, implementation, or test catchup).
 - **planned** — Not started. Summary description only.
 
-**Test case status** (rows nested under parent feature):
-
-- **defined** — Test case described, no test code yet.
-- **test-implemented** — Test code written, not yet passing.
-- **test-passing** — Test passes.
-
-A feature becomes `done` when ALL its test cases are `test-passing`.
+**Test case status:** `defined` | `test-implemented` | `test-passing`
 
 **Test case ID convention:** `FT-{AREA}-{NNN}` (e.g., `FT-EDIT-001`, `FT-BUILD-002`)
 
 ---
 
-## Current Focus: Self-Hosted Development
+## Tier 1: Roadmap
 
-**Objective:** Move to 100% online self-hosted development. Desktop Claude Code and local tools are no longer needed.
+Big-ticket items that span multiple services or introduce new capabilities.
 
-### Milestones
-
-| # | Milestone | Status | Description |
-|---|-----------|--------|-------------|
-| M1 | **Toy project edit/build/test/deploy** | in-progress | Manually create, edit, build, test, and deploy a toy TypeScript project (json-validator) entirely from within the IDE |
-| M2 | **Self-host Antimatter** | planned | Perform code changes, builds, tests, and deployments on Antimatter itself entirely from within the IDE |
-| M3 | **Claude Code remote driving** | planned | Claude Code (local CLI) drives the IDE remotely via the Automation API — editing, building, testing, deploying |
-| M4 | **Native AI agent** | planned | Built-in AI agent replaces Claude Code, using the same Automation API and service interface |
+| # | Item | Status | Description |
+|---|------|--------|-------------|
+| M1 | **Toy project edit/build/test/deploy** | **done** | Create, edit, build, test, and deploy json-validator entirely from within the IDE. 5/5 functional tests passing (FT-M1-001 through FT-M1-005). |
+| M2 | **Build & deploy a web app** | planned | Create, build, test, and deploy a real web application (SPA or API server) from within the IDE. Validates the full development workflow for a realistic project beyond a library. |
+| M3 | **Self-host Antimatter** | planned | Perform code changes, builds, tests, and deployments on Antimatter itself entirely from within the IDE. |
+| M4 | **Claude Code remote driving** | planned | Claude Code (local CLI) drives the IDE remotely via the Automation API — editing, building, testing, deploying. MCP server infrastructure already exists (`@antimatter/mcp-server`). |
+| M5 | **Native AI agent** | planned | Built-in AI agent replaces Claude Code, using the same Automation API and service interface. |
+| R1 | **Functional demos** | planned | Extend UI/DOM functional test infrastructure to support scripted demos. Animated walkthroughs of IDE features for onboarding, documentation, and showcase. Reuses BrowserActionContext, adds pacing/narration/highlighting. |
+| R2 | **WebSocket protocol migration** | planned | Move from ad-hoc WebSocket messages to typed ServerFrame format from `@antimatter/service-interface`. Enables EventTransport for all services. |
+| R3 | **Project-OS foundation** | planned | Entity model, literate editor, example workshop — see `docs/project-os.md`. |
+| R4 | **Multi-user collaboration** | planned | Real-time editing via OTs/CRDTs, shared state. |
 
 ### M1 Validation: json-validator Test Project
 
-A zero-dependency TypeScript JSON schema validator library used to validate Milestone 1 capabilities:
+A zero-dependency TypeScript JSON schema validator library demonstrating M1 capabilities:
 
-- **File ops**: Create files/folders, edit in Monaco, see file tree
-- **Build**: `tsc` compilation, errors surface in Problems panel
-- **Test**: `node:test` runner, results visible in IDE
-- **Deploy**: S3 artifact upload
-- **Workflow rules**: install, typecheck, build, test
-
-### Target Architecture Model
-
-The system is decomposed into **App Services** (manage resources during project work) and **Platform Services** (supporting functions). Type definitions are in `@antimatter/service-interface`.
-
-**App Services:**
-
-| Service | Owns |
-|---------|------|
-| Projects | Project lifecycle, metadata, VCS (stage/commit/push/pull with generic verbs, single remote) |
-| Files | File CRUD, tree, unified annotations (any source, with actions), file change events |
-| Builds | Build rules, results, configurations, triggers. Subsumes deploy and workflow — the workflow engine is internal |
-| Tests | Test definitions (registered per-project), execution with configurable runners, results and events |
-| Workspaces | EC2 lifecycle, terminal sessions (resources with history), S3 sync |
-| DeployedResources | Project-defined resource tracking, custom actions (invoked via build triggers), secrets/env vars |
-| Agents | Chat sessions (optionally project-scoped), event-driven messages, chat history |
-
-**Platform Services:**
-
-| Service | Responsibility |
-|---------|---------------|
-| Auth | Cognito integration, token management |
-| ClientAutomation | Browser client testing/automation, client registry, IDE UI automation |
-| Observability | System, build, test event logging. S3 persistence (JSONL, daily partitioned) |
-
-**Service Interface:** All services expose canonical commands, queries, and events defined in `@antimatter/service-interface`. Operations are namespaced by service (e.g., `files.write`, `builds.triggers.invoke`). Three transport adapters (REST, WebSocket, tool-use) map to the same interface. Files, Builds, Tests, and DeployedResources operations are project-scoped. WebSocket connections default to a project scope with per-frame override. The `not-hosted` error code signals the client to redirect workspace operations to another handler.
-
-**Inter-service patterns:** Prefer events for asynchronous downstream effects (e.g., Files emits `files.changed` → Builds evaluates rules). Use direct invocation when a change is required for the current operation's integrity (e.g., Builds calls `files.annotate` to write build results to source files).
-
-### Known Blockers
-
-| Issue | Impact | Status |
-|-------|--------|--------|
-| **Workspace file sync bug** | Files created via UI route to S3/Lambda instead of workspace server when `activeWorkspaceProjectIds` is not yet populated for the project. Terminal works but file operations bypass workspace. | Confirmed by FT-WS-001 — investigating |
+| Test ID | Name | Status |
+|---------|------|--------|
+| FT-M1-001 | Create json-validator project with files and verify build pipeline | test-passing |
+| FT-M1-002 | Introduce type error, verify in Problems panel, fix, verify clear | test-passing |
+| FT-M1-003 | Add failing test, verify failure, fix test, verify pass | test-passing |
+| FT-M1-004 | Publish to S3, create consumer project, verify import works | test-passing |
+| FT-M1-005 | Git commit all M1 changes and verify in log | test-passing |
 
 ---
 
-## Phase: Bootstrap
+## Tier 2: By Service
 
-**Goal:** The IDE can build, test, and deploy itself.
-**Exit criterion:** A code change can be made, built, tested, and deployed entirely from within the IDE.
+### Files Service
+
+**Current state:** ServiceClient-wired (files.read, files.write, files.tree, files.exists, files.delete, files.mkdir, files.move, files.copy). REST mutations emit `onFileChange` events to workflow engine. Move/copy operations support batch entries.
+
+| ID | Test Case | Status |
+|----|-----------|--------|
+| FT-FILE-001 | Display file tree with nested structure | test-passing |
+| FT-FILE-002 | Create file via UI | test-passing |
+| FT-FILE-003 | Create folder with nested file | test-passing |
+| FT-FILE-004 | Delete file via UI | test-passing |
+| FT-FILE-005 | Rename file via UI | test-passing |
+| FT-FILE-006 | Move file via UI | test-passing |
+| FT-FILE-007 | Select file opens editor | test-passing |
+| FT-FILE-010 | Delete file via API | test-passing |
+| FT-FILE-011 | Move file via API | test-passing |
+| FT-FILE-012 | Copy file via API | test-passing |
+
+**Remaining work:**
+- File annotations (unified model for errors, warnings, bookmarks, actions)
+- Lambda dual-write (forward mutations to workspace when running)
+- File explorer indicators (error/changed markers on tree nodes)
+- Multi-select for bulk operations
+
+**Usability:**
+- File explorer error indicators on tree nodes
+- Tab overflow: replace scrollbar with left/right navigation buttons
+
+### Projects Service
+
+**Current state:** ServiceClient-wired (projects.list, projects.create, projects.delete, projects.import). Git operations wired (projects.status, projects.stage, projects.unstage, projects.commit, projects.push, projects.pull, projects.log, projects.remote, projects.setRemote). `gitInit` still uses apiFetch.
+
+| ID | Test Case | Status |
+|----|-----------|--------|
+| FT-PROJ-001 | List projects returns array with current project | test-passing |
+| FT-PROJ-002 | Create project, verify exists, delete, verify removed | test-passing |
+| FT-PROJ-003 | Start workspace and verify RUNNING status | test-passing |
+| FT-PROJ-004 | Git status returns valid VCS state | test-passing |
+| FT-PROJ-005 | Git stage, commit, verify in log | test-passing |
+
+**Remaining work:**
+- Git panel UI (stage/unstage/commit/push/pull with visual diff)
+- Git branch management
+- Git history/version viewer
+
+### Workspaces Service
+
+**Current state:** ServiceClient-wired (workspaces.start, workspaces.status). EC2 lifecycle management via workspace-ec2-service. Shared mode reuses running instances. S3 sync on startup/shutdown and 30s interval.
+
+| ID | Test Case | Status |
+|----|-----------|--------|
+| FT-WS-001 | Files created via UI exist on workspace filesystem | test-implemented (intermittent) |
+
+**Remaining work:**
+- Terminal sessions as first-class resources
+- Workspace auto-stop idle detection (respect running commands)
+- S3/workspace sync conflict resolution
+- Workspace restart recovery (stale file race condition)
+
+### Builds Service
+
+**Current state:** ServiceClient-wired (builds.results.list, builds.configurations.list, builds.configurations.set, builds.triggers.invoke). Workflow engine handles rule execution with event sourcing (JSONL event log, dedup, replay, compaction). Build/deploy SSE streaming removed — all progress via WebSocket application-state broadcasts.
+
+| ID | Test Case | Status |
+|----|-----------|--------|
+| FT-M1-001 | Workflow rules load and execute (install/build/test) | test-passing |
+| FT-M1-002 | Build failure surfaces errors in Problems panel | test-passing |
+
+**Remaining work:**
+- Build panel: display rule list with status, manual execution, widget rendering
+- Widget system: button/toggle/status widgets from workflow declarations
+- In-browser type checking (Monaco language services without workspace round-trip)
+
+### Tests Service
+
+**Current state:** Cross-tab test framework with BroadcastChannel orchestrator/executor. Per-test timeout (180s). RunId filtering prevents stale tab interference. Incremental log streaming (test-log messages, liveLogs in store). Monaco model readiness checks for DOM interactions.
+
+| ID | Test Case | Status |
+|----|-----------|--------|
+| FT-XTAB-001 | Tab lock acquire and release lifecycle | test-passing |
+| FT-XTAB-002 | Lock blocks acquisition by simulated other tab | test-passing |
+| FT-XTAB-003 | Stale lock recovery | test-passing |
+| FT-XTAB-004 | Project-scoped storage isolation | test-passing |
+| FT-XTAB-005 | selectProject acquires lock, clearProject releases | test-passing |
+| FT-XTAB-006 | Header dropdown shows lock icon for locked projects | test-implemented (missing data-testid) |
+
+**Remaining work:**
+- In-IDE test runner panel (run and view results without terminal)
+- Test definitions as project-registered resources
+- Headless test execution (server-side Puppeteer)
+
+### DeployedResources Service
+
+**Current state:** FT-M1-004 demonstrates package publish to S3 as a deployed resource. Infrastructure environment registry exists (Lambda routes for infra-environments).
+
+**Remaining work:**
+- Deployed resource tracking with custom actions
+- Deploy panel per-environment actions
+- Secrets/env vars integration
+
+### Agents Service
+
+**Current state:** ServiceClient-wired (agents.chats.send, agents.chats.delete). Chat panel exists with SSE streaming (to be migrated to WebSocket send+subscribe). Chat history persistence via apiFetch.
+
+**Remaining work:**
+- Chat panel simplification: send+subscribe via WebSocket, remove SSE
+- Tool call display and inline results
+- Abort response mid-stream
+- File/selection context attachment
+- Code block "Apply" button
+
+### Auth Service
+
+**Current state:** Cognito OAuth with auto token refresh. Auth gate blocks unauthenticated access.
+
+**Remaining work:**
+- Multi-user support
+
+### ClientAutomation Service
+
+**Current state:** Automation API with browser/headless execution. Server commands (file.read, file.write, git.*, workflow.*). Browser commands (editor.open, tests.run, client.refresh). MCP server bridges Claude Code to automation API.
+
+**Remaining work:**
+- Navigation command (navigate to specific URL/view)
+- Client registry improvements
+
+### Observability Service
+
+**Current state:** ServiceClient-wired (observability.events.list). EventLogger with S3 persistence (JSONL, daily partitioned). In-memory buffer on workspace server.
+
+**Remaining work:**
+- IDE log viewer panel (filtered, searchable)
+- Structured logging migration (replace remaining raw console.* calls)
 
 ### Editor
 
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-EDIT-001 | **Monaco Editor** | in-progress | Multi-tab code editor with syntax highlighting, diagnostics overlay, auto-save, unsaved indicators |
-| | FT-EDIT-001: Open file in tab | test-passing | Selecting a file in explorer opens it in an editor tab with correct content |
-| | FT-EDIT-002: Switch between tabs | test-passing | Clicking a tab switches the active editor to that file |
-| | FT-EDIT-003: Close tab | test-passing | Closing a tab removes it; if active, switches to adjacent tab |
-| | FT-EDIT-004: Auto-save on edit | test-passing | Editing a file triggers auto-save after 1.5s debounce; file is persisted |
-| | FT-EDIT-005: Unsaved indicator | defined | Editing a file shows amber dot on tab until save completes |
-| | FT-EDIT-006: Diagnostics overlay | defined | Errors reported by build tools appear as inline markers in the editor |
-| | FT-EDIT-007: Manual save (Ctrl+S) | defined | Ctrl+S immediately saves the file without waiting for debounce |
+**Current state:** Monaco editor with multi-tab, auto-save, diagnostics overlay (errors from errorStore), word-boundary highlighting. Problems panel navigates to file:line:column on double-click.
 
-### File Explorer
+| ID | Test Case | Status |
+|----|-----------|--------|
+| FT-EDIT-001 | Open file in tab | test-passing |
+| FT-EDIT-002 | Switch between tabs | test-passing |
+| FT-EDIT-003 | Close tab | test-passing |
+| FT-EDIT-004 | Auto-save on edit | test-passing |
 
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-FILE-001 | **File Explorer** | in-progress | Tree view with file/folder CRUD, selection opens in editor |
-| | FT-FILE-001: Display file tree | test-passing | File explorer shows project directory structure as expandable tree |
-| | FT-FILE-002: Create file | test-passing | Creating a new file via UI adds it to the tree and opens it in editor |
-| | FT-FILE-003: Create folder | test-passing | Creating a new folder via UI adds it to the tree |
-| | FT-FILE-004: Delete file | test-passing | Deleting a file removes it from tree and closes its editor tab |
-| | FT-FILE-005: Rename file | test-passing | Renaming a file updates tree, editor tab title, and persisted path |
-| | FT-FILE-006: Move file | test-passing | Moving a file to another folder updates tree and persisted path |
-| | FT-FILE-007: Select file opens editor | test-passing | Clicking a file in the tree opens it in a new or existing editor tab |
+**Remaining work:**
+- Unsaved indicator (amber dot on tab)
+- Manual save (Ctrl+S) — currently dispatched but unreliable
+- Editor context menu (fix non-functional items)
+- Problems panel error count badge
 
-### Problems Panel
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-PROB-001 | **Problems Panel** | in-progress | Displays build/lint errors grouped by file with navigation to source |
-| | FT-PROB-001: Display errors grouped by file | defined | Errors from build tools appear grouped by file path |
-| | FT-PROB-002: Navigate to file on click | defined | Clicking an error opens the corresponding file in the editor |
-| | FT-PROB-003: Navigate to line on click | defined | Clicking an error scrolls editor to the error's line and column |
-| | FT-PROB-004: Error count badge | defined | Panel header shows total error count |
-| | FT-PROB-005: Clear errors on successful build | defined | Errors for a tool are cleared when that tool reports zero errors |
-
-### Workflow Engine
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-WKFL-001 | **Workflow Engine** | in-progress | Rule-based automation with events, state persistence, widget declarations, esbuild compilation |
-| | FT-WKFL-001: Load automation files | defined | .antimatter/*.ts files are compiled and loaded on workspace start |
-| | FT-WKFL-002: File change detection | defined | Saving a file triggers workflow rules with matching file patterns |
-| | FT-WKFL-003: Manual rule execution | defined | Running a rule via API executes its action and returns result |
-| | FT-WKFL-004: State persistence | defined | Workflow state survives workspace server restart |
-| | FT-WKFL-005: Error reporting | defined | Workflow rule errors appear in the Problems panel |
-| | FT-WKFL-006: Auto-reload on change | defined | Editing a .antimatter/*.ts file triggers recompilation and reload |
-| | FT-WKFL-007: Widget declarations | defined | Rules can declare UI widgets that appear in build/deploy panels |
-
-### Build Panel
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-BUILD-001 | **Build Panel** | in-progress | Displays workflow rules with status, manual execution, widget rendering |
-| | FT-BUILD-001: Display rule list | defined | Build panel shows all workflow rules with current status |
-| | FT-BUILD-002: Run rule manually | defined | Clicking a rule's run button executes it and updates status |
-| | FT-BUILD-003: Show rule result | defined | After execution, rule shows success/failure with duration |
-| | FT-BUILD-004: Render widgets | defined | Widget declarations from build.ts render as buttons/status in panel |
-| | FT-BUILD-005: Widget button triggers event | defined | Clicking a widget button fires the declared event and executes handler |
-| | FT-BUILD-006: Streaming build output | defined | Build output streams to UI in real-time during execution |
-
-### Widget System
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-WIDG-001 | **Widget Declaration System** | in-progress | Button, toggle, and status widgets rendered in build/deploy panels |
-| | FT-WIDG-001: Button widget renders | defined | A declared button widget appears with correct label and icon |
-| | FT-WIDG-002: Button click fires event | defined | Clicking a button widget fires its declared event |
-| | FT-WIDG-003: Status widget displays value | defined | A declared status widget shows its current value and color |
-| | FT-WIDG-004: Toggle widget renders | defined | A declared toggle widget appears and toggles on click |
-| | FT-WIDG-005: Dynamic widget state | defined | Widget enabled/visible/value updates via workflowState._ui |
+**Usability:**
+- Problems panel click/double-click navigation to exact position ✅ (implemented)
+- Editor error highlighting uses word boundary ✅ (implemented)
 
 ### Terminal
 
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-TERM-001 | **Terminal** | in-progress | xterm.js terminal with PTY backend, WebSocket, resize handling |
-| | FT-TERM-001: Terminal connects on load | defined | Terminal establishes WebSocket connection and shows shell prompt |
-| | FT-TERM-002: Execute command | defined | Typing a command and pressing Enter executes it and shows output |
-| | FT-TERM-003: Resize handling | defined | Resizing the terminal panel adjusts the PTY dimensions |
-| | FT-TERM-004: Reconnect on disconnect | defined | After WebSocket disconnect, terminal reconnects and replays buffer |
-| | FT-TERM-005: Input buffering during reconnect | defined | Input typed during disconnect is sent after reconnection |
+**Current state:** xterm.js terminal with PTY backend, WebSocket, basic resize.
 
-### AI Chat
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-CHAT-001 | **AI Chat** | in-progress | Chat panel with SSE streaming, tool calls, abort, conversation persistence |
-| | FT-CHAT-001: Send message and receive response | defined | Sending a message returns a streamed assistant response |
-| | FT-CHAT-002: Streaming display | defined | Assistant tokens appear incrementally as they arrive |
-| | FT-CHAT-003: Tool call display | defined | Tool calls and results are shown inline in the conversation |
-| | FT-CHAT-004: Abort response | defined | Clicking abort stops the current response mid-stream |
-| | FT-CHAT-005: Conversation persistence | defined | Chat history survives page reload (save/load via API) |
-| | FT-CHAT-006: Clear conversation | defined | Clear button resets the conversation history |
-
-### Git Integration
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-GIT-001 | **Git Integration** | in-progress | Status, stage, commit, push, pull with UI panel |
-| | FT-GIT-001: Show status | defined | Git panel shows staged, unstaged, and untracked files |
-| | FT-GIT-002: Stage file | defined | Clicking stage on a file moves it to the staged section |
-| | FT-GIT-003: Unstage file | defined | Clicking unstage on a staged file moves it back |
-| | FT-GIT-004: Commit | defined | Entering a message and committing creates a git commit |
-| | FT-GIT-005: Push | defined | Push sends commits to the remote repository |
-| | FT-GIT-006: Pull | defined | Pull fetches and merges remote changes |
-| | FT-GIT-007: Stage all | defined | Stage all button stages all unstaged and untracked files |
-
-### Deploy Panel
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-DEPLOY-001 | **Deploy Panel** | in-progress | Deployment UI with workflow state display, widget rendering, deployment execution |
-| | FT-DEPLOY-001: Display deploy widgets | defined | Deploy panel renders widget declarations from deploy.ts |
-| | FT-DEPLOY-002: Build all action | defined | Build All button triggers full build pipeline |
-| | FT-DEPLOY-003: Deploy action | defined | Deploy button triggers CDK deployment from IDE |
-| | FT-DEPLOY-004: Deployment status display | defined | Panel shows current deployment state and last deploy time |
-| | FT-DEPLOY-005: Streaming deploy output | defined | Deployment output streams to UI in real-time |
-
-### Authentication
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-AUTH-001 | **Authentication** | in-progress | Cognito OAuth with auto token refresh |
-| | FT-AUTH-001: Login redirects to Cognito | defined | Unauthenticated users are redirected to Cognito hosted UI |
-| | FT-AUTH-002: Token auto-refresh | defined | Access token is automatically refreshed before expiry |
-| | FT-AUTH-003: Auth gate blocks unauthenticated | defined | Protected routes return 401 without valid token |
-
-### Secrets Management
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-SECRET-001 | **Secrets Management** | in-progress | SSM SecureString backend with management UI |
-| | FT-SECRET-001: List secrets | defined | Secrets panel shows known secrets with set/unset status |
-| | FT-SECRET-002: Set secret | defined | Setting a secret stores it in SSM and updates UI |
-| | FT-SECRET-003: Clear secret | defined | Clearing a secret removes it from SSM |
-
-### Infrastructure
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-INFRA-001 | **CDK Infrastructure** | in-progress | Lambda API, EC2/ALB workspace, S3, CloudFront, Cognito |
-| | FT-INFRA-001: Lambda API health | defined | Health endpoint returns 200 with version info |
-| | FT-INFRA-002: S3 file operations | defined | Files can be created, read, listed, and deleted via API |
-| | FT-INFRA-003: CloudFront serves frontend | defined | CloudFront URL serves the SPA index.html |
-| | FT-INFRA-004: Workspace server connects | defined | WebSocket connection to workspace server establishes successfully |
-
-### Workspace Server
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-WKSP-001 | **Workspace Server** | in-progress | EC2 instance with S3 sync, PTY, WebSocket, workflow integration, git auto-init. Currently fragile — needs auto-recovery and idle detection fixes. |
-| | FT-WKSP-001: Server starts and syncs | defined | Workspace server starts, syncs files from S3, initializes git |
-| | FT-WKSP-002: WebSocket connection | defined | Client establishes WebSocket connection to workspace server |
-| | FT-WKSP-003: S3 periodic sync | defined | File changes sync to S3 on 30s interval |
-| | FT-WKSP-004: Workflow engine loads | defined | Workflow engine loads .antimatter/*.ts files on startup |
-| | FT-WKSP-005: Idle detection respects running commands | defined | Long-running commands prevent workspace auto-stop |
-| | FT-WKSP-006: S3/refresh race condition | defined | Workspace restart re-downloads stale files from S3 before local deletions (e.g. git clean) can sync. Fix: run syncToS3 before downloading on restart, or accept local filesystem as authoritative after git operations |
-| | FT-WS-001: Files sync to workspace | test-implemented | Files created via the UI exist on the workspace server filesystem, not just in S3. Polls `hasActiveWorkspace(projectId)` then checks `/exists` endpoint. Currently failing — confirms workspace file sync bug. (Browser functional test) |
-
-### S3 Project Storage
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-S3-001 | **S3 Project Storage** | in-progress | Project files stored in S3 with periodic sync to workspace. Timing and conflict resolution incomplete. |
-| | FT-S3-001: Create project | defined | Creating a project initializes an S3 prefix |
-| | FT-S3-002: File round-trip | defined | Write file via API → read back returns same content |
-| | FT-S3-003: Sync to workspace | defined | Files written via Lambda API appear on workspace filesystem |
-
-### Logging
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-LOG-001 | **Central Logging** | in-progress | EventLogger with S3 persistence exists. 138+ raw console.log calls remain. No IDE log viewer. |
-| | FT-LOG-001: Structured event logging | defined | Backend components log via Logger utility, not raw console.* |
-| | FT-LOG-002: S3 log persistence | defined | Logs are persisted to S3 in JSONL format |
-| | FT-LOG-003: In-memory log buffer | defined | Workspace server buffers recent logs for quick retrieval |
-
-### Test Infrastructure
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-TEST-001 | **Smoke Test Suite** | in-progress | 17 Lambda-based smoke tests covering health, files, projects, commands, frontend |
-| | FT-TEST-001: All smoke tests pass | defined | POST /api/tests/run?suite=smoke returns all passing |
-| F-TEST-002 | **Functional Test Framework** | in-progress | ActionContext abstraction with three implementations (Fetch, Service, Browser). Test modules: file-explorer (7), editor (4), cross-tab (3), workspace (1). Browser runner with cross-tab orchestrator/executor via BroadcastChannel. |
-| | FT-TEST-002: Functional tests run from CLI | defined | npm test executes functional tests via ServiceActionContext |
-| | FT-TEST-003: Functional tests run from Lambda | defined | POST /api/tests/run?suite=functional executes via FetchActionContext |
-| | FT-TEST-004: Browser tests run from panel | test-passing | TestResultsPanel runs tests via cross-tab orchestrator with BrowserActionContext |
-| | FT-TEST-005: Single test execution | test-passing | Individual tests can be run via per-test play button in TestResultsPanel |
-| F-TEST-003 | **Cross-Tab Test Protocol** | in-progress | BroadcastChannel-based orchestrator/executor for browser functional tests. Orchestrator creates disposable project, opens test tab, executor runs tests and reports results. |
-| | FT-XTAB-001: Cross-tab communication | test-passing | Orchestrator and executor exchange messages via BroadcastChannel |
-| | FT-XTAB-002: Test tab lifecycle | test-passing | Test tab opens, receives commands, runs tests, reports results |
-| | FT-XTAB-003: Disposable project cleanup | test-passing | Test project is created for the run and cleaned up after |
-
-### Build Scripts
-
-| ID | Feature / Test Case | Status | Description |
-|----|---------------------|--------|-------------|
-| F-BSCR-001 | **Build Script Declarations** | in-progress | build.ts and deploy.ts workflow files with widget declarations |
-| | FT-BSCR-001: Build.ts loads widgets | defined | Build panel shows type-check button and status widgets from build.ts |
-| | FT-BSCR-002: Deploy.ts loads widgets | defined | Deploy panel shows build/deploy buttons and status widgets from deploy.ts |
+**Remaining work:**
+- Multiple terminal sessions
+- Reconnect with buffer replay
+- Terminal output visible for workflow commands (wf.exec)
 
 ---
 
-## Phase: Migrate to Online
+## Tier 3: Immediate Backlog
 
-**Goal:** All development happens in the online IDE.
-**Exit criterion:** Desktop Claude Code is no longer needed — code editing, AI agent interaction, build/test/deploy, and troubleshooting all happen online.
+Prioritized items ready for implementation. Pulled from Tier 2, ordered by impact.
 
-| ID | Feature | Status | Description |
-|----|---------|--------|-------------|
-| F-AUTO-001 | **UI Automation Layer** | planned | Browser automation for all testable user actions. Supports functional tests, reduces Claude-in-Chrome dependency, serves as agent tools. |
-| F-AGENT-001 | **Agent Tool Integration** | planned | Agent can drive IDE actions (file ops, builds, deployments) via UI automation layer |
-| F-AGENT-002 | **Agent Context Awareness** | planned | Agent sees project structure, workflow state, errors, and active file context |
-| F-APPLY-001 | **Code Block Apply** | planned | Render code blocks in chat with "Apply" button that patches the corresponding file |
-| F-CTX-001 | **File/Selection Context** | planned | Attach current file or editor selection as context when sending a chat message |
-| F-LOGUI-001 | **IDE Log Viewer** | planned | Panel to view structured logs from EventLogger (filtered, searchable) |
-| F-KBD-001 | **Keyboard Shortcuts & Command Palette** | planned | Cmd+P file switcher, Cmd+Shift+P command palette, customizable shortcuts |
-| F-SEARCH-001 | **Full-Text File Search** | planned | Search across all project files with results panel (Cmd+Shift+F) |
-| F-TRUN-001 | **In-IDE Test Runner** | planned | Run and view test results in a dedicated panel without using terminal |
-| F-PULL-001 | **Git Pull API Endpoint** | planned | Lambda endpoint to trigger git pull, streamlining self-hosting update cycle |
-| F-DIFF-001 | **Git Diff Viewer** | planned | Side-by-side or inline diff view for uncommitted changes. See also F-DIFFMERGE-001 and F-GITADV-001 for full diff/merge. |
+| Priority | Item | Service | Description |
+|----------|------|---------|-------------|
+| 1 | **Chat panel simplification** | Agents | Migrate from SSE to WebSocket send+subscribe. Remove streaming code, simplify to fire-and-forget command + event subscription. |
+| 2 | **File annotations** | Files | Unified annotation model — errors, warnings, bookmarks. Source-agnostic (tsc, eslint, custom). Powers Problems panel, editor decorations, file explorer indicators. |
+| 3 | **Build/Deploy panel** | Builds | Display workflow rules with status, manual execution. Render widget declarations from build.ts/deploy.ts. |
+| 4 | **M2 planning** | All | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
+| 5 | **Git panel UI** | Projects | Visual stage/unstage, commit message entry, push/pull buttons. Requires the Git API tests (FT-PROJ-004/005) as foundation. |
+| 6 | **Command palette** | ClientAutomation | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
+| 7 | **Full-text search** | Files | Search across project files with results panel (Cmd+Shift+F). |
+| 8 | **Functional demos** | Tests | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
+| 9 | **FT-XTAB-006 fix** | Tests | Add `data-testid="project-lock-icon"` to Header lock indicators. |
+| 10 | **FT-WS-001 fix** | Workspace | Fix test isolation — file tree empties after earlier DOM tests. |
 
 ---
 
-## Phase: Project-OS Development
+## Infrastructure Notes
 
-**Goal:** Build the Project Operating System vision.
-**Features pulled from `docs/project-os.md` as needed.**
+### Service Interface (`@antimatter/service-interface`)
 
-| ID | Feature | Status | Description |
-|----|---------|--------|-------------|
-| F-EDADV-001 | **Editor In-Browser Type Checking** | planned | Investigate solutions for type checking and linting within Monaco independent of save (current diagnostics rely on workspace-server compile step with multi-second delay) |
-| F-EDADV-002 | **Editor Context Menu** | planned | Fix non-functional context menu items in Monaco editor |
-| F-EDADV-003 | **Editor Tab Overflow** | planned | Replace horizontal scrollbar on tab panel with left/right navigation buttons when too many tabs are open |
-| F-FILEADV-001 | **File Explorer Indicators** | planned | Show error-in-file and source-changed indicators on file tree nodes |
-| F-FILEADV-002 | **File Explorer Multi-Select** | planned | Multi-select for bulk delete, drag-and-drop reordering/moving, cut/copy/paste operations |
-| F-DIFFMERGE-001 | **File Diff/Merge** | planned | File explorer and source control panels support file diff/merge in panel or open content diff/merge view |
-| F-WKFLADV-001 | **Workflow Type Checking** | planned | .antimatter/*.ts files are only transpiled via esbuild, not type-checked. Add type checking for workflow definition files. |
-| F-WKFLADV-002 | **Workflow Terminal Execution** | planned | wf.exec() should run commands in the terminal (visible output) rather than a hidden subprocess. Configurable to use primary or secondary terminal. |
-| F-TERMADV-001 | **Multiple Terminal Sessions** | planned | Support multiple terminal tabs — opened manually or automatically for build/deploy output |
-| F-GITADV-001 | **Git Diff/Merge UI** | planned | Manual diff/merge interface for conflict resolution when merges aren't automatic |
-| F-GITADV-002 | **Git History/Version View** | planned | Browse commit history with diff view per commit |
-| F-GITADV-003 | **Git Branch & Tag Management** | planned | Create, switch, delete, and merge branches; create and manage tags |
-| F-DEPLOYADV-001 | **Deploy Panel Per-Environment Actions** | planned | Remove hardcoded "Build all" and "Deploy" buttons. Projects define actions per environment or as specific widgets. Deployment status is per environment. |
-| F-DEPLOYADV-002 | **Deploy Output Streaming to Terminal** | planned | Deploy output should stream to a terminal session rather than a custom panel |
-| F-S3ADV-001 | **S3 Fallback for Inactive Workspace** | planned | UI actions should fall back to S3-only operation when workspace server is inactive — file operations, current workflow state, logging, etc. |
-| F-ENTITY-001 | **Structured Entity Database** | planned | Requirements, Examples, Domain Types, Components, Modules as first-class entities with typed links |
-| F-NAV-001 | **Project Navigator** | planned | Browse project as an information bundle — navigate by entity type, follow links, search |
-| F-LITED-001 | **Literate Editor** | planned | CodeMirror 6 editor with embedded code blocks, entity links, model DSLs |
-| F-EXAMPLE-001 | **Example Workshop** | planned | Specification by example — define, execute, and track examples linked to requirements |
-| F-CONTRACT-001 | **Session Contracts** | planned | Agent proposes scope/assumptions/affected modules; human approves before work begins |
-| F-ACTIVITY-001 | **Activity Designer** | planned | Visual design of activities and workflows |
-| F-TRACE-001 | **Trace Explorer** | planned | Structured debugging and execution trace visualization |
-| F-MULTI-001 | **Multi-Agent Orchestration** | planned | Specialized agents (implementer, reviewer, tester) with supervisor coordination |
-| F-COMPRESS-001 | **Continuous Context Compression** | planned | Automatic context summarization to maintain agent effectiveness over long sessions |
-| F-COLLAB-001 | **Real-Time Collaboration** | planned | Multiple users editing simultaneously via OTs/CRDTs |
-| F-MODEL-001 | **Model Library & DSLs** | planned | Reusable model types with custom DSL support |
-| F-IMPORT-001 | **Incombobulation** | planned | Import existing codebases into the entity model |
+Canonical type definitions for all operations. Typed ServiceClient with TransportAdapter dispatch (REST, WebSocket, tool-use). Operation routing by execution context (platform, workspace, browser).
+
+### Event Sourcing (Workflow Engine)
+
+Persistent JSONL event log (`.antimatter-cache/events.jsonl`). Sequence numbers, 2s dedup window, 50ms batched drain. Checkpoint-based replay on startup/reload. Compaction on shutdown and every 5 minutes.
+
+### Deploy Process
+
+Local script (`scripts/deploy.sh`): Vite build → Lambda bundle → workspace server bundle → CDK deploy → S3 upload → workspace restart via SSM.
+
+### MCP Server (`@antimatter/mcp-server`)
+
+Bridges Claude Code to IDE automation API. Tools: test run/results/list, workspace management, file read, git status, client refresh, execute command.
