@@ -162,11 +162,30 @@ export interface AgentsQueryResponseMap {
 // Operation metadata
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
+
 export const AGENTS_OPERATIONS: Record<string, OperationMeta> = {
-  'agents.chats.create':  { kind: 'command', context: 'platform',  description: 'Create a chat session' },
-  'agents.chats.send':    { kind: 'command', context: 'workspace', description: 'Send a message to a chat session' },
-  'agents.chats.delete':  { kind: 'command', context: 'platform',  description: 'Delete a chat session' },
-  'agents.chats.list':    { kind: 'query',   context: 'platform',  description: 'List chat sessions' },
-  'agents.chats.get':     { kind: 'query',   context: 'platform',  description: 'Get chat session details' },
-  'agents.chats.history': { kind: 'query',   context: 'platform',  description: 'Get chat history' },
+  'agents.chats.create': {
+    kind: 'command', context: 'platform', description: 'Create a chat session',
+    params: { name: z.string().optional().describe('Session name') },
+  },
+  'agents.chats.send': {
+    kind: 'command', context: 'workspace', description: 'Send a message to a chat session',
+    params: { sessionId: z.string().describe('Chat session ID'), message: z.string().describe('Message content to send') },
+  },
+  'agents.chats.delete': {
+    kind: 'command', context: 'platform', description: 'Delete a chat session',
+    params: { sessionId: z.string().describe('Chat session ID to delete') },
+  },
+  'agents.chats.list': {
+    kind: 'query', context: 'platform', description: 'List chat sessions',
+  },
+  'agents.chats.get': {
+    kind: 'query', context: 'platform', description: 'Get chat session details',
+    params: { sessionId: z.string().describe('Chat session ID') },
+  },
+  'agents.chats.history': {
+    kind: 'query', context: 'platform', description: 'Get chat history',
+    params: { sessionId: z.string().describe('Chat session ID'), limit: z.number().optional().describe('Max messages to return') },
+  },
 };

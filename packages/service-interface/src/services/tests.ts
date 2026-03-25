@@ -156,10 +156,21 @@ export interface TestsQueryResponseMap {
 // Operation metadata
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
+
 export const TESTS_OPERATIONS: Record<string, OperationMeta> = {
-  'tests.run':      { kind: 'command', context: 'workspace', description: 'Run tests' },
-  'tests.register': { kind: 'command', context: 'workspace', description: 'Register test definitions' },
+  'tests.run': {
+    kind: 'command', context: 'workspace', description: 'Run tests',
+    params: { testIds: z.array(z.string()).optional().describe('Specific test IDs to run (omit to run all)'), runnerIds: z.array(z.string()).optional().describe('Specific runner IDs to use (omit for defaults)') },
+  },
+  'tests.register': {
+    kind: 'command', context: 'workspace', description: 'Register test definitions',
+    params: { tests: z.array(z.object({ id: z.string(), name: z.string(), description: z.string().optional(), module: z.string().optional(), runners: z.array(z.object({ runnerId: z.string(), name: z.string(), description: z.string().optional() })) })).describe('Test definitions to register') },
+  },
   'tests.list':     { kind: 'query',   context: 'workspace', description: 'List available tests' },
-  'tests.results':  { kind: 'query',   context: 'workspace', description: 'Get test results' },
+  'tests.results': {
+    kind: 'query', context: 'workspace', description: 'Get test results',
+    params: { runId: z.string().optional().describe('Filter to a specific run (omit for latest)') },
+  },
   'tests.runners':  { kind: 'query',   context: 'workspace', description: 'List available test runners' },
 };

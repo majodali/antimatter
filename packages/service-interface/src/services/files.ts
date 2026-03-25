@@ -203,16 +203,51 @@ export interface FilesQueryResponseMap {
 // Operation metadata
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
+
 export const FILES_OPERATIONS: Record<string, OperationMeta> = {
-  'files.write':            { kind: 'command', context: 'workspace', description: 'Write file contents' },
-  'files.delete':           { kind: 'command', context: 'workspace', description: 'Delete a file or directory' },
-  'files.mkdir':            { kind: 'command', context: 'workspace', description: 'Create a directory' },
-  'files.move':             { kind: 'command', context: 'workspace', description: 'Move/rename files or directories' },
-  'files.copy':             { kind: 'command', context: 'workspace', description: 'Copy files or directories' },
-  'files.annotate':         { kind: 'command', context: 'workspace', description: 'Add annotations to files' },
-  'files.clearAnnotations': { kind: 'command', context: 'workspace', description: 'Clear annotations' },
-  'files.read':             { kind: 'query',   context: 'workspace', description: 'Read file contents' },
-  'files.tree':             { kind: 'query',   context: 'workspace', description: 'Get file tree' },
-  'files.exists':           { kind: 'query',   context: 'workspace', description: 'Check if file exists' },
-  'files.annotations':      { kind: 'query',   context: 'workspace', description: 'List file annotations' },
+  'files.write': {
+    kind: 'command', context: 'workspace', description: 'Write file contents',
+    params: { path: z.string().describe('File path relative to project root'), content: z.string().describe('File content') },
+  },
+  'files.delete': {
+    kind: 'command', context: 'workspace', description: 'Delete a file or directory',
+    params: { path: z.string().describe('File path to delete') },
+  },
+  'files.mkdir': {
+    kind: 'command', context: 'workspace', description: 'Create a directory',
+    params: { path: z.string().describe('Directory path to create') },
+  },
+  'files.move': {
+    kind: 'command', context: 'workspace', description: 'Move/rename files or directories (batch)',
+    params: { entries: z.array(z.object({ src: z.string(), dest: z.string() })).describe('Array of {src, dest} pairs') },
+  },
+  'files.copy': {
+    kind: 'command', context: 'workspace', description: 'Copy files or directories (batch)',
+    params: { entries: z.array(z.object({ src: z.string(), dest: z.string() })).describe('Array of {src, dest} pairs') },
+  },
+  'files.annotate': {
+    kind: 'command', context: 'workspace', description: 'Add annotations to files',
+    params: { annotations: z.array(z.object({ source: z.string(), path: z.string(), line: z.number(), message: z.string(), severity: z.enum(['error', 'warning', 'info', 'hint']).optional() })).describe('Annotations to add') },
+  },
+  'files.clearAnnotations': {
+    kind: 'command', context: 'workspace', description: 'Clear annotations',
+    params: { source: z.string().optional().describe('Clear only from this source'), path: z.string().optional().describe('Clear only for this file') },
+  },
+  'files.read': {
+    kind: 'query', context: 'workspace', description: 'Read file contents',
+    params: { path: z.string().describe('File path relative to project root') },
+  },
+  'files.tree': {
+    kind: 'query', context: 'workspace', description: 'Get recursive file tree',
+    params: { path: z.string().optional().describe('Root path (default: /)') },
+  },
+  'files.exists': {
+    kind: 'query', context: 'workspace', description: 'Check if file exists',
+    params: { path: z.string().describe('File path to check') },
+  },
+  'files.annotations': {
+    kind: 'query', context: 'workspace', description: 'List file annotations',
+    params: { source: z.string().optional().describe('Filter by source'), path: z.string().optional().describe('Filter by file path'), severity: z.enum(['error', 'warning', 'info', 'hint']).optional().describe('Filter by severity') },
+  },
 };

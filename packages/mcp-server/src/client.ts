@@ -145,6 +145,7 @@ export class AutomationClient {
   async callLambdaApi(
     method: string,
     path: string,
+    body?: Record<string, unknown>,
   ): Promise<{ status: number; data: unknown }> {
     const url = `${this.config.baseUrl}${path}`;
     const token = await getValidAccessToken(this.config);
@@ -155,6 +156,7 @@ export class AutomationClient {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
 
     const contentType = res.headers.get('content-type') ?? '';

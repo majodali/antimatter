@@ -192,11 +192,28 @@ export interface BuildsQueryResponseMap {
 // Operation metadata
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
+
 export const BUILDS_OPERATIONS: Record<string, OperationMeta> = {
-  'builds.triggers.invoke':     { kind: 'command', context: 'workspace', description: 'Invoke a build trigger' },
-  'builds.configurations.set':  { kind: 'command', context: 'workspace', description: 'Set a build configuration value' },
+  'builds.triggers.invoke': {
+    kind: 'command', context: 'workspace', description: 'Invoke a build trigger',
+    params: { triggerId: z.string().describe('Trigger ID to invoke'), params: z.record(z.unknown()).optional().describe('Parameters for the trigger') },
+  },
+  'builds.configurations.set': {
+    kind: 'command', context: 'workspace', description: 'Set a build configuration value',
+    params: { configurationId: z.string().describe('Configuration ID to set'), value: z.unknown().describe('New configuration value') },
+  },
   'builds.rules.list':          { kind: 'query',   context: 'workspace', description: 'List build rules' },
-  'builds.results.list':        { kind: 'query',   context: 'workspace', description: 'List build results' },
-  'builds.configurations.list': { kind: 'query',   context: 'workspace', description: 'List build configurations' },
-  'builds.triggers.list':       { kind: 'query',   context: 'workspace', description: 'List build triggers' },
+  'builds.results.list': {
+    kind: 'query', context: 'workspace', description: 'List build results',
+    params: { ruleId: z.string().optional().describe('Filter by rule ID'), severity: z.enum(['error', 'warning', 'info', 'status']).optional().describe('Filter by severity'), limit: z.number().optional().describe('Max results to return') },
+  },
+  'builds.configurations.list': {
+    kind: 'query', context: 'workspace', description: 'List build configurations',
+    params: { ruleId: z.string().optional().describe('Filter by rule ID') },
+  },
+  'builds.triggers.list': {
+    kind: 'query', context: 'workspace', description: 'List build triggers',
+    params: { ruleId: z.string().optional().describe('Filter by rule ID') },
+  },
 };

@@ -279,6 +279,7 @@ function resolveMethod(type: string, context?: string): string {
   // Some command patterns map to specific HTTP methods
   if (type.endsWith('.delete') || type === 'agents.chats.delete') return 'DELETE';
   if (type === 'builds.configurations.set') return 'PUT';
+  if (type === 'agents.chats.history' && context === 'command') return 'PUT';
 
   // Commands default to POST
   return 'POST';

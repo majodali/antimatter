@@ -1,27 +1,29 @@
 /**
  * Register all Antimatter automation tools on the MCP server.
+ *
+ * Two categories:
+ * 1. Hand-crafted tools — enhanced behavior (polling, special routing)
+ * 2. Auto-generated tools — one per service-interface operation
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AutomationClient } from '../client.js';
 import type { McpServerConfig } from '../config.js';
 
-import { registerExecuteTool } from './execute.js';
 import { registerTestRunTool } from './test-run.js';
-import { registerTestResultsTool } from './test-results.js';
-import { registerTestListTool } from './test-list.js';
-import { registerClientRefreshTool } from './client-refresh.js';
-import { registerFileReadTool } from './file-read.js';
-import { registerGitStatusTool } from './git-status.js';
 import { registerWorkspaceTool } from './workspace.js';
+import { registerExecuteTool } from './execute.js';
+import { registerGeneratedTools } from './generated.js';
 
 export function registerAllTools(server: McpServer, client: AutomationClient, config: McpServerConfig): void {
+  // Hand-crafted tools with enhanced behavior (registered first, take priority)
   registerTestRunTool(server, client);
-  registerTestResultsTool(server, client);
-  registerTestListTool(server, client);
-  registerClientRefreshTool(server, client);
-  registerFileReadTool(server, client);
-  registerGitStatusTool(server, client);
   registerWorkspaceTool(server, client, config);
+
+  // Auto-generated tools from service-interface operation registry
+  // (skips operations that have hand-crafted overrides)
+  registerGeneratedTools(server, client, config);
+
+  // Generic fallback for any command not covered above
   registerExecuteTool(server, client);
 }

@@ -136,10 +136,29 @@ export interface DeployedResourcesQueryResponseMap {
 // Operation metadata
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
+
+const actionSchema = z.object({ triggerId: z.string(), label: z.string(), description: z.string().optional(), icon: z.string().optional(), enabled: z.boolean() });
+
 export const DEPLOYED_RESOURCES_OPERATIONS: Record<string, OperationMeta> = {
-  'deployed-resources.register':   { kind: 'command', context: 'workspace', description: 'Register a deployed resource' },
-  'deployed-resources.deregister': { kind: 'command', context: 'workspace', description: 'Remove a deployed resource' },
-  'deployed-resources.update':     { kind: 'command', context: 'workspace', description: 'Update a deployed resource' },
-  'deployed-resources.list':       { kind: 'query',   context: 'workspace', description: 'List deployed resources' },
-  'deployed-resources.get':        { kind: 'query',   context: 'workspace', description: 'Get a deployed resource' },
+  'deployed-resources.register': {
+    kind: 'command', context: 'workspace', description: 'Register a deployed resource',
+    params: { name: z.string().describe('Resource name'), resourceType: z.string().describe('Resource type identifier'), description: z.string().optional().describe('Resource description'), metadata: z.record(z.unknown()).optional().describe('Arbitrary resource metadata'), actions: z.array(actionSchema).optional().describe('Actions available on this resource') },
+  },
+  'deployed-resources.deregister': {
+    kind: 'command', context: 'workspace', description: 'Remove a deployed resource',
+    params: { resourceId: z.string().describe('Resource ID to remove') },
+  },
+  'deployed-resources.update': {
+    kind: 'command', context: 'workspace', description: 'Update a deployed resource',
+    params: { resourceId: z.string().describe('Resource ID to update'), metadata: z.record(z.unknown()).optional().describe('Updated metadata'), actions: z.array(actionSchema).optional().describe('Updated actions') },
+  },
+  'deployed-resources.list': {
+    kind: 'query', context: 'workspace', description: 'List deployed resources',
+    params: { resourceType: z.string().optional().describe('Filter by resource type') },
+  },
+  'deployed-resources.get': {
+    kind: 'query', context: 'workspace', description: 'Get a deployed resource',
+    params: { resourceId: z.string().describe('Resource ID to retrieve') },
+  },
 };

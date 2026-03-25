@@ -67,6 +67,11 @@ export interface ObservabilityQueryResponseMap {
 // Operation metadata
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
+
 export const OBSERVABILITY_OPERATIONS: Record<string, OperationMeta> = {
-  'observability.events.list': { kind: 'query', context: 'platform', description: 'List observability events' },
+  'observability.events.list': {
+    kind: 'query', context: 'platform', description: 'List observability events',
+    params: { source: z.string().optional().describe('Filter by event source'), category: z.string().optional().describe('Filter by category'), level: z.enum(['info', 'warn', 'error']).optional().describe('Filter by severity level'), days: z.number().optional().describe('Number of days to look back'), limit: z.number().optional().describe('Max events to return') },
+  },
 };

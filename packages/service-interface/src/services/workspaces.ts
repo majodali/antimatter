@@ -122,11 +122,19 @@ export interface WorkspacesQueryResponseMap {
 // Operation metadata
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
+
 export const WORKSPACES_OPERATIONS: Record<string, OperationMeta> = {
   'workspaces.start':            { kind: 'command', context: 'platform',  description: 'Start a workspace server' },
   'workspaces.stop':             { kind: 'command', context: 'platform',  description: 'Stop a workspace server' },
-  'workspaces.terminals.create': { kind: 'command', context: 'workspace', description: 'Create a terminal session' },
-  'workspaces.terminals.close':  { kind: 'command', context: 'workspace', description: 'Close a terminal session' },
+  'workspaces.terminals.create': {
+    kind: 'command', context: 'workspace', description: 'Create a terminal session',
+    params: { name: z.string().optional().describe('Terminal session name') },
+  },
+  'workspaces.terminals.close': {
+    kind: 'command', context: 'workspace', description: 'Close a terminal session',
+    params: { sessionId: z.string().describe('Terminal session ID to close') },
+  },
   'workspaces.status':           { kind: 'query',   context: 'platform',  description: 'Get workspace status' },
   'workspaces.terminals.list':   { kind: 'query',   context: 'workspace', description: 'List terminal sessions' },
 };

@@ -189,19 +189,50 @@ export interface ProjectsQueryResponseMap {
 // Operation metadata
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
+
 export const PROJECTS_OPERATIONS: Record<string, OperationMeta> = {
-  'projects.create':    { kind: 'command', context: 'platform',  description: 'Create a new project' },
-  'projects.delete':    { kind: 'command', context: 'platform',  description: 'Delete a project' },
-  'projects.import':    { kind: 'command', context: 'platform',  description: 'Import project from remote repository' },
-  'projects.setRemote': { kind: 'command', context: 'workspace', description: 'Set the VCS remote URL' },
-  'projects.stage':     { kind: 'command', context: 'workspace', description: 'Stage files for commit' },
-  'projects.unstage':   { kind: 'command', context: 'workspace', description: 'Unstage files' },
-  'projects.commit':    { kind: 'command', context: 'workspace', description: 'Commit staged changes' },
-  'projects.push':      { kind: 'command', context: 'workspace', description: 'Push to remote' },
-  'projects.pull':      { kind: 'command', context: 'workspace', description: 'Pull from remote' },
-  'projects.list':      { kind: 'query',   context: 'platform',  description: 'List all projects' },
-  'projects.get':       { kind: 'query',   context: 'platform',  description: 'Get project details' },
-  'projects.status':    { kind: 'query',   context: 'workspace', description: 'Get VCS working tree status' },
-  'projects.log':       { kind: 'query',   context: 'workspace', description: 'Get VCS commit history' },
-  'projects.remote':    { kind: 'query',   context: 'workspace', description: 'Get configured remote' },
+  'projects.create': {
+    kind: 'command', context: 'platform', description: 'Create a new project',
+    params: { name: z.string().describe('Project name') },
+  },
+  'projects.delete': {
+    kind: 'command', context: 'platform', description: 'Delete a project and all its data',
+  },
+  'projects.import': {
+    kind: 'command', context: 'platform', description: 'Import project from remote git repository',
+    params: { url: z.string().describe('Git repository URL'), name: z.string().optional().describe('Project name (defaults to repo name)') },
+  },
+  'projects.setRemote': {
+    kind: 'command', context: 'workspace', description: 'Set the VCS remote URL',
+    params: { url: z.string().describe('Remote repository URL') },
+  },
+  'projects.stage': {
+    kind: 'command', context: 'workspace', description: 'Stage files for commit',
+    params: { files: z.array(z.string()).describe('File paths to stage') },
+  },
+  'projects.unstage': {
+    kind: 'command', context: 'workspace', description: 'Unstage files',
+    params: { files: z.array(z.string()).describe('File paths to unstage') },
+  },
+  'projects.commit': {
+    kind: 'command', context: 'workspace', description: 'Commit staged changes',
+    params: { message: z.string().describe('Commit message') },
+  },
+  'projects.push': {
+    kind: 'command', context: 'workspace', description: 'Push commits to remote',
+    params: { remote: z.string().optional().describe('Remote name (default: origin)'), branch: z.string().optional().describe('Branch name') },
+  },
+  'projects.pull': {
+    kind: 'command', context: 'workspace', description: 'Pull from remote',
+    params: { remote: z.string().optional().describe('Remote name (default: origin)'), branch: z.string().optional().describe('Branch name') },
+  },
+  'projects.list': { kind: 'query', context: 'platform', description: 'List all projects' },
+  'projects.get':  { kind: 'query', context: 'platform', description: 'Get project details' },
+  'projects.status': { kind: 'query', context: 'workspace', description: 'Get VCS working tree status (staged, unstaged, untracked)' },
+  'projects.log': {
+    kind: 'query', context: 'workspace', description: 'Get VCS commit history',
+    params: { limit: z.number().optional().describe('Max entries (default: 20)') },
+  },
+  'projects.remote': { kind: 'query', context: 'workspace', description: 'Get configured remote URL' },
 };

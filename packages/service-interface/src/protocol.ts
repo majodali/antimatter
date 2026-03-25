@@ -133,4 +133,11 @@ export interface OperationMeta {
   readonly kind: 'command' | 'query';
   readonly context: ExecutionContext;
   readonly description: string;
+  /**
+   * Zod parameter schema for MCP tool generation.
+   * Keys are parameter names, values are Zod validators.
+   * Omit `type` and `projectId` — those are handled by the tool generator.
+   * Import `z` from 'zod' in each service file to define schemas.
+   */
+  readonly params?: Record<string, unknown>;
 }

@@ -92,7 +92,14 @@ export interface ClientAutomationQueryResponseMap {
 // Operation metadata
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
+
 export const CLIENT_AUTOMATION_OPERATIONS: Record<string, OperationMeta> = {
-  'clients.automation.execute': { kind: 'command', context: 'browser',  description: 'Execute a command on a browser client' },
-  'clients.list':               { kind: 'query',   context: 'platform', description: 'List connected clients' },
+  'clients.automation.execute': {
+    kind: 'command', context: 'browser', description: 'Execute a command on a browser client',
+    params: { clientId: z.string().describe('Target browser client ID'), command: z.string().describe('Automation command to execute'), params: z.record(z.unknown()).optional().describe('Command parameters') },
+  },
+  'clients.list': {
+    kind: 'query', context: 'platform', description: 'List connected clients',
+  },
 };
