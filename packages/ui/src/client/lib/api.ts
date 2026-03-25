@@ -296,14 +296,14 @@ export async function clearChatHistory(projectId?: string): Promise<void> {
  * when the WebSocket is not connected.
  */
 export async function sendChatMessage(message: string, projectId?: string): Promise<void> {
-  // Prefer WebSocket when connected — avoids the REST round-trip
-  const { workspaceConnection } = await import('./workspace-connection.js');
-  if (workspaceConnection.isConnected()) {
-    workspaceConnection.send({ type: 'agents.chats.send', message });
-    return;
-  }
+  // TODO: Enable WebSocket send once server-side handler is verified
+  // const { workspaceConnection } = await import('./workspace-connection.js');
+  // if (workspaceConnection.isConnected()) {
+  //   workspaceConnection.send({ type: 'agents.chats.send', message });
+  //   return;
+  // }
 
-  // Fallback to REST when WebSocket is down
+  // REST POST — server processes async, broadcasts events via WebSocket
   const pid = projectId ?? '';
   const res = await client.command(
     { type: 'agents.chats.send', projectId: pid, message } as any,

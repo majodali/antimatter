@@ -145,6 +145,7 @@ export function processChatMessage(
 ): void {
   (async () => {
     try {
+      console.log(`[agent] processChatMessage: "${message.slice(0, 50)}"`);
       const result = await workspace.chatStream(
         message,
         {

@@ -42,7 +42,7 @@ import type { BuildRule, BuildResult } from '@antimatter/project-model';
 import { WorkspaceService } from './services/workspace-service.js';
 import { createFileRouter } from './routes/filesystem.js';
 import { createBuildRouter } from './routes/build.js';
-import { createAgentRouter } from './routes/agent.js';
+import { createAgentRouter, processChatMessage } from './routes/agent.js';
 import { createDeployRouter } from './routes/deploy.js';
 import { createEnvironmentRouter } from './routes/environments.js';
 import { createActivityRouter } from './routes/activity.js';
@@ -897,12 +897,9 @@ export class ProjectContext {
             break;
           case 'agents.chats.send':
             // Chat message via WebSocket — same pipeline as REST POST /agent/chat
+            console.log(`[project-context:${this.projectId}] Chat send via WebSocket: "${String(msg.message).slice(0, 50)}"`);
             if (msg.message) {
-              import('./routes/agent.js').then(({ processChatMessage }) => {
-                processChatMessage(msg.message, this.workspace, (m: object) => this.broadcastToClients(m));
-              }).catch(err => {
-                console.error(`[project-context:${this.projectId}] Chat send failed:`, err);
-              });
+              processChatMessage(msg.message, this.workspace, (m: object) => this.broadcastToClients(m));
             }
             break;
           case 'automation-response':

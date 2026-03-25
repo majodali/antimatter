@@ -32,7 +32,7 @@ done
 
 # ---- Resolve AWS resources ----
 
-STACK_NAME="AntimatterEnv-e1"
+STACK_NAME="AntimatterStack"
 
 resolve_bucket() {
   aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
