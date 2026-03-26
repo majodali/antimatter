@@ -8,20 +8,11 @@
  * NOT replaced — they contain complex bundling config. Workflow rules call them
  * via wf.exec().
  */
-import { defineWorkflow, type FileChangeEvent } from '@antimatter/workflow';
+// No imports — automation files use the `wf` runtime parameter for all APIs.
+// Importing from @antimatter/* packages would require building dist/ on the
+// workspace server, adding memory overhead and startup latency.
 
-interface BuildState {
-  deps: {
-    status: 'pending' | 'installing' | 'ready' | 'failed';
-    lastRun?: string;
-  };
-  compile: {
-    status: 'pending' | 'running' | 'success' | 'failed';
-    lastRun?: string;
-  };
-}
-
-export default defineWorkflow<BuildState>((wf) => {
+export default (wf: any) => {
 
   // ---- Widget declarations ----
 
@@ -115,7 +106,7 @@ export default defineWorkflow<BuildState>((wf) => {
    * Scoped to packages/**\/*.ts to avoid reacting to config files, scripts, etc.
    * Excludes .antimatter/ (workflow files are not project source).
    */
-  wf.rule<FileChangeEvent>('Type-check on .ts file change',
+  wf.rule('Type-check on .ts file change',
     (e) => {
       if (e.type !== 'file:change') return false;
       const path = String(e.path);
@@ -189,4 +180,4 @@ export default defineWorkflow<BuildState>((wf) => {
     },
     { manual: false },
   );
-});
+};

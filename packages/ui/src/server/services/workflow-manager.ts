@@ -862,35 +862,35 @@ export class WorkflowManager {
 
   /**
    * Load a single workflow definition file.
-   * Bundles TypeScript to a self-contained ESM JavaScript file and imports it.
+   * Transforms TypeScript to ESM JavaScript via esbuild.transform() (no bundling),
+   * writes the result to .antimatter-cache/compiled/, and dynamic-imports it.
    *
-   * Uses esbuild.build() with bundle:true instead of transform() because
-   * workspace packages (e.g. @antimatter/workflow) use the @antimatter/source
-   * export condition to point at raw TypeScript source, and their dist/ folders
-   * may not be built.  Bundling resolves those imports at compile time.
+   * Uses transform instead of build+bundle because:
+   * - No need to bundle — the file executes on the workspace server where
+   *   node_modules is available for regular module resolution.
+   * - Bundling the antimatter monorepo's workflow packages consumed ~4GB RAM,
+   *   causing std::bad_alloc crashes on resource-constrained instances.
+   * - Transform is fast (~10ms) and memory-efficient (~50MB).
    */
   private async loadSingleDefinition(filePath: string): Promise<WorkflowDefinition<any> | null> {
     const esbuild = await import('esbuild');
     const { resolve } = await import('node:path');
+    const { mkdir, readFile: fsReadFile, writeFile: fsWriteFile } = await import('node:fs/promises');
 
     const rootPath = (this.env as any).rootPath ?? process.cwd();
     const absoluteSourcePath = resolve(rootPath, filePath);
-    // Write compiled output to .antimatter-cache/compiled/ to keep .antimatter/ clean
     const basename = filePath.split('/').pop()!.replace(/\.ts$/, '.compiled.mjs');
     const compiledPath = `.antimatter-cache/compiled/${basename}`;
     const absoluteCompiledPath = resolve(rootPath, compiledPath);
 
-    // Ensure the compiled output directory exists
-    const { mkdir, readFile: fsReadFile } = await import('node:fs/promises');
+    // Ensure output directory exists
     const compiledDir = resolve(rootPath, '.antimatter-cache/compiled');
     await mkdir(compiledDir, { recursive: true });
 
-    // Verify source file has content before compiling.
-    // The DOM file creation flow creates an empty file first, then writes content
-    // in a separate API call. Skip empty files — the content write will trigger
-    // another file:change event which will schedule a new reload.
+    // Read source file — skip if empty (content write triggers another reload)
+    let sourceContent: string;
     try {
-      const sourceContent = await fsReadFile(absoluteSourcePath, 'utf-8');
+      sourceContent = await fsReadFile(absoluteSourcePath, 'utf-8');
       if (sourceContent.trim().length === 0) {
         console.log(`[workflow-manager] ${filePath} is empty — skipping (will reload when content arrives)`);
         return null;
@@ -900,27 +900,39 @@ export class WorkflowManager {
       return null;
     }
 
-    // Bundle with esbuild — resolves @antimatter/* via the source condition
-    // so we don't depend on dist/ being built.
-    const buildResult = await esbuild.build({
-      entryPoints: [absoluteSourcePath],
-      bundle: true,
-      format: 'esm',
-      platform: 'node',
-      target: 'node20',
-      outfile: absoluteCompiledPath,
-      conditions: ['@antimatter/source', 'import'],
-      logLevel: 'silent',
-    });
+    // Transform TypeScript → ESM JavaScript (no bundling, no dependency resolution)
+    let code: string;
+    try {
+      const transformResult = await esbuild.transform(sourceContent, {
+        loader: 'ts',
+        format: 'esm',
+        target: 'node20',
+        sourcefile: absoluteSourcePath,
+      });
+      code = transformResult.code;
 
-    if (buildResult.errors.length > 0) {
-      // Parse structured esbuild errors into ProjectErrors for the IDE
+      if (transformResult.warnings.length > 0) {
+        for (const w of transformResult.warnings) {
+          console.warn(`[workflow-manager] ${filePath}: ${w.text}`);
+        }
+      }
+
+      // Clear previous compilation errors on success
       if (this.errorStore) {
-        const projectErrors = parseEsbuildErrors(buildResult);
+        await this.errorStore.clearTool('workflow');
+      }
+    } catch (err: any) {
+      // esbuild.transform throws on syntax errors
+      console.error(`[workflow-manager] Failed to compile ${filePath}:`, err.message ?? err);
+      if (this.errorStore && err.errors) {
+        const projectErrors = parseEsbuildErrors(err);
         await this.errorStore.setErrors('workflow', projectErrors);
       }
-      throw new Error(`esbuild: ${buildResult.errors.map(e => e.text).join(', ')}`);
+      return null;
     }
+
+    // Write compiled output
+    await fsWriteFile(absoluteCompiledPath, code, 'utf-8');
 
     // Dynamic import with cache-busting query param
     const fileUrl = `file://${absoluteCompiledPath.replace(/\\/g, '/')}?t=${Date.now()}`;

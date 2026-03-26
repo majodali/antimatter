@@ -10,7 +10,7 @@
  *   deploy:upload-workspace → upload workspace server bundle to S3
  *   deploy:cdk → full CDK deploy (frontend + API Lambda + infrastructure)
  */
-import { defineWorkflow } from '@antimatter/workflow';
+// No imports — automation files use the `wf` runtime parameter.
 
 interface DeployState {
   bundle: {
@@ -24,7 +24,7 @@ interface DeployState {
   };
 }
 
-export default defineWorkflow<DeployState>((wf) => {
+export default (wf: any) => {
 
   // ---- Widget declarations ----
 
@@ -331,4 +331,4 @@ export default defineWorkflow<DeployState>((wf) => {
     },
     { manual: false },
   );
-});
+};
