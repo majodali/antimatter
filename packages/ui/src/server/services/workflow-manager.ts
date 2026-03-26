@@ -746,29 +746,55 @@ export class WorkflowManager {
     }
   }
 
+  /** Directories to exclude from file manifest (build artifacts, caches, VCS). */
+  private static readonly MANIFEST_EXCLUDE = new Set([
+    '.antimatter', '.antimatter-cache', 'node_modules', 'dist', 'dist-lambda',
+    'dist-workspace', '.git', '.vite-temp', 'cdk.out', '.next', '__pycache__',
+    '.turbo', '.cache', 'coverage',
+  ]);
+
+  /** Max file size (bytes) to hash. Larger files are skipped to avoid memory pressure. */
+  private static readonly MAX_HASH_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
+
   /**
-   * Compute a hash manifest of all workspace files (excluding .antimatter/).
-   * Maps relative file paths to content hashes.
+   * Compute a hash manifest of workspace source files.
+   * Uses streaming hashes to avoid loading entire files into memory.
+   * Skips build artifacts, caches, and files over 2 MB.
    */
   private async computeFileManifest(dir = '', result: Record<string, string> = {}): Promise<Record<string, string>> {
+    const { createReadStream, statSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const rootPath = (this.env as any).rootPath ?? process.cwd();
+
     try {
       const entries = await this.env.readDirectory(dir || '.');
       for (const entry of entries) {
-        const path = dir ? `${dir}/${entry.name}` : entry.name;
-        // Skip directories that shouldn't trigger workflow rules
-        if (entry.name === '.antimatter' || entry.name === '.antimatter-cache' ||
-            entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.git') continue;
+        if (WorkflowManager.MANIFEST_EXCLUDE.has(entry.name)) continue;
+        // Also skip hidden directories (except .antimatter which is already excluded)
+        if (entry.name.startsWith('.') && entry.isDirectory) continue;
 
-        if (!entry.isDirectory) {
+        const relativePath = dir ? `${dir}/${entry.name}` : entry.name;
+
+        if (entry.isDirectory) {
+          await this.computeFileManifest(relativePath, result);
+        } else {
           try {
-            const content = await this.env.readFile(path);
-            const hash = createHash('md5').update(content).digest('hex');
-            result[path] = hash;
+            const absolutePath = resolve(rootPath, relativePath);
+            const stat = statSync(absolutePath);
+            if (stat.size > WorkflowManager.MAX_HASH_FILE_SIZE) continue;
+
+            // Stream the file through a hash instead of reading into memory
+            const hash = await new Promise<string>((res, rej) => {
+              const h = createHash('md5');
+              const stream = createReadStream(absolutePath);
+              stream.on('data', (chunk: Buffer) => h.update(chunk));
+              stream.on('end', () => res(h.digest('hex')));
+              stream.on('error', rej);
+            });
+            result[relativePath] = hash;
           } catch {
-            // Skip files that can't be read
+            // Skip files that can't be read or hashed
           }
-        } else if (entry.isDirectory) {
-          await this.computeFileManifest(path, result);
         }
       }
     } catch {
