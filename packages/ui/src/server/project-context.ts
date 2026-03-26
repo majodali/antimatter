@@ -464,8 +464,10 @@ export class ProjectContext {
     // Initialize git
     await this.initializeGit();
 
-    // Start PTY
-    this.ptyManager.start(this.projectPath);
+    // PTY is started lazily on first WebSocket connection (not during init).
+    // node-pty can crash the process with std::bad_alloc on resource-constrained
+    // instances, so deferring avoids killing the server before it serves HTTP.
+    // See handleWebSocket() for the lazy start.
 
     // Error store
     this.errorStore = new ErrorStore(this.env, () => {
@@ -834,6 +836,19 @@ export class ProjectContext {
     this._lastConnectTime = new Date().toISOString();
     console.log(`[project-context:${this.projectId}] WebSocket client connected (total received: ${this._connectionsReceived}, current: ${this.connections.size + 1})`);
     this.connections.add(ws);
+
+    // Lazy-start PTY on first WebSocket connection.
+    // Deferred from initialize() because node-pty's native module can crash the
+    // process with std::bad_alloc. By deferring, the HTTP server stays alive for
+    // file/git/workflow operations even if PTY fails.
+    if (!this.ptyManager.isRunning) {
+      try {
+        console.log(`[project-context:${this.projectId}] Lazy-starting PTY...`);
+        this.ptyManager.start(this.projectPath);
+      } catch (err) {
+        console.error(`[project-context:${this.projectId}] PTY failed to start:`, err);
+      }
+    }
 
     // Send replay buffer
     const replay = this.ptyManager.getReplayBuffer();

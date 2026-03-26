@@ -112,8 +112,10 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'tests.list', execution: 'browser', description: 'List available test modules' },
   { command: 'tests.results', execution: 'browser', description: 'Get latest test results' },
 
-  // Client lifecycle
+  // Client lifecycle & inspection
   { command: 'client.refresh', execution: 'browser', description: 'Hard-refresh the browser (reload from server)' },
+  { command: 'client.navigate', execution: 'browser', description: 'Navigate to a URL or IDE view' },
+  { command: 'client.state', execution: 'browser', description: 'Get comprehensive UI state snapshot (editor, files, problems, workflow, git, tests, terminal)' },
 
   // Meta
   { command: 'commands.list', execution: 'server', description: 'List all available commands' },

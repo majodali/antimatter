@@ -491,19 +491,23 @@ server.on('upgrade', (req, socket, head) => {
 // ---------------------------------------------------------------------------
 
 async function startup() {
-  // If PROJECT_ID is set, auto-initialize that project (backward compat)
-  if (PROJECT_ID) {
-    console.log(`[workspace-server] Auto-initializing primary project: ${PROJECT_ID}`);
-    await getOrCreateContext(PROJECT_ID);
-  }
-
-  // Start HTTP server
+  // Start HTTP server FIRST so health checks pass and the ALB registers us.
+  // Project initialization happens async afterwards — it can consume
+  // significant memory (esbuild bundling of .antimatter/*.ts) and time,
+  // and shouldn't block the listener or cause health check failures.
   server.listen(PORT, async () => {
     console.log(`[workspace-server] Listening on port ${PORT}`);
-    console.log(`[workspace-server] Active projects: ${[...projectContexts.keys()].join(', ') || '(none)'}`);
 
     await globalEventLogger.emit('workspace.ready', 'workspace', 'info',
       'Workspace server ready', { port: PORT, uptime: process.uptime() });
+
+    // Project contexts are created lazily on first HTTP/WebSocket request.
+    // Auto-initialization removed because the antimatter project's esbuild
+    // compilation of .antimatter/*.ts can consume 4GB+ RAM and crash node-pty
+    // with std::bad_alloc, killing the process before health checks pass.
+    if (PROJECT_ID) {
+      console.log(`[workspace-server] Primary project: ${PROJECT_ID} (lazy init on first request)`);
+    }
   });
 }
 

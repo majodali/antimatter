@@ -235,15 +235,147 @@ export class AutomationHandler {
     });
 
     this.handlers.set('client.state', async () => {
-      // Return current client state for diagnostics
+      // Comprehensive UI state snapshot — everything visible in the IDE.
+      // Excludes file contents, terminal buffer, and build/deploy output.
       const { useProjectStore } = await import('../stores/projectStore.js');
-      const state = useProjectStore.getState();
+      const { useEditorStore } = await import('../stores/editorStore.js');
+      const { useFileStore } = await import('../stores/fileStore.js');
+      const { useApplicationStore } = await import('../stores/applicationStore.js');
+      const { useChatStore } = await import('../stores/chatStore.js');
+      const { useGitStore } = await import('../stores/gitStore.js');
+      const { useTestResultStore } = await import('../stores/testResultStore.js');
+      const { useTerminalStore } = await import('../stores/terminalStore.js');
+
+      const project = useProjectStore.getState();
+      const editor = useEditorStore.getState();
+      const files = useFileStore.getState();
+      const app = useApplicationStore.getState();
+      const chat = useChatStore.getState();
+      const git = useGitStore.getState();
+      const tests = useTestResultStore.getState();
+      const terminal = useTerminalStore.getState();
+
+      // Editor: open files (paths only, no content), active file, dirty state
+      const openFiles = Array.from(editor.openFiles.entries()).map(([path, f]) => ({
+        path,
+        language: f.language,
+        isDirty: f.isDirty,
+      }));
+
+      // File tree: flatten to paths (no content)
+      const flattenTree = (nodes: any[], prefix = ''): string[] => {
+        const result: string[] = [];
+        for (const n of nodes) {
+          const p = prefix ? `${prefix}/${n.name}` : n.name;
+          result.push(n.isDirectory ? `${p}/` : p);
+          if (n.children) result.push(...flattenTree(n.children, p));
+        }
+        return result;
+      };
+
+      // Application state: errors, workflow, rules
+      const errors = app.getErrors?.() ?? [];
+      const errorSummary = {
+        total: errors.length,
+        byFile: Object.fromEntries(
+          Array.from((app.getErrorCountsByFile?.() ?? new Map()).entries())
+        ),
+        bySeverity: {
+          error: errors.filter((e: any) => e.errorType?.name === 'TypeError' || e.errorType?.name === 'Error').length,
+          warning: errors.filter((e: any) => e.errorType?.name === 'Warning').length,
+        },
+      };
+
+      // Workflow state from server
+      const serverState = app.serverState;
+      const ruleResults = serverState?.ruleResults ?? {};
+      const loadedFiles = serverState?.loadedFiles ?? [];
+      const declarations = serverState?.declarations;
+      const ruleCount = declarations?.rules?.length ?? 0;
+
+      // Test results
+      const testSummary = tests.getSummary();
+
       return {
-        currentProjectId: state.currentProjectId,
-        workspaceReady: state.workspaceReady,
+        // Navigation
         url: window.location.href,
-        pathname: window.location.pathname,
-        search: window.location.search,
+
+        // Project
+        project: {
+          id: project.currentProjectId,
+          workspaceReady: project.workspaceReady,
+          projectCount: project.projects.length,
+        },
+
+        // Editor
+        editor: {
+          activeFile: editor.activeFile,
+          openFiles,
+          openFileCount: openFiles.length,
+          dirtyFileCount: openFiles.filter(f => f.isDirty).length,
+        },
+
+        // File Explorer
+        fileExplorer: {
+          fileCount: flattenTree(files.files).length,
+          selectedFile: files.selectedFile,
+          selectedFiles: Array.from(files.selectedFiles),
+          expandedFolders: Array.from(files.expandedFolders),
+          hasClipboard: !!files.clipboard,
+          clipboardMode: files.clipboard?.mode ?? null,
+        },
+
+        // Problems / Errors
+        problems: errorSummary,
+
+        // Workflow / Build
+        workflow: {
+          loadedFiles,
+          ruleCount,
+          ruleResults: Object.fromEntries(
+            Object.entries(ruleResults).map(([id, r]: [string, any]) => [
+              id,
+              { status: r.status, lastRunAt: r.lastRunAt, durationMs: r.durationMs, error: r.error },
+            ])
+          ),
+        },
+
+        // Git
+        git: {
+          initialized: git.status?.initialized ?? false,
+          branch: git.status?.branch ?? null,
+          staged: git.status?.staged?.length ?? 0,
+          unstaged: git.status?.unstaged?.length ?? 0,
+          untracked: git.status?.untracked?.length ?? 0,
+          remoteCount: git.remotes.length,
+          commitMessage: git.commitMessage || null,
+        },
+
+        // Chat
+        chat: {
+          messageCount: chat.messages.length,
+          isTyping: chat.isTyping,
+          isStreaming: !!chat.streamingMessageId,
+          currentAgent: chat.currentAgent ?? null,
+        },
+
+        // Tests
+        tests: {
+          ...testSummary,
+          isRunning: tests.isRunning,
+          currentTestId: tests.currentTestId,
+          testTabStatus: tests.testTabStatus,
+          lastError: tests.lastError,
+          resultCount: tests.results.length,
+          runCount: tests.runs.length,
+        },
+
+        // Terminal
+        terminal: {
+          connectionState: terminal.connectionState,
+          isRunning: terminal.isRunning,
+          showReconnectOverlay: terminal.showReconnectOverlay,
+        },
       };
     });
   }
