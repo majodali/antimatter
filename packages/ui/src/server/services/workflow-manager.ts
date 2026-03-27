@@ -862,9 +862,9 @@ export class WorkflowManager {
           console.error(`[workflow-manager] Failed to load ${filePath} — skipping:`, err);
           // Report load errors via errorStore → triggers error patch
           if (this.errorStore) {
-            this.errorStore.setErrors('workflow', [{
-              errorType: { name: 'Build Error', icon: '🔨', color: '#ef4444', highlightStyle: 'squiggly' as const },
-              toolId: 'workflow',
+            this.errorStore.setErrors(`workflow:${filePath}`, [{
+              errorType: { name: 'Build Error', icon: 'circle-alert', color: '#ef4444', highlightStyle: 'squiggly' as const },
+              toolId: `workflow:${filePath}`,
               file: filePath,
               message: err instanceof Error ? err.message : String(err),
             }]).catch(() => {});
@@ -943,16 +943,18 @@ export class WorkflowManager {
         }
       }
 
-      // Clear previous compilation errors on success
+      // Clear previous compilation errors for THIS file on success
       if (this.errorStore) {
-        await this.errorStore.clearTool('workflow');
+        await this.errorStore.clearTool(`workflow:${filePath}`);
       }
     } catch (err: any) {
       // esbuild.transform throws on syntax errors
       console.error(`[workflow-manager] Failed to compile ${filePath}:`, err.message ?? err);
       if (this.errorStore && err.errors) {
         const projectErrors = parseEsbuildErrors(err);
-        await this.errorStore.setErrors('workflow', projectErrors);
+        // Scope errors to this specific file
+        for (const e of projectErrors) { e.toolId = `workflow:${filePath}`; }
+        await this.errorStore.setErrors(`workflow:${filePath}`, projectErrors);
       }
       return null;
     }
@@ -962,11 +964,39 @@ export class WorkflowManager {
 
     // Dynamic import with cache-busting query param
     const fileUrl = `file://${absoluteCompiledPath.replace(/\\/g, '/')}?t=${Date.now()}`;
-    const module = await import(fileUrl);
+    let module: any;
+    try {
+      module = await import(fileUrl);
+    } catch (importErr: any) {
+      const msg = importErr.message ?? String(importErr);
+      console.error(`[workflow-manager] Failed to import compiled ${filePath}: ${msg}`);
+      if (this.errorStore) {
+        await this.errorStore.setErrors(`workflow:${filePath}`, [{
+          errorType: { name: 'Import Error', icon: 'circle-alert', color: '#ef4444', highlightStyle: 'squiggly' as const },
+          toolId: `workflow:${filePath}`,
+          file: filePath,
+          message: `Failed to load automation file: ${msg}`,
+          line: 1,
+          column: 1,
+        }]);
+      }
+      return null;
+    }
 
     const definition = module.default;
     if (typeof definition !== 'function') {
-      console.warn(`[workflow-manager] ${filePath} does not export a default function — skipping`);
+      const actual = definition === undefined ? 'undefined' : typeof definition;
+      console.warn(`[workflow-manager] ${filePath} does not export a default function (got ${actual}) — skipping`);
+      if (this.errorStore) {
+        await this.errorStore.setErrors(`workflow:${filePath}`, [{
+          errorType: { name: 'Export Error', icon: 'circle-alert', color: '#ef4444', highlightStyle: 'squiggly' as const },
+          toolId: `workflow:${filePath}`,
+          file: filePath,
+          message: `Automation file must \`export default (wf) => { ... }\`. Got ${actual}.`,
+          line: 1,
+          column: 1,
+        }]);
+      }
       return null;
     }
 

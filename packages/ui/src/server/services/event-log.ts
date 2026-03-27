@@ -15,7 +15,7 @@
  * workflow engine can catch up on events that arrived while it was offline.
  */
 
-import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WorkflowEvent, EventLogEntry, EventSource } from '@antimatter/workflow';
 
@@ -27,6 +27,8 @@ const MAX_ENTRIES = 10_000;        // In-memory ring buffer size
 const DEDUPE_WINDOW_MS = 5_000;    // Suppress watcher events that duplicate recent rest-api events
 const DRAIN_INTERVAL_MS = 50;      // Batch events for this long before delivering
 const COMPACT_RETAIN = 1_000;      // Keep this many entries after checkpoint on compaction
+const MAX_JSONL_SIZE = 10 * 1024 * 1024; // 10 MB hard cap on JSONL file size
+const COMPACT_INTERVAL_MS = 60_000; // Compact every 60 seconds (was 5 minutes)
 
 // ---------------------------------------------------------------------------
 // EventLog
@@ -111,12 +113,12 @@ export class EventLog {
     // Clean stale dedup entries
     this.pruneDedupeWindow();
 
-    // Start periodic compaction (every 5 minutes)
+    // Start periodic compaction
     this.compactTimer = setInterval(() => {
-      this.compact(this.lastCompactedSeq).catch(err => {
+      this.autoCompact().catch(err => {
         console.warn('[event-log] Compaction failed:', err);
       });
-    }, 5 * 60 * 1000);
+    }, COMPACT_INTERVAL_MS);
   }
 
   /**
@@ -192,11 +194,7 @@ export class EventLog {
       }
 
       // Persist to JSONL (synchronous for durability)
-      try {
-        appendFileSync(this.logPath, JSON.stringify(entry) + '\n');
-      } catch (err) {
-        console.warn('[event-log] Failed to append to JSONL:', err);
-      }
+      this.appendToFile(entry);
 
       appended.push(entry);
     }
@@ -230,11 +228,9 @@ export class EventLog {
         this.entries.shift();
       }
 
-      try {
-        appendFileSync(this.logPath, JSON.stringify(entry) + '\n');
-      } catch {
-        // Best effort for audit
-      }
+      // Audit entries are in-memory only — don't write to JSONL.
+      // Internal workflow events (wf.emit cascades) generate high volume
+      // and don't need to survive restarts.
     }
   }
 
@@ -315,5 +311,42 @@ export class EventLog {
         this.dedupeWindow.delete(key);
       }
     }
+  }
+
+  /**
+   * Append an entry to the JSONL file with size checking.
+   * If the file exceeds MAX_JSONL_SIZE, trigger an immediate compaction.
+   */
+  private appendToFile(entry: EventLogEntry): void {
+    try {
+      appendFileSync(this.logPath, JSON.stringify(entry) + '\n');
+
+      // Check file size periodically (every 100 entries to avoid stat overhead)
+      if (entry.seq % 100 === 0) {
+        try {
+          const size = statSync(this.logPath).size;
+          if (size > MAX_JSONL_SIZE) {
+            console.log(`[event-log] JSONL file ${(size / 1024 / 1024).toFixed(1)}MB exceeds limit, compacting...`);
+            this.autoCompact().catch(() => {});
+          }
+        } catch {
+          // stat failed — skip size check
+        }
+      }
+    } catch (err) {
+      console.warn('[event-log] Failed to append to JSONL:', err);
+    }
+  }
+
+  /**
+   * Auto-compact: rewrite the JSONL file with only the in-memory ring buffer contents.
+   * This is the primary mechanism for keeping the file bounded.
+   */
+  private async autoCompact(): Promise<void> {
+    // Use the latest seq as checkpoint — we only need entries in the ring buffer
+    const checkpointSeq = this.entries.length > 0
+      ? this.entries[this.entries.length - 1].seq - COMPACT_RETAIN
+      : 0;
+    await this.compact(Math.max(0, checkpointSeq));
   }
 }
