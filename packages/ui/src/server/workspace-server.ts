@@ -501,10 +501,10 @@ async function startup() {
     await globalEventLogger.emit('workspace.ready', 'workspace', 'info',
       'Workspace server ready', { port: PORT, uptime: process.uptime() });
 
-    // Project contexts are created lazily on first HTTP/WebSocket request.
-    // Auto-initialization removed because the antimatter project's esbuild
-    // compilation of .antimatter/*.ts can consume 4GB+ RAM and crash node-pty
-    // with std::bad_alloc, killing the process before health checks pass.
+    // Project initialization is lazy — triggered by first HTTP/WebSocket request.
+    // Even with esbuild.transform() (fast), the full ProjectContext init includes
+    // file watchers, S3 sync, git, and workflow manager which can block the event
+    // loop. Lazy init keeps health checks responsive from the start.
     if (PROJECT_ID) {
       console.log(`[workspace-server] Primary project: ${PROJECT_ID} (lazy init on first request)`);
     }
