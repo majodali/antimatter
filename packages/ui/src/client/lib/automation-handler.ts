@@ -328,16 +328,51 @@ export class AutomationHandler {
         // Problems / Errors
         problems: errorSummary,
 
-        // Workflow / Build
+        // Workflow / Build / Deploy
         workflow: {
           loadedFiles,
           ruleCount,
+          rules: (declarations?.rules ?? []).map((r: any) => ({
+            id: r.id,
+            name: r.name,
+            manual: r.manual,
+            sourceFile: r.sourceFile,
+            // Merge rule result if available
+            ...(ruleResults[r.id] ? {
+              status: ruleResults[r.id].status,
+              lastRunAt: ruleResults[r.id].lastRunAt,
+              durationMs: ruleResults[r.id].durationMs,
+              error: ruleResults[r.id].error,
+            } : {}),
+          })),
+          widgets: (declarations?.widgets ?? []).map((w: any) => {
+            const uiState = serverState?.workflowState?._ui?.[w.id];
+            return {
+              id: w.id,
+              type: w.type,
+              label: w.label,
+              section: w.section,
+              icon: w.icon,
+              // Dynamic state from _ui
+              value: uiState?.value ?? null,
+              enabled: uiState?.enabled ?? true,
+              visible: uiState?.visible ?? true,
+            };
+          }),
+          // Full rule results for rules not in declarations (orphaned results from previous loads)
           ruleResults: Object.fromEntries(
             Object.entries(ruleResults).map(([id, r]: [string, any]) => [
               id,
               { status: r.status, lastRunAt: r.lastRunAt, durationMs: r.durationMs, error: r.error },
             ])
           ),
+          // Workflow state summary (deploy state, etc.)
+          state: (() => {
+            const ws = serverState?.workflowState ?? {};
+            // Return top-level state keys excluding _ui (already in widgets)
+            const { _ui, ...rest } = ws as any;
+            return rest;
+          })(),
         },
 
         // Git
