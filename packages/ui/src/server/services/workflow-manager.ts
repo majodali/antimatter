@@ -79,6 +79,10 @@ export class WorkflowManager {
   private processing = false;
   private reloadTimer: ReturnType<typeof setTimeout> | null = null;
   private reloading = false;
+  /** Promise that resolves when a pending reload completes. Callers that need
+   *  the runtime (emitEvent, processEvents, runRule) await this before proceeding. */
+  private reloadPromise: Promise<void> | null = null;
+  private reloadResolve: (() => void) | null = null;
 
   private readonly env: WorkspaceEnvironment;
   private readonly broadcast: (msg: object) => void;
@@ -337,8 +341,6 @@ export class WorkflowManager {
       this.scheduleReload();
     }
 
-    if (!this.runtime) return;
-
     const workflowEvents = allWorkflowEvents.filter(e =>
       !e.path || (!String(e.path).startsWith('/.antimatter/') && !String(e.path).startsWith('.antimatter/')),
     );
@@ -350,15 +352,30 @@ export class WorkflowManager {
       return;
     }
 
+    // processEvents will await any pending reload before accessing the runtime
     this.processEvents(workflowEvents).catch(err => {
       console.error('[workflow-manager] Error processing file change events:', err);
     });
   }
 
   /**
+   * Wait for any pending reload to complete before accessing the runtime.
+   * Returns true if a reload was awaited.
+   */
+  private async awaitPendingReload(): Promise<boolean> {
+    if (this.reloadPromise) {
+      await this.reloadPromise;
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Manually emit a custom event and process it through the workflow.
    */
   async emitEvent(event: { type: string; [key: string]: unknown }): Promise<WorkflowInvocationResult | null> {
+    // Wait for any pending reload to complete so the runtime is available
+    await this.awaitPendingReload();
     if (!this.runtime) return null;
 
     const workflowEvent: WorkflowEvent = {
@@ -375,6 +392,8 @@ export class WorkflowManager {
    * Emitted events are processed through subsequent cycles.
    */
   async runRule(ruleId: string): Promise<WorkflowInvocationResult | null> {
+    // Wait for any pending reload to complete so the runtime is available
+    await this.awaitPendingReload();
     if (!this.runtime) return null;
 
     // Serialize — don't process concurrently
@@ -455,6 +474,11 @@ export class WorkflowManager {
    * Process events through the runtime, persist state, and broadcast results.
    */
   private async processEvents(events: WorkflowEvent[]): Promise<WorkflowInvocationResult | null> {
+    // Wait for any pending reload to complete so the runtime is available.
+    // Skip if we're already inside a reload (fullRefresh calls processEvents internally).
+    if (!this.reloading) {
+      await this.awaitPendingReload();
+    }
     if (!this.runtime) return null;
 
     // Serialize — don't process events concurrently
@@ -589,6 +613,16 @@ export class WorkflowManager {
       clearTimeout(this.reloadTimer);
     }
 
+    // Create a reload promise that callers can await. If one already exists
+    // (from a previous scheduleReload that hasn't fired yet), reuse it —
+    // the debounce timer reset means the same promise will resolve when
+    // the actual reload completes.
+    if (!this.reloadPromise) {
+      this.reloadPromise = new Promise<void>(resolve => {
+        this.reloadResolve = resolve;
+      });
+    }
+
     this.reloadTimer = setTimeout(async () => {
       this.reloadTimer = null;
 
@@ -624,7 +658,6 @@ export class WorkflowManager {
         }
       } catch (err) {
         console.error('[workflow-manager] Full refresh failed:', err);
-        // Report reload errors via errorStore → triggers error patch
         if (this.errorStore) {
           this.errorStore.setErrors('workflow-reload', [{
             errorType: { name: 'Reload Error', icon: '🔄', color: '#ef4444', highlightStyle: 'squiggly' as const },
@@ -635,6 +668,11 @@ export class WorkflowManager {
         }
       } finally {
         this.reloading = false;
+        // Resolve the reload promise so waiters can proceed
+        const resolve = this.reloadResolve;
+        this.reloadPromise = null;
+        this.reloadResolve = null;
+        resolve?.();
       }
     }, 500);
   }
