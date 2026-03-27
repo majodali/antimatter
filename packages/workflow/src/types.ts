@@ -444,6 +444,8 @@ export interface WorkflowRuntimeConfig {
   readonly onReportErrors?: (toolId: string, errors: ProjectError[]) => void;
   /** Absolute path to the project workspace root. Available as wf.projectRoot in rules. */
   readonly projectRoot?: string;
+  /** Server-provided utilities exposed as wf.utils in rules. */
+  readonly utils?: Record<string, unknown>;
 }
 
 /** A log message captured during workflow execution. */

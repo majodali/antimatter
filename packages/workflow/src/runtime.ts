@@ -131,6 +131,8 @@ export class WorkflowRuntime<S> {
       },
       /** Absolute path to the project workspace root on the filesystem. */
       projectRoot: options.config?.projectRoot ?? process.cwd(),
+      /** Server-provided utilities (S3, CloudFront, etc). Injected by the workflow manager. */
+      utils: options.config?.utils ?? {},
     };
 
     // Call the definition function to register rules.

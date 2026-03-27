@@ -187,12 +187,18 @@ export class WorkflowManager {
    */
   async start(): Promise<void> {
     const projectRoot = (this.env as any).rootPath ?? process.cwd();
+    const utils = this.createUtils(projectRoot);
+    const runtimeConfig = {
+      onReportErrors: this.handleReportErrors.bind(this),
+      projectRoot,
+      utils,
+    };
 
     if (this.preloadedDefinition) {
       // Testing path — use pre-loaded definition directly
       this.runtime = new WorkflowRuntime(this.preloadedDefinition, {
         executor: this.createExecutor(),
-        config: { onReportErrors: this.handleReportErrors.bind(this), projectRoot },
+        config: runtimeConfig,
       });
     } else {
       // Production path — load tagged definitions and build runtime with source tracking
@@ -207,7 +213,7 @@ export class WorkflowManager {
       // definitions with source file tracking.
       this.runtime = new WorkflowRuntime(() => {}, {
         executor: this.createExecutor(),
-        config: { onReportErrors: this.handleReportErrors.bind(this), projectRoot },
+        config: runtimeConfig,
       });
 
       // Now register all definitions with source file tracking
@@ -1156,6 +1162,126 @@ export class WorkflowManager {
       } finally {
         this.onExecEnd?.();
       }
+    };
+  }
+
+  /**
+   * Create server-provided utilities exposed as wf.utils in workflow rules.
+   * These give rules access to AWS services without needing npm dependencies.
+   */
+  private createUtils(projectRoot: string): Record<string, unknown> {
+    return {
+      /**
+       * Upload a file to S3.
+       * @param bucket - S3 bucket name
+       * @param key - S3 object key
+       * @param body - File content (string or Buffer)
+       * @param contentType - MIME type (default: application/octet-stream)
+       * @param cacheControl - Cache-Control header (default: no-cache)
+       */
+      s3Upload: async (bucket: string, key: string, body: string | Buffer, contentType?: string, cacheControl?: string) => {
+        const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
+        const s3 = new S3Client({ region: process.env.AWS_REGION ?? 'us-west-2' });
+        await s3.send(new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: body,
+          ContentType: contentType ?? 'application/octet-stream',
+          CacheControl: cacheControl ?? 'no-cache',
+        }));
+      },
+
+      /**
+       * Upload all files from a local directory to S3.
+       * @param bucket - S3 bucket name
+       * @param localDir - Absolute path to local directory
+       * @param prefix - S3 key prefix (default: '' = bucket root)
+       * @returns Array of uploaded keys
+       */
+      s3UploadDir: async (bucket: string, localDir: string, prefix = ''): Promise<string[]> => {
+        const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
+        const { readFileSync, readdirSync, statSync } = await import('node:fs');
+        const { resolve, relative } = await import('node:path');
+        const s3 = new S3Client({ region: process.env.AWS_REGION ?? 'us-west-2' });
+
+        const uploaded: string[] = [];
+        function walk(dir: string) {
+          for (const entry of readdirSync(dir)) {
+            const full = resolve(dir, entry);
+            if (statSync(full).isDirectory()) {
+              walk(full);
+            } else {
+              const relPath = relative(localDir, full).replace(/\\/g, '/');
+              const key = prefix ? `${prefix}/${relPath}` : relPath;
+              const body = readFileSync(full);
+              const ct = relPath.endsWith('.html') ? 'text/html; charset=utf-8'
+                : relPath.endsWith('.css') ? 'text/css; charset=utf-8'
+                : relPath.endsWith('.js') ? 'application/javascript; charset=utf-8'
+                : relPath.endsWith('.json') ? 'application/json; charset=utf-8'
+                : relPath.endsWith('.png') ? 'image/png'
+                : relPath.endsWith('.jpg') || relPath.endsWith('.jpeg') ? 'image/jpeg'
+                : relPath.endsWith('.svg') ? 'image/svg+xml'
+                : relPath.endsWith('.woff2') ? 'font/woff2'
+                : 'application/octet-stream';
+              // Fire-and-forget individual uploads — collect promises
+              uploaded.push(key);
+              s3.send(new PutObjectCommand({
+                Bucket: bucket,
+                Key: key,
+                Body: body,
+                ContentType: ct,
+                CacheControl: 'no-cache',
+              })).catch(err => {
+                console.error(`[wf.utils.s3UploadDir] Failed to upload ${key}:`, err);
+              });
+            }
+          }
+        }
+        walk(localDir);
+        return uploaded;
+      },
+
+      /**
+       * Invalidate CloudFront distribution cache.
+       * @param distributionId - CloudFront distribution ID
+       * @param paths - Array of paths to invalidate (default: ['/*'])
+       */
+      cloudfrontInvalidate: async (distributionId: string, paths?: string[]) => {
+        const { CloudFrontClient, CreateInvalidationCommand } = await import('@aws-sdk/client-cloudfront');
+        const cf = new CloudFrontClient({ region: process.env.AWS_REGION ?? 'us-west-2' });
+        await cf.send(new CreateInvalidationCommand({
+          DistributionId: distributionId,
+          InvalidationBatch: {
+            CallerReference: Date.now().toString(),
+            Paths: {
+              Quantity: (paths ?? ['/*']).length,
+              Items: paths ?? ['/*'],
+            },
+          },
+        }));
+      },
+
+      /**
+       * Read a file from the project workspace.
+       * @param path - Relative path from project root
+       * @returns File content as string
+       */
+      readFile: async (path: string): Promise<string> => {
+        const { readFile } = await import('node:fs/promises');
+        const { resolve } = await import('node:path');
+        return readFile(resolve(projectRoot, path), 'utf-8');
+      },
+
+      /**
+       * Read a file from the project workspace as a Buffer.
+       * @param path - Relative path from project root
+       * @returns File content as Buffer
+       */
+      readFileBuffer: async (path: string): Promise<Buffer> => {
+        const { readFile } = await import('node:fs/promises');
+        const { resolve } = await import('node:path');
+        return readFile(resolve(projectRoot, path));
+      },
     };
   }
 }
