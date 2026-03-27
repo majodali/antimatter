@@ -274,25 +274,39 @@ export class BrowserActionContext implements ActionContext {
     await this.openFileInEditor(path);
 
     // Wait for Monaco to load the correct file's model
+    await this.waitForMonacoModel(path);
+
+    return window.__monacoEditor!.getValue();
+  }
+
+  /**
+   * Wait for Monaco editor to have a model matching the given file path.
+   * Polls until the model URI contains the filename, or throws after timeout.
+   */
+  private async waitForMonacoModel(path: string, timeoutMs = 10_000): Promise<void> {
     const fileName = path.split('/').pop() ?? path;
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + timeoutMs;
+
     while (Date.now() < deadline) {
       const editor = window.__monacoEditor;
       if (editor) {
         const model = editor.getModel();
         if (model) {
           const uri = model.uri?.path ?? model.uri?.toString() ?? '';
-          if (uri.includes(fileName)) break;
+          if (uri.includes(fileName)) return;
         }
       }
       await new Promise(r => setTimeout(r, 100));
     }
 
-    if (!window.__monacoEditor?.getModel()) {
-      throw new Error(`Monaco editor model not ready for ${path} after 10s`);
-    }
-
-    return window.__monacoEditor.getValue();
+    // Timeout — build diagnostic message
+    const editor = window.__monacoEditor;
+    const model = editor?.getModel();
+    const currentUri = model?.uri?.path ?? model?.uri?.toString() ?? 'no model';
+    throw new Error(
+      `Monaco model not ready for '${path}' after ${timeoutMs / 1000}s. ` +
+      `Current model: '${currentUri}', expected filename: '${fileName}'`,
+    );
   }
 
   async deleteFile(path: string): Promise<void> {
@@ -537,6 +551,11 @@ export class BrowserActionContext implements ActionContext {
 
   async openFileInEditor(path: string): Promise<void> {
     const pathTestId = `file-tree-item-${encodePathForTestId(path)}`;
+    const fileName = path.split('/').pop() ?? path;
+
+    // If the file is already the active editor tab, nothing to do
+    const activeTab = await this.getActiveFile();
+    if (activeTab === path) return;
 
     // Make sure the explorer sidebar is active
     if (elementExists('sidebar-explorer-btn')) {
@@ -550,10 +569,43 @@ export class BrowserActionContext implements ActionContext {
     }
 
     // Double-click the file in the tree to open it in the editor.
-    // Single click now only selects; double-click opens.
-    await doubleClickElement(pathTestId, 'openFileInEditor');
-    await this.settle(500);
+    // Retry up to 3 times if the editor tab doesn't appear.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      // Check if the tree item exists before clicking
+      if (!elementExists(pathTestId)) {
+        // Tree item not in DOM — wait for it (folder expansion may be slow)
+        const treeDeadline = Date.now() + 3000;
+        while (Date.now() < treeDeadline && !elementExists(pathTestId)) {
+          await new Promise(r => setTimeout(r, 100));
+        }
+        if (!elementExists(pathTestId)) {
+          throw new Error(
+            `openFileInEditor: tree item [${pathTestId}] not found after expanding folders`,
+          );
+        }
+      }
 
+      await doubleClickElement(pathTestId, 'openFileInEditor');
+      await this.settle(300);
+
+      // Wait for the editor tab to appear with the correct file
+      const tabDeadline = Date.now() + 3000;
+      while (Date.now() < tabDeadline) {
+        const currentActive = await this.getActiveFile();
+        if (currentActive === path) {
+          await this.delay();
+          return; // Success
+        }
+        await new Promise(r => setTimeout(r, 100));
+      }
+
+      // Tab didn't appear — retry double-click
+      if (attempt < 2) {
+        await this.settle(200);
+      }
+    }
+
+    // Final check — the file might be open but getActiveFile uses a different path format
     await this.delay();
   }
 
@@ -601,28 +653,8 @@ export class BrowserActionContext implements ActionContext {
     // Open the file first
     await this.openFileInEditor(path);
 
-    // Wait for Monaco to have the correct file's model loaded.
-    // The editor instance exists (window.__monacoEditor) but the model
-    // may not be attached yet, or may still be the previous file's model.
-    const fileName = path.split('/').pop() ?? path;
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      const editor = window.__monacoEditor;
-      if (editor) {
-        const model = editor.getModel();
-        if (model) {
-          const uri = model.uri?.path ?? model.uri?.toString() ?? '';
-          if (uri.includes(fileName)) {
-            break; // Correct model is loaded
-          }
-        }
-      }
-      await new Promise(r => setTimeout(r, 100));
-    }
-
-    if (!window.__monacoEditor?.getModel()) {
-      throw new Error(`Monaco editor model not ready for ${path} after 10s`);
-    }
+    // Wait for Monaco to have the correct file's model loaded
+    await this.waitForMonacoModel(path);
 
     window.__monacoEditor.setValue(content);
     await this.settle(100);
