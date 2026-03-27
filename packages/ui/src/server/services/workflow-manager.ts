@@ -186,11 +186,13 @@ export class WorkflowManager {
    * If no prior state exists, fires `project:initialize`.
    */
   async start(): Promise<void> {
+    const projectRoot = (this.env as any).rootPath ?? process.cwd();
+
     if (this.preloadedDefinition) {
       // Testing path — use pre-loaded definition directly
       this.runtime = new WorkflowRuntime(this.preloadedDefinition, {
         executor: this.createExecutor(),
-        config: { onReportErrors: this.handleReportErrors.bind(this) },
+        config: { onReportErrors: this.handleReportErrors.bind(this), projectRoot },
       });
     } else {
       // Production path — load tagged definitions and build runtime with source tracking
@@ -205,7 +207,7 @@ export class WorkflowManager {
       // definitions with source file tracking.
       this.runtime = new WorkflowRuntime(() => {}, {
         executor: this.createExecutor(),
-        config: { onReportErrors: this.handleReportErrors.bind(this) },
+        config: { onReportErrors: this.handleReportErrors.bind(this), projectRoot },
       });
 
       // Now register all definitions with source file tracking

@@ -129,6 +129,8 @@ export class WorkflowRuntime<S> {
       reportErrors: (toolId: string, errors: ProjectError[]) => {
         options.config?.onReportErrors?.(toolId, errors);
       },
+      /** Absolute path to the project workspace root on the filesystem. */
+      projectRoot: options.config?.projectRoot ?? process.cwd(),
     };
 
     // Call the definition function to register rules.

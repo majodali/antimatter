@@ -442,6 +442,8 @@ export interface WorkflowRuntimeConfig {
   readonly debounceMs?: number;
   /** Callback invoked when a rule calls wf.reportErrors(). */
   readonly onReportErrors?: (toolId: string, errors: ProjectError[]) => void;
+  /** Absolute path to the project workspace root. Available as wf.projectRoot in rules. */
+  readonly projectRoot?: string;
 }
 
 /** A log message captured during workflow execution. */
