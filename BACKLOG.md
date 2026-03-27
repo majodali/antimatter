@@ -126,6 +126,12 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 - Build commands executed in terminal (visible output, not hidden subprocess)
 - Review build and deploy panel layout
 - In-browser type checking (Monaco language services without workspace round-trip)
+- Rule failure semantics: rules that set failure state (e.g. `status: 'failed'`) should show red indicator, even if the rule itself didn't throw. Currently green = "rule executed without exception" which is misleading when the rule reports a failure.
+- Widget value persistence: `_ui` state (widget values) should be persisted across sessions. Currently "Dependencies: idle" means the value is null because `_ui` wasn't rehydrated from persisted state. Blank is better than "idle" for null values.
+- Automation file compilation errors: `.antimatter/*.ts` compilation failures should be displayed in Problems panel + file annotations, not just logged to console.
+- Graceful reload on automation file edit: don't remove old rules until the updated `.antimatter/*.ts` compiles and runs successfully. Deactivate or red-check rules from files that failed to compile. Currently editing build.ts causes all rules to disappear during compilation.
+- Widget and rule ordering: ensure declarations appear in the Build panel in the order they're declared in the source file.
+- `client.state` completeness: workflow section should include full declarations (widgets with current values, rules with metadata), not just ruleCount and ruleResults.
 
 ### Tests Service
 
@@ -233,7 +239,7 @@ Prioritized items ready for implementation. Pulled from Tier 2, ordered by impac
 |----------|------|---------|-------------|
 | 1 | **Chat panel simplification** | Agents | Migrate from SSE to WebSocket send+subscribe. Remove streaming code, simplify to fire-and-forget command + event subscription. |
 | 2 | **File annotations** | Files | Unified annotation model — errors, warnings, bookmarks. Source-agnostic (tsc, eslint, custom). Powers Problems panel, editor decorations, file explorer indicators. |
-| 3 | **Build/Deploy panel review** | Builds | Review layout. Display workflow rules with status, manual execution. Build commands in terminal. Render widget declarations from build.ts/deploy.ts. |
+| 3 | **Build/Deploy panel review** | Builds | Review layout. Rule failure = red indicator. Widget value persistence. Graceful reload (don't wipe rules on compilation failure). Compilation errors in Problems. |
 | 4 | **Test panel improvements** | Tests | Display all project tests. Persist results to backend (workspace + S3). Multiple runner columns. Double-click navigates to test source. |
 | 5 | **M2 planning** | All | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
 | 6 | **Git panel UI** | Projects | Visual stage/unstage, commit message entry, push/pull buttons. |
