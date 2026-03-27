@@ -1,0 +1,73 @@
+# {{PROJECT_NAME}}
+
+## What This Project Is
+
+{{PROJECT_DESCRIPTION}}
+
+## CRITICAL: Remote-Only Workflow
+
+**All project files live in the Antimatter IDE — NOT in this local directory.**
+
+- **DO NOT** create, edit, or read project source files locally. The local folder contains only this `CLAUDE.md` and `.mcp.json`.
+- **DO NOT** use `Read`, `Edit`, `Write`, `Glob`, `Grep`, or `Bash` for project source files. These tools only apply to the local directory, which has no project code.
+- **ALL** file reads, writes, and deploys MUST go through the `antimatter_*` MCP tools described below.
+
+## Antimatter IDE
+
+**The Antimatter IDE is under active development.** When encountering unexpected behavior, errors, or quirks from `antimatter_*` tools:
+
+- **Report the issue clearly to the user** — include the tool called, parameters used, and the exact error or unexpected response.
+- **DO NOT** attempt to work around IDE issues (e.g. retrying with tweaked params, falling back to local tools, or guessing alternative approaches).
+- **Stop and wait** for the issue to be addressed before continuing with the affected task.
+
+This project is hosted in the Antimatter IDE at `https://ide.antimatter.solutions`.
+
+**Project ID**: `{{PROJECT_ID}}`
+
+### Available MCP Tools
+
+You have `antimatter_*` MCP tools for all IDE operations:
+
+| Tool | Purpose |
+|------|---------|
+| `antimatter_files_read` | Read project files |
+| `antimatter_files_write` | Write/create project files |
+| `antimatter_files_tree` | List project file tree |
+| `antimatter_files_delete` | Delete files |
+| `antimatter_files_mkdir` | Create directories |
+| `antimatter_files_move` | Move/rename files |
+| `antimatter_files_copy` | Copy files |
+| `antimatter_files_exists` | Check if file exists |
+| `antimatter_execute` | Run automation commands |
+| `antimatter_projects_status` | Git status |
+| `antimatter_projects_stage` | Git stage files |
+| `antimatter_projects_commit` | Git commit |
+| `antimatter_projects_log` | Git log |
+| `antimatter_workspace` | Start/stop/status workspace |
+
+### Key Automation Commands
+
+```
+# Check workflow state (build rules, deploy status)
+antimatter_execute command="workflow.state" projectId="{{PROJECT_ID}}"
+
+# Check workflow errors
+antimatter_execute command="workflow.errors" projectId="{{PROJECT_ID}}"
+
+# Run a specific build rule manually
+antimatter_execute command="workflow.run-rule/RULE_ID" projectId="{{PROJECT_ID}}"
+
+# Emit a custom event to trigger rules
+antimatter_execute command="workflow.emit" params={"event":{"type":"EVENT_TYPE"}} projectId="{{PROJECT_ID}}"
+```
+
+### Build Rules
+
+Build automation is defined in `.antimatter/build.ts` on the workspace. Rules react to file changes and custom events, executing shell commands via `wf.exec()`. Check the current rules with `antimatter_execute command="workflow.state"`.
+
+## Conventions
+
+- The project ID must be passed to all `antimatter_*` tools as `projectId`
+- All file paths are relative to the project root (e.g. `src/index.ts`, not absolute paths)
+- Use `antimatter_files_tree` to explore the project structure before making changes
+- Use `antimatter_execute command="workflow.state"` to check build/deploy status after changes

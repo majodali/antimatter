@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "antimatter-ide": {
+      "command": "npx",
+      "args": ["tsx", "{{ANTIMATTER_ROOT}}/packages/mcp-server/src/index.ts"],
+      "env": {
+        "ANTIMATTER_BASE_URL": "https://ide.antimatter.solutions",
+        "ANTIMATTER_PROJECT_ID": "{{PROJECT_ID}}",
+        "ANTIMATTER_TOKEN_FILE": "{{ANTIMATTER_ROOT}}/antimatter-tokens.json",
+        "ANTIMATTER_COGNITO_CLIENT_ID": "6q4kg5jqieucsiip1vnk119nf7",
+        "ANTIMATTER_COGNITO_DOMAIN": "antimatter-ide.auth.us-west-2.amazoncognito.com",
+        "ANTIMATTER_COGNITO_REGION": "us-west-2"
+      }
+    }
+  }
+}
