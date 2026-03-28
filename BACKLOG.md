@@ -28,7 +28,7 @@ Big-ticket items that span multiple services or introduce new capabilities.
 | M1 | **Toy project edit/build/test/deploy** | **done** | Create, edit, build, test, and deploy json-validator entirely from within the IDE. 5/5 functional tests passing (FT-M1-001 through FT-M1-005). |
 | M2 | **Build & deploy a web app** | planned | Create, build, test, and deploy a real web application (SPA or API server) from within the IDE. Validates the full development workflow for a realistic project beyond a library. |
 | M3 | **Self-host Antimatter** | planned | Perform code changes, builds, tests, and deployments on Antimatter itself entirely from within the IDE. |
-| M4 | **Claude Code remote driving** | planned | Claude Code (local CLI) drives the IDE remotely via the Automation API — editing, building, testing, deploying. MCP server infrastructure already exists (`@antimatter/mcp-server`). |
+| M4 | **Claude Code remote driving** | in-progress | Claude Code (local CLI) drives the IDE remotely via the Automation API — editing, building, testing, deploying. MCP server + project template validated. Auto-generated MCP tools from service-interface registry pending. |
 | M5 | **Native AI agent** | planned | Built-in AI agent replaces Claude Code, using the same Automation API and service interface. |
 | R1 | **Functional demos** | planned | Extend UI/DOM functional test infrastructure to support scripted demos. Animated walkthroughs of IDE features for onboarding, documentation, and showcase. Reuses BrowserActionContext, adds pacing/narration/highlighting. |
 | R2 | **WebSocket protocol migration** | planned | Move from ad-hoc WebSocket messages to typed ServerFrame format from `@antimatter/service-interface`. Enables EventTransport for all services. |
@@ -82,7 +82,7 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 
 ### Projects Service
 
-**Current state:** ServiceClient-wired (projects.list, projects.create, projects.delete, projects.import). Git operations wired (projects.status, projects.stage, projects.unstage, projects.commit, projects.push, projects.pull, projects.log, projects.remote, projects.setRemote). `gitInit` still uses apiFetch.
+**Current state:** ServiceClient-wired (projects.list, projects.create, projects.delete, projects.import). Git operations wired (projects.status, projects.stage, projects.unstage, projects.commit, projects.push, projects.pull, projects.log, projects.remote, projects.setRemote). `gitInit` still uses apiFetch. Slug-based project IDs (derived from name, collision-safe). URL `?project=` param syncs on project switch. Per-tab project locking with heartbeat.
 
 | ID | Test Case | Status |
 |----|-----------|--------|
@@ -96,24 +96,25 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 - Git panel UI (stage/unstage/commit/push/pull with visual diff)
 - Git branch management
 - Git history/version viewer
+- Custom project ID on create (allow user to override the auto-generated slug)
 
 ### Workspaces Service
 
-**Current state:** ServiceClient-wired (workspaces.start, workspaces.status). EC2 lifecycle management via workspace-ec2-service. Shared mode reuses running instances. S3 sync on startup/shutdown and 30s interval.
+**Current state:** ServiceClient-wired (workspaces.start, workspaces.status). EC2 lifecycle management via workspace-ec2-service. Shared mode reuses running instances. S3 sync on startup/shutdown and 30s interval. Per-project PTY isolation (one PtyManager per ProjectContext). Multi-project workspace server (ProjectContext class on shared EC2 instance).
 
 | ID | Test Case | Status |
 |----|-----------|--------|
 | FT-WS-001 | Files created via UI exist on workspace filesystem | test-implemented (intermittent) |
 
 **Remaining work:**
-- Terminal sessions as first-class resources
+- Terminal sessions as first-class resources (multiple tabs per project, server-managed lifecycle)
 - Workspace auto-stop idle detection (respect running commands)
 - S3/workspace sync conflict resolution
 - Workspace restart recovery (stale file race condition)
 
 ### Builds Service
 
-**Current state:** ServiceClient-wired (builds.results.list, builds.configurations.list, builds.configurations.set, builds.triggers.invoke). Workflow engine handles rule execution with event sourcing (JSONL event log, dedup, replay, compaction). Build/deploy SSE streaming removed — all progress via WebSocket application-state broadcasts.
+**Current state:** ServiceClient-wired (builds.results.list, builds.configurations.list, builds.configurations.set, builds.triggers.invoke). Workflow engine handles rule execution with event sourcing (JSONL event log, dedup, replay, compaction). Build/deploy SSE streaming removed — all progress via WebSocket application-state broadcasts. `wf.utils` provides S3 upload/uploadDir, CloudFront invalidation, and file read utilities — workflow rules use server-provided AWS SDK without npm dependencies. `client.state` includes full workflow declarations (rules with metadata, widgets with current values). Compilation errors from `.antimatter/*.ts` surface in Problems panel.
 
 | ID | Test Case | Status |
 |----|-----------|--------|
@@ -128,10 +129,8 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 - In-browser type checking (Monaco language services without workspace round-trip)
 - Rule failure semantics: rules that set failure state (e.g. `status: 'failed'`) should show red indicator, even if the rule itself didn't throw. Currently green = "rule executed without exception" which is misleading when the rule reports a failure.
 - Widget value persistence: `_ui` state (widget values) should be persisted across sessions. Currently "Dependencies: idle" means the value is null because `_ui` wasn't rehydrated from persisted state. Blank is better than "idle" for null values.
-- Automation file compilation errors: `.antimatter/*.ts` compilation failures should be displayed in Problems panel + file annotations, not just logged to console.
 - Graceful reload on automation file edit: don't remove old rules until the updated `.antimatter/*.ts` compiles and runs successfully. Deactivate or red-check rules from files that failed to compile. Currently editing build.ts causes all rules to disappear during compilation.
 - Widget and rule ordering: ensure declarations appear in the Build panel in the order they're declared in the source file.
-- `client.state` completeness: workflow section should include full declarations (widgets with current values, rules with metadata), not just ruleCount and ruleResults.
 
 ### Tests Service
 
@@ -222,11 +221,10 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 
 ### Terminal
 
-**Current state:** xterm.js terminal with PTY backend, WebSocket, basic resize.
+**Current state:** xterm.js terminal with PTY backend, WebSocket, basic resize. Per-project terminal sessions with scrollback preservation — each project gets its own xterm.js instance kept in a client-side pool; switching projects detaches/reattaches terminals without losing history. Server-side PTY isolation via ProjectContext.ptyManager with 50KB replay buffer on reconnect.
 
 **Remaining work:**
-- Multiple terminal sessions
-- Reconnect with buffer replay
+- Multiple terminal tabs within a single project
 - Terminal output visible for workflow commands (wf.exec)
 
 ---
@@ -239,7 +237,7 @@ Prioritized items ready for implementation. Pulled from Tier 2, ordered by impac
 |----------|------|---------|-------------|
 | 1 | **Chat panel simplification** | Agents | Migrate from SSE to WebSocket send+subscribe. Remove streaming code, simplify to fire-and-forget command + event subscription. |
 | 2 | **File annotations** | Files | Unified annotation model — errors, warnings, bookmarks. Source-agnostic (tsc, eslint, custom). Powers Problems panel, editor decorations, file explorer indicators. |
-| 3 | **Build/Deploy panel review** | Builds | Review layout. Rule failure = red indicator. Widget value persistence. Graceful reload (don't wipe rules on compilation failure). Compilation errors in Problems. |
+| 3 | **Build/Deploy panel review** | Builds | Review layout. Rule failure = red indicator. Widget value persistence. Graceful reload (don't wipe rules on compilation failure). |
 | 4 | **Test panel improvements** | Tests | Display all project tests. Persist results to backend (workspace + S3). Multiple runner columns. Double-click navigates to test source. |
 | 5 | **M2 planning** | All | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
 | 6 | **Git panel UI** | Projects | Visual stage/unstage, commit message entry, push/pull buttons. |
@@ -262,7 +260,7 @@ Canonical type definitions for all operations. Typed ServiceClient with Transpor
 
 ### Event Sourcing (Workflow Engine)
 
-Persistent JSONL event log (`.antimatter-cache/events.jsonl`). Sequence numbers, 2s dedup window, 50ms batched drain. Checkpoint-based replay on startup/reload. Compaction on shutdown and every 5 minutes.
+Persistent JSONL event log (`.antimatter-cache/events.jsonl`). Sequence numbers, 2s dedup window, 50ms batched drain. Checkpoint-based replay on startup/reload. Compaction on shutdown and every 60s. 10MB hard cap with auto-compaction. Audit event filtering.
 
 ### Deploy Process
 
@@ -270,4 +268,4 @@ Local script (`scripts/deploy.sh`): Vite build → Lambda bundle → workspace s
 
 ### MCP Server (`@antimatter/mcp-server`)
 
-Bridges Claude Code to IDE automation API. Tools: test run/results/list, workspace management, file read, git status, client refresh, execute command.
+Bridges Claude Code to IDE automation API. Tools: test run/results/list, workspace management, file read/write/tree, git status/stage/commit/push/pull, deployed resources CRUD, build triggers/results, client refresh, execute command. Project template (`templates/claude-code-remote/`) for bootstrapping local projects that drive the IDE remotely.
