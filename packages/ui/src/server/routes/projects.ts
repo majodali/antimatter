@@ -6,6 +6,7 @@ import type { S3Client } from '@aws-sdk/client-s3';
 import {
   PutObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
@@ -76,6 +77,32 @@ function walkDirectory(dir: string, base: string = dir): WalkedFile[] {
   return results;
 }
 
+/** Convert a project name to a filesystem/URL-friendly slug. */
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 64) || `project-${randomUUID().slice(0, 8)}`;
+}
+
+/** Find a unique project ID by checking S3 for collisions. */
+async function uniqueProjectId(s3: S3Client, bucket: string, base: string): Promise<string> {
+  let candidate = base;
+  let suffix = 2;
+  while (true) {
+    try {
+      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: `projects/${candidate}/meta.json` }));
+      // Exists — try next suffix
+      candidate = `${base}-${suffix++}`;
+    } catch {
+      // Doesn't exist — available
+      return candidate;
+    }
+  }
+}
+
 export function createProjectRouter(
   s3Client: S3Client,
   bucket: string,
@@ -91,7 +118,7 @@ export function createProjectRouter(
         return res.status(400).json({ error: 'Project name is required' });
       }
 
-      const id = randomUUID();
+      const id = await uniqueProjectId(s3Client, bucket, slugify(name));
       const meta: ProjectMeta = { id, name, createdAt: new Date().toISOString() };
 
       await s3Client.send(
@@ -310,7 +337,7 @@ export function createProjectRouter(
       const files = walkDirectory(cloneDir);
 
       // Create project in S3
-      const id = randomUUID();
+      const id = await uniqueProjectId(s3Client, bucket, slugify(projectName));
       const meta: ProjectMeta = {
         id,
         name: projectName,
