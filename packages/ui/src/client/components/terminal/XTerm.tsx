@@ -5,15 +5,58 @@ import '@xterm/xterm/css/xterm.css';
 import { useTheme } from '../theme-provider';
 
 interface XTermProps {
+  projectId: string | null;
   onData?: (data: string) => void;
   onResize?: (cols: number, rows: number) => void;
-  initialLines?: string[];
 }
 
-export function XTerm({ onData, onResize, initialLines = [] }: XTermProps) {
-  const terminalRef = useRef<HTMLDivElement>(null);
-  const xtermRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
+// ---------------------------------------------------------------------------
+// Per-project terminal pool — survives re-renders, preserves scrollback
+// ---------------------------------------------------------------------------
+
+interface TerminalEntry {
+  terminal: Terminal;
+  fitAddon: FitAddon;
+}
+
+const terminalPool = new Map<string, TerminalEntry>();
+
+function getTerminalTheme(theme: string) {
+  return {
+    background: theme === 'dark' ? '#1e1e1e' : '#ffffff',
+    foreground: theme === 'dark' ? '#cccccc' : '#333333',
+    cursor: theme === 'dark' ? '#ffffff' : '#000000',
+    black: '#000000',
+    red: '#cd3131',
+    green: '#0dbc79',
+    yellow: '#e5e510',
+    blue: '#2472c8',
+    magenta: '#bc3fbc',
+    cyan: '#11a8cd',
+    white: '#e5e5e5',
+    brightBlack: '#666666',
+    brightRed: '#f14c4c',
+    brightGreen: '#23d18b',
+    brightYellow: '#f5f543',
+    brightBlue: '#3b8eea',
+    brightMagenta: '#d670d6',
+    brightCyan: '#29b8db',
+    brightWhite: '#ffffff',
+  };
+}
+
+/** Remove a project's terminal from the pool and dispose it. */
+export function disposeProjectTerminal(projectId: string): void {
+  const entry = terminalPool.get(projectId);
+  if (entry) {
+    entry.terminal.dispose();
+    terminalPool.delete(projectId);
+  }
+}
+
+export function XTerm({ projectId, onData, onResize }: XTermProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const activeProjectRef = useRef<string | null>(null);
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
   const { theme } = useTheme();
@@ -22,136 +65,106 @@ export function XTerm({ onData, onResize, initialLines = [] }: XTermProps) {
   onDataRef.current = onData;
   onResizeRef.current = onResize;
 
+  // Attach / detach terminals when projectId changes
   useEffect(() => {
-    if (!terminalRef.current) return;
+    if (!containerRef.current || !projectId) return;
 
-    const terminal = new Terminal({
-      cursorBlink: true,
-      fontSize: 13,
-      fontFamily: 'Consolas, "Courier New", monospace',
-      theme: {
-        background: theme === 'dark' ? '#1e1e1e' : '#ffffff',
-        foreground: theme === 'dark' ? '#cccccc' : '#333333',
-        cursor: theme === 'dark' ? '#ffffff' : '#000000',
-        black: '#000000',
-        red: '#cd3131',
-        green: '#0dbc79',
-        yellow: '#e5e510',
-        blue: '#2472c8',
-        magenta: '#bc3fbc',
-        cyan: '#11a8cd',
-        white: '#e5e5e5',
-        brightBlack: '#666666',
-        brightRed: '#f14c4c',
-        brightGreen: '#23d18b',
-        brightYellow: '#f5f543',
-        brightBlue: '#3b8eea',
-        brightMagenta: '#d670d6',
-        brightCyan: '#29b8db',
-        brightWhite: '#ffffff',
-      },
-      scrollback: 5000,
-      convertEol: true,
-    });
+    const container = containerRef.current;
+    const prevProjectId = activeProjectRef.current;
 
-    const fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
-
-    terminal.open(terminalRef.current);
-    fitAddon.fit();
-
-    // Handle data input (keyboard → PTY)
-    terminal.onData((data) => {
-      onDataRef.current?.(data);
-    });
-
-    // Handle terminal resize
-    terminal.onResize(({ cols, rows }) => {
-      onResizeRef.current?.(cols, rows);
-    });
-
-    // Write initial lines
-    if (initialLines.length > 0) {
-      initialLines.forEach((line) => terminal.writeln(line));
+    // Detach previous terminal (keep it alive in the pool)
+    if (prevProjectId && prevProjectId !== projectId) {
+      const prev = terminalPool.get(prevProjectId);
+      if (prev) {
+        // Remove the terminal's DOM element from the container
+        const el = prev.terminal.element;
+        if (el && el.parentElement === container) {
+          container.removeChild(el);
+        }
+      }
     }
 
-    xtermRef.current = terminal;
-    fitAddonRef.current = fitAddon;
+    activeProjectRef.current = projectId;
 
-    // Expose terminal for writing by other components
+    // Get or create terminal for this project
+    let entry = terminalPool.get(projectId);
+    if (!entry) {
+      const terminal = new Terminal({
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: 'Consolas, "Courier New", monospace',
+        theme: getTerminalTheme(theme),
+        scrollback: 5000,
+        convertEol: true,
+      });
+
+      const fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+
+      // Wire up data + resize callbacks
+      terminal.onData((data) => { onDataRef.current?.(data); });
+      terminal.onResize(({ cols, rows }) => { onResizeRef.current?.(cols, rows); });
+
+      entry = { terminal, fitAddon };
+      terminalPool.set(projectId, entry);
+
+      // First-time open
+      terminal.open(container);
+      fitAddon.fit();
+    } else {
+      // Re-attach existing terminal to the container
+      const el = entry.terminal.element;
+      if (el && el.parentElement !== container) {
+        container.appendChild(el);
+      }
+      // Re-fit after reattach (container size may have changed)
+      requestAnimationFrame(() => {
+        try { entry!.fitAddon.fit(); } catch { /* ignore */ }
+      });
+    }
+
+    // Update global terminal reference
+    const { terminal, fitAddon } = entry;
     (window as any).__terminal = {
-      write: (data: string) => xtermRef.current?.write(data),
-      writeln: (data: string) => xtermRef.current?.writeln(data),
-      clear: () => xtermRef.current?.clear(),
+      write: (data: string) => terminal.write(data),
+      writeln: (data: string) => terminal.writeln(data),
+      clear: () => terminal.clear(),
       cols: terminal.cols,
       rows: terminal.rows,
     };
 
-    // Handle window resize
+    // Resize handlers
     const handleResize = () => {
-      fitAddon.fit();
-      // Update stored dimensions
-      if ((window as any).__terminal) {
-        (window as any).__terminal.cols = terminal.cols;
-        (window as any).__terminal.rows = terminal.rows;
-      }
+      try {
+        fitAddon.fit();
+        if ((window as any).__terminal) {
+          (window as any).__terminal.cols = terminal.cols;
+          (window as any).__terminal.rows = terminal.rows;
+        }
+      } catch { /* ignore */ }
     };
 
     window.addEventListener('resize', handleResize);
 
-    // Use ResizeObserver for container-driven resizes (e.g., panel drag)
     const observer = new ResizeObserver(() => {
-      requestAnimationFrame(() => {
-        try {
-          fitAddon.fit();
-          if ((window as any).__terminal) {
-            (window as any).__terminal.cols = terminal.cols;
-            (window as any).__terminal.rows = terminal.rows;
-          }
-        } catch {
-          // Ignore fit errors during unmount
-        }
-      });
+      requestAnimationFrame(handleResize);
     });
-
-    if (terminalRef.current) {
-      observer.observe(terminalRef.current);
-    }
+    observer.observe(container);
 
     return () => {
       window.removeEventListener('resize', handleResize);
       observer.disconnect();
-      terminal.dispose();
-      (window as any).__terminal = null;
+      // Don't dispose — terminal stays in the pool
     };
-  }, []);
+  }, [projectId, theme]);
 
-  // Update theme when it changes
+  // Update theme on all pooled terminals when it changes
   useEffect(() => {
-    if (xtermRef.current) {
-      xtermRef.current.options.theme = {
-        background: theme === 'dark' ? '#1e1e1e' : '#ffffff',
-        foreground: theme === 'dark' ? '#cccccc' : '#333333',
-        cursor: theme === 'dark' ? '#ffffff' : '#000000',
-        black: '#000000',
-        red: '#cd3131',
-        green: '#0dbc79',
-        yellow: '#e5e510',
-        blue: '#2472c8',
-        magenta: '#bc3fbc',
-        cyan: '#11a8cd',
-        white: '#e5e5e5',
-        brightBlack: '#666666',
-        brightRed: '#f14c4c',
-        brightGreen: '#23d18b',
-        brightYellow: '#f5f543',
-        brightBlue: '#3b8eea',
-        brightMagenta: '#d670d6',
-        brightCyan: '#29b8db',
-        brightWhite: '#ffffff',
-      };
+    const t = getTerminalTheme(theme);
+    for (const entry of terminalPool.values()) {
+      entry.terminal.options.theme = t;
     }
   }, [theme]);
 
-  return <div ref={terminalRef} className="h-full w-full" />;
+  return <div ref={containerRef} className="h-full w-full" />;
 }

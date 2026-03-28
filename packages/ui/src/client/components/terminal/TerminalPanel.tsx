@@ -106,23 +106,8 @@ export function TerminalPanel() {
     }
   }, [connectedProjectId, isRefreshing]);
 
-  // Show welcome message on first render
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const term = (window as any).__terminal;
-      if (term) {
-        term.writeln('\x1b[1;32m=== Antimatter Terminal ===\x1b[0m');
-        term.writeln('');
-        if (currentProjectId) {
-          term.writeln('\x1b[36mConnecting to workspace...\x1b[0m');
-        } else {
-          term.writeln('\x1b[36mSelect a project to start a workspace terminal.\x1b[0m');
-        }
-        term.writeln('');
-      }
-    }, 500);
-    return () => clearTimeout(timer);
-  }, []);
+  // Welcome message is written once per terminal instance (on first create)
+  // — no need for a separate effect since each project gets its own xterm.js
 
   const handleClear = () => {
     const term = (window as any).__terminal;
@@ -251,6 +236,7 @@ export function TerminalPanel() {
       {/* Terminal output — xterm.js handles all I/O when WebSocket is connected */}
       <div className="flex-1 overflow-hidden relative">
         <XTerm
+          projectId={currentProjectId}
           onData={handleTerminalData}
           onResize={handleTerminalResize}
         />
