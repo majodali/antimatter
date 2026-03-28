@@ -56,6 +56,19 @@ const SKIP_PATTERNS = [
 const _urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
 const _urlProjectId = _urlParams?.get('project') ?? null;
 
+/** Keep the browser URL bar in sync with the active project. */
+function updateUrlProjectParam(projectId: string | null) {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (projectId) {
+    url.searchParams.set('project', projectId);
+  } else {
+    url.searchParams.delete('project');
+  }
+  // replaceState so we don't pollute browser history with every switch.
+  window.history.replaceState(null, '', url.toString());
+}
+
 export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: (() => {
     try {
@@ -117,6 +130,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       return;
     }
     sessionStorage.setItem(STORAGE_KEY, id);
+    // Keep URL in sync so refresh/bookmark works correctly.
+    updateUrlProjectParam(id);
     // Reset workspaceReady — it will be set to true once the workspace
     // WebSocket connects for the new project.
     set({ currentProjectId: id, error: null, workspaceReady: false });
@@ -126,6 +141,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const { currentProjectId } = get();
     if (currentProjectId) releaseLock(currentProjectId);
     sessionStorage.removeItem(STORAGE_KEY);
+    updateUrlProjectParam(null);
     set({ currentProjectId: null, workspaceReady: false });
   },
 
