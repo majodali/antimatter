@@ -1097,27 +1097,21 @@ export class WorkflowManager {
    * stale state from old code is fully replaced.
    */
   private async fullRefresh(): Promise<void> {
-    console.log('[workflow-manager] Full refresh — deleting state and reinitializing');
+    console.log('[workflow-manager] Full refresh — reloading definitions, preserving state');
 
-    // 1. Delete persisted state file
-    try {
-      const exists = await this.env.exists(this.statePath);
-      if (exists) await this.env.deleteFile(this.statePath);
-    } catch { /* ignore */ }
-
-    // 2. Clear in-memory state
-    this.persisted = null;
-    this.state = {} as any;
+    // 1. Clear runtime + definitions (will be rebuilt from new code)
     this.loadedDefinitions.clear();
     this.loadedFiles = [];
     this.runtime = null;
 
-    // 3. Clear stale workflow compilation errors
+    // 2. Clear stale workflow compilation errors
     if (this.errorStore) {
       await this.errorStore.clearTool('workflow');
     }
 
-    // 4. Call start() — reloads definitions from disk, fires project:initialize (since no state)
+    // 3. Call start() — reloads definitions from disk.
+    //    Persisted state (including _ui widget values) is preserved on disk
+    //    and restored by start() via loadState().
     await this.start();
 
     // 5. Emit file:change for every workspace file so rules can react
