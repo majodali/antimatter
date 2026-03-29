@@ -4,9 +4,8 @@
 
 > Update this list when items are completed or reprioritized. See BACKLOG.md for full details.
 
-1. **Widget value persistence** — preserve `_ui` state across workflow recompilation
-2. **Graceful workflow reload** — preserve old rules when new compilation fails (partial)
-3. **Test panel: project tests** — show current project's tests (vitest/jest), not Antimatter's hardcoded functional tests
+1. **Graceful workflow reload** — preserve old rules when new compilation fails (partial)
+2. **Test panel: project tests** — show current project's tests (vitest/jest), not Antimatter's hardcoded functional tests
 4. **Test panel: S3 persistence** — persist test results to S3
 5. **Test panel: double-click nav** — navigate to test source on double-click
 6. **M2 planning** — define web app project for milestone M2
@@ -15,7 +14,7 @@
 9. **Full-text search** — Cmd+Shift+F across project files
 10. **Show/hide dot files** — toggle in file explorer
 
-**Recently completed:** file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
+**Recently completed:** widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
 
 ## What This Project Is
 
