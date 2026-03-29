@@ -26,10 +26,23 @@ function ProjectGate() {
   const [isTestMode, setIsTestMode] = useState(false);
   const initializedRef = useRef(false);
 
+  const projects = useProjectStore((s) => s.projects);
+  const isLoading = useProjectStore((s) => s.isLoading);
+
   // Fetch fresh project list on mount so the localStorage cache is up-to-date.
   // Without this, tabs opened via URL param (e.g. test tabs) may not find
   // the project in their local projects array, breaking Header display.
   useEffect(() => { loadProjects(); }, []);
+
+  // If the stored project ID doesn't match any existing project (e.g. after
+  // ID migration or project deletion), clear it and show the project picker.
+  useEffect(() => {
+    if (isLoading || !currentProjectId || projects.length === 0) return;
+    if (!projects.some((p) => p.id === currentProjectId)) {
+      console.warn(`[ProjectGate] Project "${currentProjectId}" not found — clearing`);
+      clearProject();
+    }
+  }, [projects, currentProjectId, isLoading]);
 
   // Read ?project= and ?testMode= URL parameters on first render
   useEffect(() => {
