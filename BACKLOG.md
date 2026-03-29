@@ -141,7 +141,7 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 | FT-XTAB-006 | Header dropdown shows lock icon for locked projects | test-passing |
 
 **Remaining work:**
-- Display all project tests in test panel (not just functional tests)
+- Test panel shows current project's tests, not Antimatter's hardcoded functional tests. Discover tests from the project's test framework (vitest, jest, etc.) and display in the panel.
 - Test results persisted in backend (workspace + S3), dynamically updated
 - Tests with multiple runners show results per runner (columns in test panel)
 - Double-click on test result navigates to the test case source
@@ -232,16 +232,17 @@ Prioritized items ready for implementation. Pulled from Tier 2, ordered by impac
 | 1 | **File annotations REST API** | Files | not started | Expose files.annotate/clearAnnotations/annotations via REST for external tools (linters, CLI). Core model + UI already done. |
 | 2 | **Widget value persistence** | Builds | not started | Preserve `_ui` state across workflow recompilation. `fullRefresh()` currently wipes state file. |
 | 3 | **Graceful workflow reload** | Builds | partial | Incremental reload handles errors, but `fullRefresh()` is aggressive. Preserve old rules when new compilation fails. |
-| 4 | **Test panel: S3 persistence** | Tests | not started | Persist test results to S3 so they survive workspace restart. Backend memory store exists but is ephemeral. |
-| 5 | **Test panel: double-click nav** | Tests | not started | Double-click on test result navigates to test source file. |
-| 6 | **M2 planning** | All | not started | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
-| 7 | **File search** | Files | not started | Find files by name/path. Integrates with command palette (Cmd+P). |
-| 8 | **Command palette** | ClientAutomation | not started | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
-| 9 | **Full-text search** | Files | not started | Search across project files with results panel (Cmd+Shift+F). |
-| 10 | **Show/hide dot files** | Files | not started | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
-| 11 | **UI polish: prevent text selection** | Editor | partial | Apply `select-none` systematically to interactive elements. Only 3/39 components done. |
-| 12 | **Functional demos** | Tests | not started | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
-| 13 | **FT-WS-001 fix** | Workspace | partial | Fix test isolation — file tree empties after earlier DOM tests. Test intermittently fails. |
+| 4 | **Test panel: project tests** | Tests | not started | Show current project's tests (vitest/jest), not Antimatter's hardcoded functional tests. Discover from project test framework. |
+| 5 | **Test panel: S3 persistence** | Tests | not started | Persist test results to S3 so they survive workspace restart. Backend memory store exists but is ephemeral. |
+| 6 | **Test panel: double-click nav** | Tests | not started | Double-click on test result navigates to test source file. |
+| 7 | **M2 planning** | All | not started | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
+| 8 | **File search** | Files | not started | Find files by name/path. Integrates with command palette (Cmd+P). |
+| 9 | **Command palette** | ClientAutomation | not started | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
+| 10 | **Full-text search** | Files | not started | Search across project files with results panel (Cmd+Shift+F). |
+| 11 | **Show/hide dot files** | Files | not started | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
+| 12 | **UI polish: prevent text selection** | Editor | partial | Apply `select-none` systematically to interactive elements. Only 3/39 components done. |
+| 13 | **Functional demos** | Tests | not started | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
+| 14 | **FT-WS-001 fix** | Workspace | partial | Fix test isolation — file tree empties after earlier DOM tests. Test intermittently fails. |
 
 ---
 

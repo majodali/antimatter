@@ -7,13 +7,14 @@
 1. **File annotations REST API** — expose files.annotate/clearAnnotations/annotations via REST (core model + UI done)
 2. **Widget value persistence** — preserve `_ui` state across workflow recompilation
 3. **Graceful workflow reload** — preserve old rules when new compilation fails (partial)
-4. **Test panel: S3 persistence** — persist test results to S3
-5. **Test panel: double-click nav** — navigate to test source on double-click
-6. **M2 planning** — define web app project for milestone M2
-7. **File search** — Cmd+P file finder
-8. **Command palette** — Cmd+Shift+P command palette + keyboard shortcuts
-9. **Full-text search** — Cmd+Shift+F across project files
-10. **Show/hide dot files** — toggle in file explorer
+4. **Test panel: project tests** — show current project's tests (vitest/jest), not Antimatter's hardcoded functional tests
+5. **Test panel: S3 persistence** — persist test results to S3
+6. **Test panel: double-click nav** — navigate to test source on double-click
+7. **M2 planning** — define web app project for milestone M2
+8. **File search** — Cmd+P file finder
+9. **Command palette** — Cmd+Shift+P command palette + keyboard shortcuts
+10. **Full-text search** — Cmd+Shift+F across project files
+11. **Show/hide dot files** — toggle in file explorer
 
 **Recently completed:** slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
 
