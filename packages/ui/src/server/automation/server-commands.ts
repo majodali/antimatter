@@ -14,6 +14,8 @@ import type { WorkflowManager } from '../services/workflow-manager.js';
 import type { ErrorStore } from '../services/error-store.js';
 import { COMMAND_CATALOG } from '../../shared/automation-types.js';
 import type { AutomationErrorCode } from '../../shared/automation-types.js';
+import type { ProjectError } from '@antimatter/workflow';
+import { ErrorTypes } from '@antimatter/workflow';
 
 // ---------------------------------------------------------------------------
 // Error helper
@@ -331,6 +333,110 @@ export function createServerCommandExecutor(
     const es = errorStore();
     const errors = es ? es.getAllErrors() : [];
     return { errors };
+  });
+
+  // ---- File annotations ----
+
+  const severityToErrorType = (severity: string) => {
+    switch (severity) {
+      case 'error': return ErrorTypes.SyntaxError;
+      case 'warning': return ErrorTypes.Warning;
+      case 'info': return ErrorTypes.Info;
+      case 'hint': return ErrorTypes.Info;
+      default: return ErrorTypes.SyntaxError;
+    }
+  };
+
+  const errorTypeToSeverity = (et: { name: string }) => {
+    switch (et.name) {
+      case 'Warning': return 'warning';
+      case 'Info': return 'info';
+      case 'TestFailure': return 'error';
+      default: return 'error';
+    }
+  };
+
+  handlers.set('files.annotate', async (params) => {
+    const es = errorStore();
+    if (!es) throw new AutomationCommandError('Error store not ready', 'execution-error');
+    const annotations = requireParam<any[]>(params, 'annotations');
+    // Group annotations by source → setErrors per source
+    const bySource = new Map<string, ProjectError[]>();
+    for (const a of annotations) {
+      const source = a.source || 'external';
+      if (!bySource.has(source)) bySource.set(source, []);
+      bySource.get(source)!.push({
+        errorType: severityToErrorType(a.severity || 'error'),
+        toolId: source,
+        file: a.path || '',
+        message: a.message || '',
+        detail: a.detail,
+        line: a.line,
+        column: a.column,
+        endLine: a.endLine,
+        endColumn: a.endColumn,
+      });
+    }
+    let count = 0;
+    for (const [toolId, errors] of bySource) {
+      await es.setErrors(toolId, errors);
+      count += errors.length;
+    }
+    return { count };
+  });
+
+  handlers.set('files.clearAnnotations', async (params) => {
+    const es = errorStore();
+    if (!es) throw new AutomationCommandError('Error store not ready', 'execution-error');
+    const source = params.source as string | undefined;
+    const path = params.path as string | undefined;
+
+    if (!source && !path) {
+      const before = es.getAllErrors().length;
+      await es.clearAll();
+      return { cleared: before };
+    }
+    if (source && !path) {
+      const before = es.getAllErrors().length;
+      await es.clearTool(source);
+      return { cleared: before - es.getAllErrors().length };
+    }
+    // path filter (with or without source): remove matching errors, keep the rest
+    const allErrors = es.getAllErrors();
+    const toolIds = new Set(allErrors.map(e => e.toolId));
+    let cleared = 0;
+    for (const toolId of toolIds) {
+      if (source && toolId !== source) continue;
+      const toolErrors = allErrors.filter(e => e.toolId === toolId);
+      const kept = toolErrors.filter(e => e.file !== path);
+      cleared += toolErrors.length - kept.length;
+      await es.setErrors(toolId, kept);
+    }
+    return { cleared };
+  });
+
+  handlers.set('files.annotations', async (params) => {
+    const es = errorStore();
+    let errors = es ? es.getAllErrors() : [];
+    const source = params.source as string | undefined;
+    const path = params.path as string | undefined;
+    const severity = params.severity as string | undefined;
+    if (source) errors = errors.filter(e => e.toolId === source);
+    if (path) errors = errors.filter(e => e.file === path);
+    if (severity) errors = errors.filter(e => errorTypeToSeverity(e.errorType) === severity);
+    const annotations = errors.map(e => ({
+      id: `${e.toolId}:${e.file}:${e.line ?? 0}:${e.column ?? 0}`,
+      source: e.toolId,
+      path: e.file,
+      line: e.line,
+      column: e.column,
+      endLine: e.endLine,
+      endColumn: e.endColumn,
+      severity: errorTypeToSeverity(e.errorType),
+      message: e.message,
+      detail: e.detail,
+    }));
+    return { annotations };
   });
 
   handlers.set('workflow.emit', async (params) => {

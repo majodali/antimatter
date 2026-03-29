@@ -30,10 +30,6 @@ const HAND_CRAFTED_OPS = new Set([
 // Operations defined in service-interface but not yet implemented on the server.
 // These are skipped to avoid registering tools that would always fail.
 const NOT_YET_AVAILABLE = new Set([
-  // File annotations — ErrorStore exists but no REST endpoint yet
-  'files.annotate',
-  'files.clearAnnotations',
-  'files.annotations',
   // Agent chat — works via REST+WebSocket but not automation API
   'agents.chats.create',
   'agents.chats.send',

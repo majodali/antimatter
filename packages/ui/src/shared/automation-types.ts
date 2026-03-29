@@ -96,6 +96,11 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   // Build
   { command: 'build.run', execution: 'server', description: 'Execute build' },
 
+  // Annotations
+  { command: 'files.annotate', execution: 'server', description: 'Set file annotations (errors, warnings, etc.)' },
+  { command: 'files.clearAnnotations', execution: 'server', description: 'Clear file annotations by source and/or path' },
+  { command: 'files.annotations', execution: 'server', description: 'Query file annotations with optional filters' },
+
   // Workflow / errors
   { command: 'workflow.state', execution: 'server', description: 'Get workflow state' },
   { command: 'workflow.errors', execution: 'server', description: 'Get project errors' },
