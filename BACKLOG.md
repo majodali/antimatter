@@ -165,10 +165,9 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 
 ### Agents Service
 
-**Current state:** ServiceClient-wired (agents.chats.send, agents.chats.delete). Chat panel exists with SSE streaming (to be migrated to WebSocket send+subscribe). Chat history persistence via apiFetch.
+**Current state:** ServiceClient-wired (agents.chats.send, agents.chats.delete). Chat panel uses fire-and-forget REST POST + WebSocket event subscription (agents.chats.message, agents.chats.toolCall, agents.chats.toolResult, agents.chats.done). SSE fully removed. Chat history persistence via apiFetch.
 
 **Remaining work:**
-- Chat panel simplification: send+subscribe via WebSocket, remove SSE
 - Tool call display and inline results
 - Abort response mid-stream
 - File/selection context attachment
@@ -235,20 +234,19 @@ Prioritized items ready for implementation. Pulled from Tier 2, ordered by impac
 
 | Priority | Item | Service | Description |
 |----------|------|---------|-------------|
-| 1 | **Chat panel simplification** | Agents | Migrate from SSE to WebSocket send+subscribe. Remove streaming code, simplify to fire-and-forget command + event subscription. |
-| 2 | **File annotations** | Files | Unified annotation model — errors, warnings, bookmarks. Source-agnostic (tsc, eslint, custom). Powers Problems panel, editor decorations, file explorer indicators. |
-| 3 | **Build/Deploy panel review** | Builds | Review layout. Rule failure = red indicator. Widget value persistence. Graceful reload (don't wipe rules on compilation failure). |
-| 4 | **Test panel improvements** | Tests | Display all project tests. Persist results to backend (workspace + S3). Multiple runner columns. Double-click navigates to test source. |
-| 5 | **M2 planning** | All | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
-| 6 | **Git panel UI** | Projects | Visual stage/unstage, commit message entry, push/pull buttons. |
-| 7 | **UI polish: prevent text selection** | Editor | Double-click on interactive UI elements should not highlight text. Apply `user-select: none` to panels, buttons, labels, tree items. |
-| 8 | **File search** | Files | Find files by name/path. Integrates with command palette (Cmd+P). |
-| 9 | **Show/hide dot files** | Files | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
-| 10 | **Command palette** | ClientAutomation | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
-| 11 | **Full-text search** | Files | Search across project files with results panel (Cmd+Shift+F). |
-| 12 | **Functional demos** | Tests | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
-| 13 | **FT-XTAB-006 fix** | Tests | Add `data-testid="project-lock-icon"` to Header lock indicators. |
-| 14 | **FT-WS-001 fix** | Workspace | Fix test isolation — file tree empties after earlier DOM tests. |
+| 1 | **File annotations** | Files | Unified annotation model — errors, warnings, bookmarks. Source-agnostic (tsc, eslint, custom). Powers Problems panel, editor decorations, file explorer indicators. |
+| 2 | **Build/Deploy panel review** | Builds | Review layout. Rule failure = red indicator. Widget value persistence. Graceful reload (don't wipe rules on compilation failure). |
+| 3 | **Test panel improvements** | Tests | Display all project tests. Persist results to backend (workspace + S3). Multiple runner columns. Double-click navigates to test source. |
+| 4 | **M2 planning** | All | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
+| 5 | **Git panel UI** | Projects | Visual stage/unstage, commit message entry, push/pull buttons. |
+| 6 | **UI polish: prevent text selection** | Editor | Double-click on interactive UI elements should not highlight text. Apply `user-select: none` to panels, buttons, labels, tree items. |
+| 7 | **File search** | Files | Find files by name/path. Integrates with command palette (Cmd+P). |
+| 8 | **Show/hide dot files** | Files | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
+| 9 | **Command palette** | ClientAutomation | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
+| 10 | **Full-text search** | Files | Search across project files with results panel (Cmd+Shift+F). |
+| 11 | **Functional demos** | Tests | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
+| 12 | **FT-XTAB-006 fix** | Tests | Add `data-testid="project-lock-icon"` to Header lock indicators. |
+| 13 | **FT-WS-001 fix** | Workspace | Fix test isolation — file tree empties after earlier DOM tests. |
 
 ---
 
