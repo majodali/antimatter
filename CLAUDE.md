@@ -1,5 +1,22 @@
 # Antimatter — Claude Code Context
 
+## Active TODO (keep in sync with BACKLOG.md Tier 3)
+
+> Update this list when items are completed or reprioritized. See BACKLOG.md for full details.
+
+1. **File annotations REST API** — expose files.annotate/clearAnnotations/annotations via REST (core model + UI done)
+2. **Widget value persistence** — preserve `_ui` state across workflow recompilation
+3. **Graceful workflow reload** — preserve old rules when new compilation fails (partial)
+4. **Test panel: S3 persistence** — persist test results to S3
+5. **Test panel: double-click nav** — navigate to test source on double-click
+6. **M2 planning** — define web app project for milestone M2
+7. **File search** — Cmd+P file finder
+8. **Command palette** — Cmd+Shift+P command palette + keyboard shortcuts
+9. **Full-text search** — Cmd+Shift+F across project files
+10. **Show/hide dot files** — toggle in file explorer
+
+**Recently completed:** slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
+
 ## What This Project Is
 
 Antimatter is a self-hosting online development environment with AI agent integration. The immediate goal is a modular online IDE that can build, test, and deploy itself on AWS. The long-term goal is a **Project Operating System** where documentation, models, code, tests, and operational state are first-class, navigable, interlinked concepts optimized for human/agent collaboration. See `docs/project-os.md` for the full vision.

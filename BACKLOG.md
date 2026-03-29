@@ -53,7 +53,7 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 
 ### Files Service
 
-**Current state:** ServiceClient-wired (files.read, files.write, files.tree, files.exists, files.delete, files.mkdir, files.move, files.copy). REST mutations emit `onFileChange` events to workflow engine. Move/copy operations support batch entries.
+**Current state:** ServiceClient-wired (files.read, files.write, files.tree, files.exists, files.delete, files.mkdir, files.move, files.copy). REST mutations emit `onFileChange` events to workflow engine. Move/copy operations support batch entries. File annotations model defined in service-interface (files.annotate, files.clearAnnotations, files.annotations). ErrorStore on server persists errors to `.antimatter-cache/errors.json`. Problems panel shows errors grouped by file with click-to-navigate. Editor decorations (squiggles, markers, hover messages) from errorStore. File explorer tree nodes show error count badges.
 
 | ID | Test Case | Status |
 |----|-----------|--------|
@@ -69,9 +69,8 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 | FT-FILE-012 | Copy file via API | test-passing |
 
 **Remaining work:**
-- File annotations (unified model for errors, warnings, bookmarks, actions)
+- File annotations REST endpoints (expose files.annotate/clearAnnotations/annotations via API for external tools)
 - Lambda dual-write (forward mutations to workspace when running)
-- File explorer indicators (error/changed markers on tree nodes)
 - Multi-select for bulk operations
 - File search (find files by name/path, Cmd+P integration)
 
@@ -93,7 +92,7 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 | FT-PROJ-005 | Git stage, commit, verify in log | test-passing |
 
 **Remaining work:**
-- Git panel UI (stage/unstage/commit/push/pull with visual diff)
+- Git panel: visual diff viewer
 - Git branch management
 - Git history/version viewer
 - Custom project ID on create (allow user to override the auto-generated slug)
@@ -122,14 +121,10 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 | FT-M1-002 | Build failure surfaces errors in Problems panel | test-passing |
 
 **Remaining work:**
-- Build panel: display rule list with status, manual execution, widget rendering
-- Widget system: button/toggle/status widgets from workflow declarations
 - Build commands executed in terminal (visible output, not hidden subprocess)
-- Review build and deploy panel layout
 - In-browser type checking (Monaco language services without workspace round-trip)
-- Rule failure semantics: rules that set failure state (e.g. `status: 'failed'`) should show red indicator, even if the rule itself didn't throw. Currently green = "rule executed without exception" which is misleading when the rule reports a failure.
-- Widget value persistence: `_ui` state (widget values) should be persisted across sessions. Currently "Dependencies: idle" means the value is null because `_ui` wasn't rehydrated from persisted state. Blank is better than "idle" for null values.
-- Graceful reload on automation file edit: don't remove old rules until the updated `.antimatter/*.ts` compiles and runs successfully. Deactivate or red-check rules from files that failed to compile. Currently editing build.ts causes all rules to disappear during compilation.
+- Widget value persistence: `_ui` state (widget values) should survive workflow recompilation. Currently `fullRefresh()` wipes the state file.
+- Graceful reload on automation file edit: incremental reload handles errors, but `fullRefresh()` is aggressive. Need explicit preservation of old rules when new compilation fails.
 - Widget and rule ordering: ensure declarations appear in the Build panel in the order they're declared in the source file.
 
 ### Tests Service
@@ -143,7 +138,7 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 | FT-XTAB-003 | Stale lock recovery | test-passing |
 | FT-XTAB-004 | Project-scoped storage isolation | test-passing |
 | FT-XTAB-005 | selectProject acquires lock, clearProject releases | test-passing |
-| FT-XTAB-006 | Header dropdown shows lock icon for locked projects | test-implemented (missing data-testid) |
+| FT-XTAB-006 | Header dropdown shows lock icon for locked projects | test-passing |
 
 **Remaining work:**
 - Display all project tests in test panel (not just functional tests)
@@ -232,21 +227,21 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 
 Prioritized items ready for implementation. Pulled from Tier 2, ordered by impact.
 
-| Priority | Item | Service | Description |
-|----------|------|---------|-------------|
-| 1 | **File annotations** | Files | Unified annotation model — errors, warnings, bookmarks. Source-agnostic (tsc, eslint, custom). Powers Problems panel, editor decorations, file explorer indicators. |
-| 2 | **Build/Deploy panel review** | Builds | Review layout. Rule failure = red indicator. Widget value persistence. Graceful reload (don't wipe rules on compilation failure). |
-| 3 | **Test panel improvements** | Tests | Display all project tests. Persist results to backend (workspace + S3). Multiple runner columns. Double-click navigates to test source. |
-| 4 | **M2 planning** | All | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
-| 5 | **Git panel UI** | Projects | Visual stage/unstage, commit message entry, push/pull buttons. |
-| 6 | **UI polish: prevent text selection** | Editor | Double-click on interactive UI elements should not highlight text. Apply `user-select: none` to panels, buttons, labels, tree items. |
-| 7 | **File search** | Files | Find files by name/path. Integrates with command palette (Cmd+P). |
-| 8 | **Show/hide dot files** | Files | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
-| 9 | **Command palette** | ClientAutomation | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
-| 10 | **Full-text search** | Files | Search across project files with results panel (Cmd+Shift+F). |
-| 11 | **Functional demos** | Tests | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
-| 12 | **FT-XTAB-006 fix** | Tests | Add `data-testid="project-lock-icon"` to Header lock indicators. |
-| 13 | **FT-WS-001 fix** | Workspace | Fix test isolation — file tree empties after earlier DOM tests. |
+| Priority | Item | Service | Status | Description |
+|----------|------|---------|--------|-------------|
+| 1 | **File annotations REST API** | Files | not started | Expose files.annotate/clearAnnotations/annotations via REST for external tools (linters, CLI). Core model + UI already done. |
+| 2 | **Widget value persistence** | Builds | not started | Preserve `_ui` state across workflow recompilation. `fullRefresh()` currently wipes state file. |
+| 3 | **Graceful workflow reload** | Builds | partial | Incremental reload handles errors, but `fullRefresh()` is aggressive. Preserve old rules when new compilation fails. |
+| 4 | **Test panel: S3 persistence** | Tests | not started | Persist test results to S3 so they survive workspace restart. Backend memory store exists but is ephemeral. |
+| 5 | **Test panel: double-click nav** | Tests | not started | Double-click on test result navigates to test source file. |
+| 6 | **M2 planning** | All | not started | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
+| 7 | **File search** | Files | not started | Find files by name/path. Integrates with command palette (Cmd+P). |
+| 8 | **Command palette** | ClientAutomation | not started | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
+| 9 | **Full-text search** | Files | not started | Search across project files with results panel (Cmd+Shift+F). |
+| 10 | **Show/hide dot files** | Files | not started | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
+| 11 | **UI polish: prevent text selection** | Editor | partial | Apply `select-none` systematically to interactive elements. Only 3/39 components done. |
+| 12 | **Functional demos** | Tests | not started | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
+| 13 | **FT-WS-001 fix** | Workspace | partial | Fix test isolation — file tree empties after earlier DOM tests. Test intermittently fails. |
 
 ---
 
