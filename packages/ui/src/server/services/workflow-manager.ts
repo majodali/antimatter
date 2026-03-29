@@ -639,8 +639,8 @@ export class WorkflowManager {
       this.changedAutomationFiles.clear();
 
       try {
-        // Always do a full refresh — delete state, reinitialize, re-emit all files.
-        // This is aggressive but safe: workflow state is a cache, not source of truth.
+        // Full refresh — reload definitions from new code, preserve state.
+        // On compilation failure, previous rules are restored.
         await this.fullRefresh();
 
         // Broadcast full state after refresh — declarations, state, rules, etc. all changed
@@ -1089,15 +1089,18 @@ export class WorkflowManager {
   }
 
   /**
-   * Full workflow refresh — deletes all persisted state, reloads definitions
-   * from disk, fires project:initialize, then emits file:change for every
+   * Full workflow refresh — reloads definitions from disk, preserving user
+   * state (including _ui widget values). If compilation fails, restores the
+   * previous runtime so rules keep working. Emits file:change for every
    * workspace file so rules can react to the current state of the project.
-   *
-   * Called when automation files change — intentionally aggressive to ensure
-   * stale state from old code is fully replaced.
    */
   private async fullRefresh(): Promise<void> {
     console.log('[workflow-manager] Full refresh — reloading definitions, preserving state');
+
+    // Save old runtime + definitions so we can restore on compilation failure
+    const prevRuntime = this.runtime;
+    const prevDefinitions = new Map(this.loadedDefinitions);
+    const prevLoadedFiles = [...this.loadedFiles];
 
     // 1. Clear runtime + definitions (will be rebuilt from new code)
     this.loadedDefinitions.clear();
@@ -1112,7 +1115,25 @@ export class WorkflowManager {
     // 3. Call start() — reloads definitions from disk.
     //    Persisted state (including _ui widget values) is preserved on disk
     //    and restored by start() via loadState().
-    await this.start();
+    try {
+      await this.start();
+    } catch (err) {
+      // Compilation failed — restore previous runtime so rules keep working
+      console.error('[workflow-manager] Reload failed — restoring previous rules:', err);
+      this.runtime = prevRuntime;
+      this.loadedDefinitions = prevDefinitions;
+      this.loadedFiles = prevLoadedFiles;
+      throw err; // Re-throw so scheduleReload's catch block reports the error
+    }
+
+    // If start() loaded no definitions (empty/broken file), restore previous
+    if (this.loadedFiles.length === 0 && prevLoadedFiles.length > 0) {
+      console.warn('[workflow-manager] No definitions loaded after refresh — keeping previous rules');
+      this.runtime = prevRuntime;
+      this.loadedDefinitions = prevDefinitions;
+      this.loadedFiles = prevLoadedFiles;
+      return;
+    }
 
     // 5. Emit file:change for every workspace file so rules can react
     const manifest = await this.computeFileManifest();
