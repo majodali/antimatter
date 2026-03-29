@@ -4,17 +4,16 @@
 
 > Update this list when items are completed or reprioritized. See BACKLOG.md for full details.
 
-1. **Graceful workflow reload** — preserve old rules when new compilation fails (partial)
-2. **Test panel: project tests** — show current project's tests (vitest/jest), not Antimatter's hardcoded functional tests
-4. **Test panel: S3 persistence** — persist test results to S3
-5. **Test panel: double-click nav** — navigate to test source on double-click
-6. **M2 planning** — define web app project for milestone M2
-7. **File search** — Cmd+P file finder
-8. **Command palette** — Cmd+Shift+P command palette + keyboard shortcuts
-9. **Full-text search** — Cmd+Shift+F across project files
-10. **Show/hide dot files** — toggle in file explorer
+1. **Test panel: project tests** — show current project's tests (vitest/jest), not Antimatter's hardcoded functional tests
+2. **Test panel: S3 persistence** — persist test results to S3
+3. **Test panel: double-click nav** — navigate to test source on double-click
+4. **M2 planning** — define web app project for milestone M2
+5. **File search** — Cmd+P file finder
+6. **Command palette** — Cmd+Shift+P command palette + keyboard shortcuts
+7. **Full-text search** — Cmd+Shift+F across project files
+8. **Show/hide dot files** — toggle in file explorer
 
-**Recently completed:** widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
+**Recently completed:** graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
 
 ## What This Project Is
 
