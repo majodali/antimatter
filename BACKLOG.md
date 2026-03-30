@@ -142,6 +142,8 @@ A minimal todo app with:
 - Git branch management
 - Git history/version viewer
 - Custom project ID on create (allow user to override the auto-generated slug)
+- Project templates — scaffold new projects from templates (React SPA, Express API, static site, etc.)
+- `.antimatter/config.json` — first-class project configuration file (test runner, preview directory, deploy targets, etc.)
 
 ### Workspaces Service
 
@@ -197,13 +199,14 @@ A minimal todo app with:
 **Remaining work:**
 - Deployed resource tracking with custom actions
 - Deploy panel per-environment actions
-- Secrets/env vars integration
+- Deploy URL display — after deploying, show a clickable link to the live site in the deploy panel
+- Secrets/env vars management — UI for project secrets (API keys, credentials). Stored encrypted, injected into workflow rules and terminal env.
 
 ### Agents Service
 
 **Current state:** ServiceClient-wired (agents.chats.send, agents.chats.delete). Chat panel uses fire-and-forget REST POST + WebSocket event subscription (agents.chats.message, agents.chats.toolCall, agents.chats.toolResult, agents.chats.done). SSE fully removed. Chat history persistence via apiFetch.
 
-**Remaining work:**
+**Remaining work** (part of M5 Native AI Agent roadmap):
 - Tool call display and inline results
 - Abort response mid-stream
 - File/selection context attachment
@@ -248,6 +251,8 @@ A minimal todo app with:
 - Manual save (Ctrl+S) — currently dispatched but unreliable
 - Editor context menu (fix non-functional items)
 - Problems panel error count badge
+- Code formatting (Prettier integration)
+- TypeScript language services — project-aware completions, go-to-definition, hover info
 
 **Usability:**
 - Problems panel click/double-click navigation to exact position ✅ (implemented)
@@ -270,18 +275,18 @@ Prioritized items ready for implementation. Pulled from Tier 2, ordered by impac
 
 | Priority | Item | Service | Status | Description |
 |----------|------|---------|--------|-------------|
-| 1 | **File annotations REST API** | Files | not started | Expose files.annotate/clearAnnotations/annotations via REST for external tools (linters, CLI). Core model + UI already done. |
-| 2 | **Widget value persistence** | Builds | not started | Preserve `_ui` state across workflow recompilation. `fullRefresh()` currently wipes state file. |
-| 3 | **Graceful workflow reload** | Builds | partial | Incremental reload handles errors, but `fullRefresh()` is aggressive. Preserve old rules when new compilation fails. |
-| 4 | **Test panel: project tests** | Tests | not started | Show current project's tests (vitest/jest), not Antimatter's hardcoded functional tests. Discover from project test framework. |
-| 5 | **Test panel: S3 persistence** | Tests | not started | Persist test results to S3 so they survive workspace restart. Backend memory store exists but is ephemeral. |
-| 6 | **Test panel: double-click nav** | Tests | not started | Double-click on test result navigates to test source file. |
-| 7 | **M2 implementation** | All | not started | Phases 1-6 defined above. Puppeteer utility, preview route, todo app project, FT-M2 test cases, CDK utility. |
-| 8 | **Command palette + search** | Files/ClientAutomation | not started | Shared overlay infrastructure + keyboard shortcut system. Cmd+P file search (fuzzy match file paths), Cmd+Shift+P command palette (actions), Cmd+Shift+F full-text search (grep across project files with results panel). |
-| 9 | **Show/hide dot files** | Files | not started | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
-| 10 | **UI polish: prevent text selection** | Editor | partial | Apply `select-none` systematically to interactive elements. Only 3/39 components done. |
-| 11 | **Functional demos** | Tests | not started | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
-| 12 | **FT-WS-001 fix** | Workspace | partial | Fix test isolation — file tree empties after earlier DOM tests. Test intermittently fails. |
+| 1 | **M2 implementation** | All | not started | Phases 1-6: Puppeteer E2E utility, web preview route, todo app project, workflow rules, FT-M2 test cases, CDK utility. |
+| 2 | **Git visual diff** | Projects | not started | Diff viewer in git panel. View staged/unstaged changes before commit. |
+| 3 | **Multiple terminal tabs** | Terminal | not started | Multiple terminal sessions within a single project. Tab bar, create/close/switch. |
+| 4 | **Secrets/env vars management** | DeployedResources | not started | UI for project secrets (API keys, credentials). Stored encrypted, injected into workflow rules and terminal env. |
+| 5 | **Deploy URL display** | DeployedResources | not started | Show clickable link to live site in deploy panel after deployment. |
+| 6 | **Command palette + search** | Files/ClientAutomation | not started | Shared overlay + keyboard shortcuts. Cmd+P file search, Cmd+Shift+P commands, Cmd+Shift+F full-text search. |
+| 7 | **Show/hide dot files** | Files | not started | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
+| 8 | **`.antimatter/config.json`** | Projects | not started | First-class project configuration file: test runner, preview directory, deploy targets, etc. |
+| 9 | **Project templates** | Projects | not started | Scaffold new projects from templates (React SPA, Express API, static site). |
+| 10 | **UI polish: prevent text selection** | Editor | partial | Apply `select-none` systematically to interactive elements. |
+| 11 | **Functional demos** | Tests | not started | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. |
+| 12 | **FT-WS-001 fix** | Workspace | partial | Fix test isolation — file tree empties after earlier DOM tests. |
 
 ---
 
