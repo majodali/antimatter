@@ -7,7 +7,8 @@
  */
 
 import { Router } from 'express';
-import type { TestRunSummary } from '../../shared/test-types.js';
+import type { TestRunSummary, ProjectTestRunSummary } from '../../shared/test-types.js';
+import type { WorkspaceEnvironment } from '@antimatter/workspace';
 
 export interface TestResultsStorage {
   save(summary: TestRunSummary): Promise<void>;
@@ -37,6 +38,97 @@ export class MemoryTestResultsStorage implements TestResultsStorage {
 
   async clear(): Promise<void> {
     this.results = [];
+  }
+}
+
+/**
+ * File-backed test results storage (workspace server).
+ * Persists to `.antimatter-cache/test-results.json` — automatically
+ * synced to S3 by the workspace S3 sync scheduler.
+ */
+export class FileTestResultsStorage implements TestResultsStorage {
+  private results: TestRunSummary[] = [];
+  private projectRuns: ProjectTestRunSummary[] = [];
+  private readonly maxRuns = 50;
+  private readonly storagePath: string;
+
+  constructor(
+    private readonly env: WorkspaceEnvironment,
+    storagePath = '.antimatter-cache/test-results.json',
+  ) {
+    this.storagePath = storagePath;
+  }
+
+  /** Load persisted results from disk on startup. */
+  async initialize(): Promise<void> {
+    try {
+      const exists = await this.env.exists(this.storagePath);
+      if (!exists) return;
+      const content = await this.env.readFile(this.storagePath);
+      const data = JSON.parse(content) as {
+        runs?: TestRunSummary[];
+        projectRuns?: ProjectTestRunSummary[];
+      };
+      if (data.runs) this.results = data.runs;
+      if (data.projectRuns) this.projectRuns = data.projectRuns;
+      const total = this.results.length + this.projectRuns.length;
+      if (total > 0) {
+        console.log(`[test-results] Restored ${this.results.length} functional + ${this.projectRuns.length} project test run(s)`);
+      }
+    } catch {
+      // No persisted results or corrupt file — start fresh
+    }
+  }
+
+  async save(summary: TestRunSummary): Promise<void> {
+    this.results.push(summary);
+    if (this.results.length > this.maxRuns) {
+      this.results = this.results.slice(-this.maxRuns);
+    }
+    await this.persist();
+  }
+
+  async load(): Promise<TestRunSummary[]> {
+    return [...this.results];
+  }
+
+  async clear(): Promise<void> {
+    this.results = [];
+    await this.persist();
+  }
+
+  /** Save a project test run (vitest/jest). */
+  async saveProjectRun(summary: ProjectTestRunSummary): Promise<void> {
+    this.projectRuns.push(summary);
+    if (this.projectRuns.length > this.maxRuns) {
+      this.projectRuns = this.projectRuns.slice(-this.maxRuns);
+    }
+    await this.persist();
+  }
+
+  /** Load all project test runs. */
+  async loadProjectRuns(): Promise<ProjectTestRunSummary[]> {
+    return [...this.projectRuns];
+  }
+
+  /** Get the latest project test run (most recent). */
+  getLatestProjectRun(): ProjectTestRunSummary | null {
+    return this.projectRuns.length > 0 ? this.projectRuns[this.projectRuns.length - 1] : null;
+  }
+
+  private async persist(): Promise<void> {
+    try {
+      const dir = this.storagePath.substring(0, this.storagePath.lastIndexOf('/'));
+      if (dir) {
+        try { await this.env.mkdir(dir); } catch { /* may exist */ }
+      }
+      await this.env.writeFile(this.storagePath, JSON.stringify({
+        runs: this.results,
+        projectRuns: this.projectRuns,
+      }, null, 2));
+    } catch (err) {
+      console.error('[test-results] Failed to persist:', err);
+    }
   }
 }
 

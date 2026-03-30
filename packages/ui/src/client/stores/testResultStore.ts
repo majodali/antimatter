@@ -11,6 +11,8 @@ import type {
   TestModule,
   StoredTestResult,
   TestRunSummary,
+  ProjectTestResult,
+  ProjectTestRunSummary,
 } from '../../shared/test-types.js';
 
 // ---- Filters ----
@@ -48,6 +50,14 @@ interface TestResultState {
   /** Incremental logs streamed from the test tab during execution (testId → lines). */
   liveLogs: Record<string, string[]>;
 
+  // Project test state (vitest/jest CLI-based)
+  projectRunner: 'vitest' | 'jest' | 'unknown' | null;
+  projectTestFiles: string[];
+  projectResults: ProjectTestResult[];
+  projectRunSummary: ProjectTestRunSummary | null;
+  isDiscoveringProject: boolean;
+  isRunningProject: boolean;
+
   // Actions — mutators
   setResults: (results: StoredTestResult[]) => void;
   addResult: (result: StoredTestResult) => void;
@@ -64,6 +74,14 @@ interface TestResultState {
   setShowTestTabModal: (show: boolean) => void;
   setLastError: (error: string | null) => void;
   appendLogs: (testId: string, logs: string[]) => void;
+
+  // Project test actions
+  setProjectRunner: (runner: 'vitest' | 'jest' | 'unknown' | null) => void;
+  setProjectTestFiles: (files: string[]) => void;
+  setProjectResults: (results: ProjectTestResult[]) => void;
+  setProjectRunSummary: (summary: ProjectTestRunSummary | null) => void;
+  setDiscoveringProject: (v: boolean) => void;
+  setRunningProject: (v: boolean) => void;
 
   // Selectors
   getFilteredResults: () => StoredTestResult[];
@@ -85,6 +103,12 @@ export const useTestResultStore = create<TestResultState>()((set, get) => ({
   showTestTabModal: false,
   lastError: null,
   liveLogs: {},
+  projectRunner: null,
+  projectTestFiles: [],
+  projectResults: [],
+  projectRunSummary: null,
+  isDiscoveringProject: false,
+  isRunningProject: false,
 
   // ---- Actions ----
 
@@ -154,6 +178,15 @@ export const useTestResultStore = create<TestResultState>()((set, get) => ({
         [testId]: [...(state.liveLogs[testId] ?? []), ...logs],
       },
     })),
+
+  // ---- Project test actions ----
+
+  setProjectRunner: (runner) => set({ projectRunner: runner }),
+  setProjectTestFiles: (files) => set({ projectTestFiles: files }),
+  setProjectResults: (results) => set({ projectResults: results }),
+  setProjectRunSummary: (summary) => set({ projectRunSummary: summary }),
+  setDiscoveringProject: (v) => set({ isDiscoveringProject: v }),
+  setRunningProject: (v) => set({ isRunningProject: v }),
 
   // ---- Selectors ----
 

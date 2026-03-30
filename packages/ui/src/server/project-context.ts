@@ -49,7 +49,7 @@ import { createActivityRouter } from './routes/activity.js';
 import { createGitRouter } from './routes/git.js';
 import { createEventsRouter } from './routes/events.js';
 import { createWorkflowRouter } from './routes/workflow.js';
-import { createTestResultsRouter } from './routes/test-results.js';
+import { createTestResultsRouter, FileTestResultsStorage } from './routes/test-results.js';
 import { createAutomationRouter } from './routes/automation.js';
 import { createServerCommandExecutor } from './automation/server-commands.js';
 import { WorkflowManager } from './services/workflow-manager.js';
@@ -378,6 +378,7 @@ export class ProjectContext {
   readonly eventLogger: EventLogger;
   workflowManager!: WorkflowManager;
   errorStore!: ErrorStore;
+  testResultsStorage!: FileTestResultsStorage;
   private eventLog?: import('./event-log.js').EventLog;
   s3SyncScheduler: S3SyncScheduler | null = null;
 
@@ -492,7 +493,11 @@ export class ProjectContext {
       onExecEnd: () => this.config.onExecEnd(),
     });
 
+    // Test results storage (file-backed, auto-synced to S3)
+    this.testResultsStorage = new FileTestResultsStorage(this.env);
+
     await this.errorStore.initialize();
+    await this.testResultsStorage.initialize();
     await this.workflowManager.start();
 
     // Feed initial S3 files to workflow engine
@@ -797,13 +802,14 @@ export class ProjectContext {
         args[1].status(503).json({ error: 'Project not yet initialized' });
       }
     });
-    router.use('/api/test-results', createTestResultsRouter());
+    router.use('/api/test-results', createTestResultsRouter(this.testResultsStorage));
 
     // Automation API — unified command endpoint for external agents
     const executeServerCommand = createServerCommandExecutor({
       workspace: this.workspace,
       workflowManager: () => this.workflowManager,
       errorStore: () => this.errorStore,
+      testResultsStorage: () => this.testResultsStorage,
       explorerIgnore: () => this.fileChangeNotifier.getExplorerIgnore(),
     });
     router.use('/api/automation', createAutomationRouter({

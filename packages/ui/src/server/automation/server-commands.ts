@@ -16,6 +16,7 @@ import { COMMAND_CATALOG } from '../../shared/automation-types.js';
 import type { AutomationErrorCode } from '../../shared/automation-types.js';
 import type { ProjectError } from '@antimatter/workflow';
 import { ErrorTypes } from '@antimatter/workflow';
+import { detectTestRunner, parseVitestJson, parseJestJson } from './test-output-parser.js';
 
 // ---------------------------------------------------------------------------
 // Error helper
@@ -124,6 +125,8 @@ export interface ServerCommandDependencies {
   workflowManager: () => WorkflowManager | undefined;
   /** Lazy getter — error store may not be ready at router mount time. */
   errorStore: () => ErrorStore | undefined;
+  /** Lazy getter — test results storage. */
+  testResultsStorage?: () => import('../routes/test-results.js').FileTestResultsStorage | undefined;
   /** Returns current explorer ignore patterns for file tree filtering. */
   explorerIgnore: () => string[];
 }
@@ -148,7 +151,7 @@ type CommandHandler = (params: Record<string, unknown>) => Promise<unknown>;
 export function createServerCommandExecutor(
   deps: ServerCommandDependencies,
 ): (command: string, params: Record<string, unknown>) => Promise<unknown> {
-  const { workspace, workflowManager, errorStore, explorerIgnore } = deps;
+  const { workspace, workflowManager, errorStore, testResultsStorage, explorerIgnore } = deps;
 
   /** Helper: run a git command via workspace environment. */
   async function runGit(args: string, timeout = 30_000): Promise<{
@@ -437,6 +440,89 @@ export function createServerCommandExecutor(
       detail: e.detail,
     }));
     return { annotations };
+  });
+
+  // ---- Project tests (vitest/jest) ----
+
+  handlers.set('tests.discover-project', async () => {
+    // Read package.json to detect test runner
+    let packageJson: string;
+    try {
+      packageJson = await workspace.readFile('package.json');
+    } catch {
+      return { runner: null, tests: [], error: 'No package.json found' };
+    }
+    const runner = detectTestRunner(packageJson);
+    if (!runner) {
+      return { runner: null, tests: [], error: 'No vitest or jest found in dependencies' };
+    }
+    // Use vitest --list or jest --listTests to find test files
+    const cmd = runner === 'vitest'
+      ? 'npx vitest --list --reporter=json 2>/dev/null || true'
+      : 'npx jest --listTests --json 2>/dev/null || true';
+    const result = await workspace.env.execute({ command: cmd, timeout: 30_000 });
+    let testFiles: string[] = [];
+    try {
+      if (runner === 'vitest') {
+        // vitest --list --reporter=json outputs the full JSON with testResults
+        const data = JSON.parse(result.stdout);
+        testFiles = (data.testResults ?? []).map((r: any) => r.name ?? r);
+      } else {
+        testFiles = JSON.parse(result.stdout);
+      }
+    } catch {
+      // Fallback: glob for test files
+      try {
+        const globResult = await workspace.env.execute({
+          command: 'find . -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" -o -name "*.spec.js" | grep -v node_modules | head -100',
+          timeout: 10_000,
+        });
+        testFiles = globResult.stdout.split('\n').filter(Boolean).map(f => f.replace(/^\.\//, ''));
+      } catch { /* ignore */ }
+    }
+    // Normalize to relative paths
+    const projectRoot = (workspace.env as any).rootPath ?? process.cwd();
+    testFiles = testFiles.map(f => {
+      if (f.startsWith(projectRoot)) return f.slice(projectRoot.length).replace(/^\//, '');
+      return f.replace(/^\.\//, '');
+    });
+    return { runner, tests: testFiles };
+  });
+
+  handlers.set('tests.run-project', async (params) => {
+    const file = params.file as string | undefined;
+    // Detect runner
+    let packageJson: string;
+    try {
+      packageJson = await workspace.readFile('package.json');
+    } catch {
+      throw new AutomationCommandError('No package.json found', 'execution-error');
+    }
+    const runner = detectTestRunner(packageJson);
+    if (!runner) {
+      throw new AutomationCommandError('No vitest or jest found in dependencies', 'execution-error');
+    }
+    const projectRoot = (workspace.env as any).rootPath ?? process.cwd();
+    const fileFilter = file ? ` ${file}` : '';
+    const cmd = runner === 'vitest'
+      ? `npx vitest run --reporter=json${fileFilter} 2>/dev/null || true`
+      : `npx jest --json${fileFilter} 2>/dev/null || true`;
+    const result = await workspace.env.execute({ command: cmd, timeout: 300_000 });
+    const parser = runner === 'vitest' ? parseVitestJson : parseJestJson;
+    const summary = parser(result.stdout, projectRoot);
+    // Persist results
+    const storage = testResultsStorage?.();
+    if (storage) {
+      await storage.saveProjectRun(summary);
+    }
+    return summary;
+  });
+
+  handlers.set('tests.project-results', async () => {
+    const storage = testResultsStorage?.();
+    if (!storage) return { runs: [] };
+    const runs = await storage.loadProjectRuns();
+    return { runs };
   });
 
   handlers.set('workflow.emit', async (params) => {

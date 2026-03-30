@@ -101,6 +101,11 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'files.clearAnnotations', execution: 'server', description: 'Clear file annotations by source and/or path' },
   { command: 'files.annotations', execution: 'server', description: 'Query file annotations with optional filters' },
 
+  // Project tests
+  { command: 'tests.discover-project', execution: 'server', description: 'Discover project tests via vitest/jest' },
+  { command: 'tests.run-project', execution: 'server', description: 'Run project tests and return JSON results' },
+  { command: 'tests.project-results', execution: 'server', description: 'Get persisted project test results' },
+
   // Workflow / errors
   { command: 'workflow.state', execution: 'server', description: 'Get workflow state' },
   { command: 'workflow.errors', execution: 'server', description: 'Get project errors' },

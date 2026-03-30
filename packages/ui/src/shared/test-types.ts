@@ -104,3 +104,33 @@ export interface TestRunSummary {
   readonly durationMs: number;
   readonly results: readonly StoredTestResult[];
 }
+
+// ---------------------------------------------------------------------------
+// Project test types (vitest/jest CLI-based)
+// ---------------------------------------------------------------------------
+
+/** Result of a single project test from JSON reporter output. */
+export interface ProjectTestResult {
+  readonly id: string;            // "file > suite > name"
+  readonly name: string;          // innermost test name
+  readonly file: string;          // relative file path
+  readonly suite?: string;        // describe block chain
+  readonly status: 'pass' | 'fail' | 'skip' | 'todo';
+  readonly durationMs: number;
+  readonly failureMessage?: string;
+  readonly failureLine?: number;  // line in test file where assertion failed
+  readonly failureStack?: string;
+}
+
+/** Summary of a project test run (from vitest/jest --json output). */
+export interface ProjectTestRunSummary {
+  readonly runId: string;
+  readonly timestamp: string;
+  readonly runner: 'vitest' | 'jest' | 'unknown';
+  readonly total: number;
+  readonly passed: number;
+  readonly failed: number;
+  readonly skipped: number;
+  readonly durationMs: number;
+  readonly results: readonly ProjectTestResult[];
+}

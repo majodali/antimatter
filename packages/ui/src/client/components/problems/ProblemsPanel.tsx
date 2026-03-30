@@ -20,11 +20,7 @@ import {
 } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { useApplicationStore, type ProjectError } from '@/stores/applicationStore';
-import { useFileStore } from '@/stores/fileStore';
-import { useEditorStore } from '@/stores/editorStore';
-import { fetchFileContent } from '@/lib/api';
-import { detectLanguage } from '@/lib/languageDetection';
-import type { WorkspacePath } from '@antimatter/filesystem';
+import { navigateToFile } from '@/lib/editor-navigation';
 
 /** Map error type icon name to lucide component. */
 function getErrorIcon(iconName: string) {
@@ -100,7 +96,6 @@ function ErrorRow({
 
 export function ProblemsPanel() {
   const errors = useApplicationStore((s) => s.getErrors());
-  const selectFile = useFileStore((s) => s.selectFile);
 
   // Group errors by file
   const byFile = new Map<string, ProjectError[]>();
@@ -116,43 +111,7 @@ export function ProblemsPanel() {
   const fileGroups = Array.from(byFile.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
   function handleNavigate(file: string, line?: number, column?: number) {
-    // Select in file tree AND open in editor
-    selectFile(file as WorkspacePath);
-    const editorState = useEditorStore.getState();
-
-    // Poll until Monaco has the correct file model active, then reveal the location.
-    // This avoids race conditions with setTimeout.
-    const revealWhenReady = () => {
-      if (!line) return;
-      let attempts = 0;
-      const check = () => {
-        attempts++;
-        const editor = window.__monacoEditor;
-        if (!editor) { if (attempts < 20) setTimeout(check, 50); return; }
-        const model = editor.getModel();
-        const uri = model?.uri?.path ?? '';
-        // Check if the editor has loaded the target file
-        if (uri.endsWith(file) || uri.includes(file)) {
-          const pos = { lineNumber: line, column: column ?? 1 };
-          editor.setPosition(pos);
-          editor.revealLineInCenter(line);
-          editor.focus();
-        } else if (attempts < 20) {
-          setTimeout(check, 50);
-        }
-      };
-      setTimeout(check, 50);
-    };
-
-    if (editorState.openFiles.has(file as WorkspacePath)) {
-      editorState.setActiveFile(file as WorkspacePath);
-      revealWhenReady();
-    } else {
-      fetchFileContent(file).then((content) => {
-        editorState.openFile(file as WorkspacePath, content, detectLanguage(file));
-        revealWhenReady();
-      }).catch(() => {});
-    }
+    navigateToFile(file, line, column);
   }
 
   if (errors.length === 0) {
