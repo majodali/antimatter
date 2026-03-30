@@ -129,7 +129,7 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 
 ### Tests Service
 
-**Current state:** Cross-tab test framework with BroadcastChannel orchestrator/executor. Per-test timeout (180s). RunId filtering prevents stale tab interference. Incremental log streaming (test-log messages, liveLogs in store). Monaco model readiness checks for DOM interactions.
+**Current state:** Project test panel discovers and runs vitest/jest tests via CLI (`tests.discover-project`, `tests.run-project` automation commands). Results parsed from JSON reporter output with file paths, suite names, failure messages/lines. File-backed persistence (`.antimatter-cache/test-results.json`, auto-synced to S3). Double-click navigates to test file or failure line. Cross-tab functional test framework still available via `/tests` URL.
 
 | ID | Test Case | Status |
 |----|-----------|--------|
@@ -141,13 +141,10 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 | FT-XTAB-006 | Header dropdown shows lock icon for locked projects | test-passing |
 
 **Remaining work:**
-- Test panel shows current project's tests, not Antimatter's hardcoded functional tests. Discover tests from the project's test framework (vitest, jest, etc.) and display in the panel.
-- Test results persisted in backend (workspace + S3), dynamically updated
+- Test discovery config: `.antimatter/config.json` `"tests"` field for custom runner/patterns (currently auto-detects from package.json)
 - Tests with multiple runners show results per runner (columns in test panel)
-- Double-click on test result navigates to the test case source
-- In-IDE test runner panel (run and view results without terminal)
-- Test definitions as project-registered resources
 - Headless test execution (server-side Puppeteer)
+- Functional tests as project-registered tests for the Antimatter project (instead of hardcoded imports)
 
 ### DeployedResources Service
 
