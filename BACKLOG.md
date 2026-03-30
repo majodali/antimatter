@@ -276,14 +276,12 @@ Prioritized items ready for implementation. Pulled from Tier 2, ordered by impac
 | 4 | **Test panel: project tests** | Tests | not started | Show current project's tests (vitest/jest), not Antimatter's hardcoded functional tests. Discover from project test framework. |
 | 5 | **Test panel: S3 persistence** | Tests | not started | Persist test results to S3 so they survive workspace restart. Backend memory store exists but is ephemeral. |
 | 6 | **Test panel: double-click nav** | Tests | not started | Double-click on test result navigates to test source file. |
-| 7 | **M2 planning** | All | not started | Define the web app project for M2 (SPA with API backend?). Identify what additional IDE capabilities are needed. |
-| 8 | **File search** | Files | not started | Find files by name/path. Integrates with command palette (Cmd+P). |
-| 9 | **Command palette** | ClientAutomation | not started | Cmd+P file switcher, Cmd+Shift+P command palette. Keyboard shortcuts framework. |
-| 10 | **Full-text search** | Files | not started | Search across project files with results panel (Cmd+Shift+F). |
-| 11 | **Show/hide dot files** | Files | not started | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
-| 12 | **UI polish: prevent text selection** | Editor | partial | Apply `select-none` systematically to interactive elements. Only 3/39 components done. |
-| 13 | **Functional demos** | Tests | not started | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
-| 14 | **FT-WS-001 fix** | Workspace | partial | Fix test isolation — file tree empties after earlier DOM tests. Test intermittently fails. |
+| 7 | **M2 implementation** | All | not started | Phases 1-6 defined above. Puppeteer utility, preview route, todo app project, FT-M2 test cases, CDK utility. |
+| 8 | **Command palette + search** | Files/ClientAutomation | not started | Shared overlay infrastructure + keyboard shortcut system. Cmd+P file search (fuzzy match file paths), Cmd+Shift+P command palette (actions), Cmd+Shift+F full-text search (grep across project files with results panel). |
+| 9 | **Show/hide dot files** | Files | not started | Toggle visibility of dot files (.gitignore, .antimatter, etc.) in file explorer. |
+| 10 | **UI polish: prevent text selection** | Editor | partial | Apply `select-none` systematically to interactive elements. Only 3/39 components done. |
+| 11 | **Functional demos** | Tests | not started | Demo scripting infrastructure. Pacing, narration overlay, step highlighting. Builds on BrowserActionContext. |
+| 12 | **FT-WS-001 fix** | Workspace | partial | Fix test isolation — file tree empties after earlier DOM tests. Test intermittently fails. |
 
 ---
 

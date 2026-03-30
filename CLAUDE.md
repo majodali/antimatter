@@ -8,10 +8,8 @@
 2. **M2 phase 2** — web preview route (`/workspace/{id}/preview/`)
 3. **M2 phase 3** — create m2-todo-app project with source files + workflow rules
 4. **M2 phase 4** — FT-M2 functional test cases
-5. **File search** — Cmd+P file finder
-6. **Command palette** — Cmd+Shift+P command palette + keyboard shortcuts
-7. **Full-text search** — Cmd+Shift+F across project files
-8. **Show/hide dot files** — toggle in file explorer
+5. **Command palette + search** — Cmd+P file search, Cmd+Shift+P commands, Cmd+Shift+F full-text search. Shared overlay infrastructure + keyboard shortcut system.
+6. **Show/hide dot files** — toggle in file explorer
 
 **Recently completed:** M2 planning, test panel (project tests, S3 persistence, double-click nav), graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
 
