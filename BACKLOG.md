@@ -26,7 +26,7 @@ Big-ticket items that span multiple services or introduce new capabilities.
 | # | Item | Status | Description |
 |---|------|--------|-------------|
 | M1 | **Toy project edit/build/test/deploy** | **done** | Create, edit, build, test, and deploy json-validator entirely from within the IDE. 5/5 functional tests passing (FT-M1-001 through FT-M1-005). |
-| M2 | **Build & deploy a web app** | planned | Create, build, test, and deploy a real web application (SPA or API server) from within the IDE. Validates the full development workflow for a realistic project beyond a library. |
+| M2 | **Build & deploy a web app** | planned | Create, build, test, and deploy a web SPA from within the IDE. Validates web-specific workflow: build → deploy to S3+CloudFront → preview → Puppeteer E2E verification against live URL. |
 | M3 | **Self-host Antimatter** | planned | Perform code changes, builds, tests, and deployments on Antimatter itself entirely from within the IDE. |
 | M4 | **Claude Code remote driving** | in-progress | Claude Code (local CLI) drives the IDE remotely via the Automation API — editing, building, testing, deploying. MCP server + project template validated. Auto-generated MCP tools from service-interface registry pending. |
 | M5 | **Native AI agent** | planned | Built-in AI agent replaces Claude Code, using the same Automation API and service interface. |
@@ -46,6 +46,52 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 | FT-M1-003 | Add failing test, verify failure, fix test, verify pass | test-passing |
 | FT-M1-004 | Publish to S3, create consumer project, verify import works | test-passing |
 | FT-M1-005 | Git commit all M1 changes and verify in log | test-passing |
+
+### M2 Validation: Web App Build & Deploy
+
+A simple SPA (HTML/CSS/JS, no framework) demonstrating the full web development workflow. The project uses workflow rules for build, test, deploy, and E2E verification. No Vite/webpack — the IDE's workflow engine handles everything.
+
+**New IDE capabilities required for M2:**
+
+1. **Puppeteer E2E utility (`wf.utils.puppeteerTest`)** — Run headless browser assertions against any URL from a workflow rule. Returns pass/fail + screenshot on failure. Uses Puppeteer on the workspace server (already available for headless functional tests).
+
+2. **Web app preview hosting** — Serve project files under `ide.antimatter.solutions/workspace/{projectId}/preview/` so the IDE can open and control the app via `window.open()` (same-origin). The workspace server already serves static routes; this adds a `/preview/` mount pointing at a configurable directory (e.g., `dist/` or `src/`).
+
+3. **Per-project CDK stack provisioning** — `wf.utils.cdkDeploy(stackDir)` utility for deploying project-specific infrastructure. Wraps `npx cdk deploy` with environment setup. Initially simple (S3+CloudFront for static sites), extensible to API Gateway, Lambda, etc.
+
+4. **WebSocket bridge for remote app control** (future) — Inject a small script into deployed apps that connects back to the workspace server for remote control commands. Enables Puppeteer-like automation against production deployments at arbitrary domains. Not required for M2 (Puppeteer against URL is sufficient).
+
+**Test project: `m2-todo-app`**
+
+A minimal todo app with:
+- `src/index.html` — main page with todo list UI
+- `src/app.js` — vanilla JS: add/remove/toggle todos, localStorage persistence
+- `src/style.css` — basic styling
+- `src/__tests__/app.test.js` — unit tests (vitest, jsdom)
+- `infrastructure/` — CDK stack for S3+CloudFront deployment
+- `.antimatter/build.ts` — workflow rules: install, build, test, deploy, E2E verify
+
+| Test ID | Name | Status |
+|---------|------|--------|
+| FT-M2-001 | Create m2-todo-app project with source files and workflow rules | defined |
+| FT-M2-002 | Run unit tests via test panel (vitest), verify pass | defined |
+| FT-M2-003 | Deploy to S3+CloudFront via workflow rule, verify deployed URL accessible | defined |
+| FT-M2-004 | Puppeteer E2E: navigate deployed URL, add a todo, verify it renders | defined |
+| FT-M2-005 | Puppeteer E2E: reload page, verify todo persists (localStorage) | defined |
+| FT-M2-006 | Preview via IDE-hosted URL (`/workspace/{id}/preview/`), verify renders | defined |
+| FT-M2-007 | Introduce a bug, verify E2E fails, fix bug, verify E2E passes | defined |
+| FT-M2-008 | Git commit and push all M2 changes | defined |
+
+**Implementation phases:**
+
+| Phase | Work | Dependencies |
+|-------|------|--------------|
+| 1 | `wf.utils.puppeteerTest(url, script)` — headless browser utility in workflow runtime | Puppeteer already on workspace server |
+| 2 | Web preview route — `/workspace/{id}/preview/` serves project directory | Workspace server route |
+| 3 | Create m2-todo-app project with source files | Phase 1 for E2E tests |
+| 4 | `.antimatter/build.ts` workflow rules for the todo app | Phases 1-3 |
+| 5 | FT-M2 functional test cases | Phase 4 |
+| 6 | Per-project CDK utility (`wf.utils.cdkDeploy`) | Independent |
 
 ---
 
@@ -123,8 +169,6 @@ A zero-dependency TypeScript JSON schema validator library demonstrating M1 capa
 **Remaining work:**
 - Build commands executed in terminal (visible output, not hidden subprocess)
 - In-browser type checking (Monaco language services without workspace round-trip)
-- Widget value persistence: `_ui` state (widget values) should survive workflow recompilation. Currently `fullRefresh()` wipes the state file.
-- Graceful reload on automation file edit: incremental reload handles errors, but `fullRefresh()` is aggressive. Need explicit preservation of old rules when new compilation fails.
 - Widget and rule ordering: ensure declarations appear in the Build panel in the order they're declared in the source file.
 
 ### Tests Service

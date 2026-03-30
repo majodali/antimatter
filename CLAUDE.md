@@ -4,13 +4,16 @@
 
 > Update this list when items are completed or reprioritized. See BACKLOG.md for full details.
 
-1. **M2 planning** — define web app project for milestone M2
-2. **File search** — Cmd+P file finder
-3. **Command palette** — Cmd+Shift+P command palette + keyboard shortcuts
-4. **Full-text search** — Cmd+Shift+F across project files
-5. **Show/hide dot files** — toggle in file explorer
+1. **M2 phase 1** — `wf.utils.puppeteerTest(url, script)` headless browser utility
+2. **M2 phase 2** — web preview route (`/workspace/{id}/preview/`)
+3. **M2 phase 3** — create m2-todo-app project with source files + workflow rules
+4. **M2 phase 4** — FT-M2 functional test cases
+5. **File search** — Cmd+P file finder
+6. **Command palette** — Cmd+Shift+P command palette + keyboard shortcuts
+7. **Full-text search** — Cmd+Shift+F across project files
+8. **Show/hide dot files** — toggle in file explorer
 
-**Recently completed:** test panel (project tests, S3 persistence, double-click nav), graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
+**Recently completed:** M2 planning, test panel (project tests, S3 persistence, double-click nav), graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
 
 ## What This Project Is
 
