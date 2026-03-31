@@ -73,14 +73,14 @@ A minimal todo app with:
 
 | Test ID | Name | Status |
 |---------|------|--------|
-| FT-M2-001 | Create m2-todo-app project with source files and workflow rules | defined |
-| FT-M2-002 | Run unit tests via test panel (vitest), verify pass | defined |
+| FT-M2-001 | Verify m2-todo-app project exists with correct source files | test-implemented |
+| FT-M2-002 | Run unit tests via vitest, verify pass | test-implemented |
 | FT-M2-003 | Deploy to S3+CloudFront via workflow rule, verify deployed URL accessible | defined |
 | FT-M2-004 | Puppeteer E2E: navigate deployed URL, add a todo, verify it renders | defined |
 | FT-M2-005 | Puppeteer E2E: reload page, verify todo persists (localStorage) | defined |
-| FT-M2-006 | Preview via IDE-hosted URL (`/workspace/{id}/preview/`), verify renders | defined |
+| FT-M2-006 | Preview via IDE-hosted URL (`/workspace/{id}/preview/`), verify renders | test-implemented |
 | FT-M2-007 | Introduce a bug, verify E2E fails, fix bug, verify E2E passes | defined |
-| FT-M2-008 | Git commit and push all M2 changes | defined |
+| FT-M2-008 | Git commit and verify in log | test-implemented |
 
 **Implementation phases:**
 

@@ -13,6 +13,7 @@ import { crossTabTests } from './cross-tab-tests.js';
 import { workspaceTests } from './workspace-tests.js';
 import { projectsTests } from './projects-tests.js';
 import { m1Tests } from './m1-tests.js';
+import { m2Tests } from './m2-tests.js';
 
 /** All registered functional test modules. */
 export const allTestModules: readonly TestModule[] = [
@@ -22,6 +23,7 @@ export const allTestModules: readonly TestModule[] = [
   ...workspaceTests,
   ...projectsTests,
   ...m1Tests,
+  ...m2Tests,
 ];
 
 /** Test modules grouped by area. */
@@ -42,3 +44,4 @@ export { crossTabTests } from './cross-tab-tests.js';
 export { workspaceTests } from './workspace-tests.js';
 export { projectsTests } from './projects-tests.js';
 export { m1Tests } from './m1-tests.js';
+export { m2Tests } from './m2-tests.js';
