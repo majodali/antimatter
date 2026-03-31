@@ -4,8 +4,7 @@
 
 > Update this list when items are completed or reprioritized. See BACKLOG.md for full details.
 
-1. **M2 phase 2** — web preview route (`/workspace/{id}/preview/`)
-3. **M2 phase 3** — create m2-todo-app project with source files + workflow rules
+1. **M2 phase 3** — create m2-todo-app project with source files + workflow rules
 4. **M2 phase 4** — FT-M2 functional test cases
 5. **Git visual diff** — diff viewer in git panel
 6. **Multiple terminal tabs** — multiple sessions within a project
@@ -14,7 +13,7 @@
 9. **Command palette + search** — Cmd+P file search, Cmd+Shift+P commands, Cmd+Shift+F full-text search
 10. **Show/hide dot files** — toggle in file explorer
 
-**Recently completed:** M2 phase 1 (puppeteerTest utility), M2 planning, test panel (project tests, S3 persistence, double-click nav), graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
+**Recently completed:** M2 phase 2 (web preview route), M2 phase 1 (puppeteerTest utility), M2 planning, s3UploadDir fix, test panel (project tests, S3 persistence, double-click nav), graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
 
 ## What This Project Is
 
