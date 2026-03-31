@@ -833,20 +833,22 @@ export class ProjectContext {
     }));
 
     // Web app preview — serves project files for browser preview.
-    // Auto-detects directory: dist/ > src/ > project root.
-    const previewCandidates = ['dist', 'src'];
-    let previewDir = this.projectPath;
-    for (const candidate of previewCandidates) {
-      const candidatePath = join(this.projectPath, candidate);
-      if (existsSync(candidatePath) && existsSync(join(candidatePath, 'index.html'))) {
-        previewDir = candidatePath;
-        break;
+    // Resolves directory dynamically: dist/ > src/ > project root.
+    const projectPath = this.projectPath;
+    const resolvePreviewDir = () => {
+      for (const candidate of ['dist', 'src']) {
+        const p = join(projectPath, candidate);
+        if (existsSync(p) && existsSync(join(p, 'index.html'))) return p;
       }
-    }
-    router.use('/preview', express.static(previewDir, { dotfiles: 'deny' }));
+      return projectPath;
+    };
+    router.use('/preview', (req, res, next) => {
+      express.static(resolvePreviewDir(), { dotfiles: 'deny' })(req, res, next);
+    });
     // SPA fallback — serve index.html for paths that don't match a file
     router.get('/preview/*', (_req, res) => {
-      const indexPath = join(previewDir, 'index.html');
+      const dir = resolvePreviewDir();
+      const indexPath = join(dir, 'index.html');
       if (existsSync(indexPath)) {
         res.sendFile(indexPath);
       } else {
