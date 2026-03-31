@@ -1220,6 +1220,25 @@ export class WorkflowManager {
         const s3 = new S3Client({ region: process.env.AWS_REGION ?? 'us-west-2' });
 
         const uploaded: string[] = [];
+        const uploads: Promise<void>[] = [];
+
+        function mimeType(file: string): string {
+          if (file.endsWith('.html')) return 'text/html; charset=utf-8';
+          if (file.endsWith('.css')) return 'text/css; charset=utf-8';
+          if (file.endsWith('.js') || file.endsWith('.mjs')) return 'application/javascript; charset=utf-8';
+          if (file.endsWith('.json')) return 'application/json; charset=utf-8';
+          if (file.endsWith('.png')) return 'image/png';
+          if (file.endsWith('.jpg') || file.endsWith('.jpeg')) return 'image/jpeg';
+          if (file.endsWith('.svg')) return 'image/svg+xml';
+          if (file.endsWith('.woff2')) return 'font/woff2';
+          if (file.endsWith('.woff')) return 'font/woff';
+          if (file.endsWith('.ico')) return 'image/x-icon';
+          if (file.endsWith('.webp')) return 'image/webp';
+          if (file.endsWith('.txt')) return 'text/plain; charset=utf-8';
+          if (file.endsWith('.xml')) return 'application/xml; charset=utf-8';
+          return 'application/octet-stream';
+        }
+
         function walk(dir: string) {
           for (const entry of readdirSync(dir)) {
             const full = resolve(dir, entry);
@@ -1229,30 +1248,24 @@ export class WorkflowManager {
               const relPath = relative(localDir, full).replace(/\\/g, '/');
               const key = prefix ? `${prefix}/${relPath}` : relPath;
               const body = readFileSync(full);
-              const ct = relPath.endsWith('.html') ? 'text/html; charset=utf-8'
-                : relPath.endsWith('.css') ? 'text/css; charset=utf-8'
-                : relPath.endsWith('.js') ? 'application/javascript; charset=utf-8'
-                : relPath.endsWith('.json') ? 'application/json; charset=utf-8'
-                : relPath.endsWith('.png') ? 'image/png'
-                : relPath.endsWith('.jpg') || relPath.endsWith('.jpeg') ? 'image/jpeg'
-                : relPath.endsWith('.svg') ? 'image/svg+xml'
-                : relPath.endsWith('.woff2') ? 'font/woff2'
-                : 'application/octet-stream';
-              // Fire-and-forget individual uploads — collect promises
               uploaded.push(key);
-              s3.send(new PutObjectCommand({
-                Bucket: bucket,
-                Key: key,
-                Body: body,
-                ContentType: ct,
-                CacheControl: 'no-cache',
-              })).catch(err => {
-                console.error(`[wf.utils.s3UploadDir] Failed to upload ${key}:`, err);
-              });
+              uploads.push(
+                s3.send(new PutObjectCommand({
+                  Bucket: bucket,
+                  Key: key,
+                  Body: body,
+                  ContentType: mimeType(relPath),
+                  CacheControl: 'no-cache',
+                })).then(() => {}).catch(err => {
+                  console.error(`[wf.utils.s3UploadDir] Failed to upload ${key}:`, err.message ?? err);
+                }),
+              );
             }
           }
         }
         walk(localDir);
+        // Wait for all uploads to complete before returning
+        await Promise.all(uploads);
         return uploaded;
       },
 
