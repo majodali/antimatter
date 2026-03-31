@@ -172,6 +172,7 @@ A minimal todo app with:
 - Build commands executed in terminal (visible output, not hidden subprocess)
 - In-browser type checking (Monaco language services without workspace round-trip)
 - Widget and rule ordering: ensure declarations appear in the Build panel in the order they're declared in the source file.
+- General file sync utility (`wf.utils.syncFiles`) — URI-based source/dest (file://, s3://), timestamp/hash-based incremental sync, include/exclude globs. Replaces ad-hoc s3UploadDir with a composable primitive. Reuses SyncManifest pattern from workspace package.
 
 ### Tests Service
 
