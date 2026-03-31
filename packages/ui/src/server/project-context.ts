@@ -832,6 +832,28 @@ export class ProjectContext {
       },
     }));
 
+    // Web app preview — serves project files for browser preview.
+    // Auto-detects directory: dist/ > src/ > project root.
+    const previewCandidates = ['dist', 'src'];
+    let previewDir = this.projectPath;
+    for (const candidate of previewCandidates) {
+      const candidatePath = join(this.projectPath, candidate);
+      if (existsSync(candidatePath) && existsSync(join(candidatePath, 'index.html'))) {
+        previewDir = candidatePath;
+        break;
+      }
+    }
+    router.use('/preview', express.static(previewDir, { dotfiles: 'deny' }));
+    // SPA fallback — serve index.html for paths that don't match a file
+    router.get('/preview/*', (_req, res) => {
+      const indexPath = join(previewDir, 'index.html');
+      if (existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send('No index.html found in preview directory');
+      }
+    });
+
     return router;
   }
 
