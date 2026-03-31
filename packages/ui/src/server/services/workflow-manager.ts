@@ -1297,6 +1297,110 @@ export class WorkflowManager {
         const { resolve } = await import('node:path');
         return readFile(resolve(projectRoot, path));
       },
+
+      /**
+       * Run a headless browser E2E test against a URL.
+       *
+       * Launches Chromium, navigates to the URL, executes the script in the
+       * page context, and returns the result. The script should return a value
+       * (passed as the test result) or throw an error (test failure).
+       *
+       * @param url - URL to navigate to
+       * @param script - JavaScript string to execute in the page context via page.evaluate()
+       * @param options - Optional: timeout (default 30000ms), waitForSelector (CSS selector to wait for before running script)
+       * @returns { success, result?, error?, consoleLogs, durationMs }
+       *
+       * @example
+       * const r = await wf.utils.puppeteerTest('https://my-app.com', `
+       *   const h1 = document.querySelector('h1');
+       *   if (!h1) throw new Error('No h1 found');
+       *   return h1.textContent;
+       * `);
+       * // r.success === true, r.result === 'My App'
+       */
+      puppeteerTest: async (
+        url: string,
+        script: string,
+        options?: { timeout?: number; waitForSelector?: string },
+      ): Promise<{
+        success: boolean;
+        result?: unknown;
+        error?: string;
+        consoleLogs: string[];
+        durationMs: number;
+      }> => {
+        const startTime = Date.now();
+        const timeout = options?.timeout ?? 30_000;
+        const consoleLogs: string[] = [];
+
+        let puppeteer: typeof import('puppeteer-core');
+        try {
+          puppeteer = await import('puppeteer-core');
+        } catch {
+          return {
+            success: false,
+            error: 'puppeteer-core not installed. Run: npm install puppeteer-core',
+            consoleLogs: [],
+            durationMs: Date.now() - startTime,
+          };
+        }
+
+        const { findChromium } = await import('../automation/headless-test-runner.js');
+        let browser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null;
+
+        try {
+          browser = await puppeteer.launch({
+            headless: true,
+            executablePath: findChromium(),
+            args: [
+              '--no-sandbox',
+              '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage',
+              '--disable-gpu',
+            ],
+          });
+
+          const page = await browser.newPage();
+
+          // Capture console output
+          page.on('console', (msg) => {
+            consoleLogs.push(`[${msg.type()}] ${msg.text()}`);
+          });
+          page.on('pageerror', (err) => {
+            consoleLogs.push(`[pageerror] ${err.message}`);
+          });
+
+          // Navigate
+          await page.goto(url, { waitUntil: 'networkidle0', timeout });
+
+          // Optionally wait for a selector
+          if (options?.waitForSelector) {
+            await page.waitForSelector(options.waitForSelector, { timeout });
+          }
+
+          // Execute the script in page context
+          const scriptFn = new Function(script) as () => unknown;
+          const result = await page.evaluate(scriptFn);
+
+          return {
+            success: true,
+            result,
+            consoleLogs,
+            durationMs: Date.now() - startTime,
+          };
+        } catch (err: any) {
+          return {
+            success: false,
+            error: err.message ?? String(err),
+            consoleLogs,
+            durationMs: Date.now() - startTime,
+          };
+        } finally {
+          if (browser) {
+            await browser.close().catch(() => {});
+          }
+        }
+      },
     };
   }
 }

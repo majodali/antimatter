@@ -94,6 +94,7 @@ fi
 
 log "Uploading workspace server to s3://$BUCKET/workspace-server/..."
 aws s3 cp packages/ui/dist-workspace/workspace-server.js "s3://$BUCKET/workspace-server/workspace-server.js" --quiet
+aws s3 cp packages/ui/dist-workspace/package.json "s3://$BUCKET/workspace-server/package.json" --quiet 2>/dev/null || true
 log "Workspace server uploaded."
 
 # ---- Step 6: Restart workspace server on EC2 via SSM ----

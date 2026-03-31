@@ -166,22 +166,36 @@ export async function runHeadlessTests(
 // Chromium detection
 // ---------------------------------------------------------------------------
 
-function findChromium(): string {
-  // Common paths on Linux (EC2)
+/**
+ * Find a Chromium/Chrome executable on the system.
+ * Checks CHROMIUM_PATH env var first, then common paths by platform.
+ */
+export function findChromium(): string {
+  const { existsSync } = require('fs') as typeof import('fs');
+
+  // Environment variable override
+  if (process.env.CHROMIUM_PATH && existsSync(process.env.CHROMIUM_PATH)) {
+    return process.env.CHROMIUM_PATH;
+  }
+
   const candidates = [
+    // Linux (EC2 / Amazon Linux)
     '/usr/bin/chromium-browser',
     '/usr/bin/chromium',
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     '/snap/bin/chromium',
-    // macOS (for local dev)
+    // macOS
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    // Windows (for local dev)
+    // Windows
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   ];
 
-  // In a real implementation we'd check fs.existsSync for each.
-  // For now, return the first candidate and let Puppeteer fail with a clear error.
+  for (const path of candidates) {
+    if (existsSync(path)) return path;
+  }
+
+  // Fallback — let Puppeteer fail with a clear error
   return candidates[0];
 }

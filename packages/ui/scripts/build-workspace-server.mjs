@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { rmSync, mkdirSync } from 'fs';
+import { rmSync, mkdirSync, writeFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -25,10 +25,19 @@ await build({
   // esbuild: native binary for TypeScript transpilation (used by WorkflowManager)
   // @aws-sdk is bundled (NOT external) because it's not pre-installed on
   // Amazon Linux 2023 like it is in the Lambda runtime.
-  external: ['node-pty', 'esbuild'],
+  external: ['node-pty', 'esbuild', 'puppeteer-core'],
   sourcemap: false,
   minify: false, // Keep readable for debugging
   logLevel: 'info',
 });
+
+// Generate package.json for external dependencies (installed on EC2 alongside the bundle)
+writeFileSync(resolve(outDir, 'package.json'), JSON.stringify({
+  name: 'antimatter-workspace-server',
+  private: true,
+  dependencies: {
+    'puppeteer-core': '^24.0.0',
+  },
+}, null, 2));
 
 console.log('Workspace server bundle written to dist-workspace/workspace-server.js');

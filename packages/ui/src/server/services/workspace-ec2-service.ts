@@ -530,7 +530,18 @@ if [ ! -f /opt/antimatter/.tools-installed ]; then
   yum install -y nodejs git docker gcc-c++ make python3 || true
 
   # Global npm packages
-  npm install -g aws-cdk || true
+  npm install -g aws-cdk puppeteer-core || true
+
+  # Google Chrome for headless browser testing (puppeteer-core)
+  cat > /etc/yum.repos.d/google-chrome.repo << 'CHROME_REPO'
+[google-chrome]
+name=google-chrome
+baseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64
+enabled=1
+gpgcheck=1
+gpgkey=https://dl.google.com/linux/linux_signing_key.pub
+CHROME_REPO
+  yum install -y google-chrome-stable || true
 
   # Enable Docker (may fail during cloud-init — not critical)
   systemctl enable docker || true
