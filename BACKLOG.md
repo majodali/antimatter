@@ -143,7 +143,7 @@ A minimal todo app with:
 - Git history/version viewer
 - Custom project ID on create (allow user to override the auto-generated slug)
 - Project templates — scaffold new projects from templates (React SPA, Express API, static site, etc.)
-- `.antimatter/config.json` — first-class project configuration file (test runner, preview directory, deploy targets, etc.)
+- `.antimatter/config.json` — first-class project configuration file (test runner, preview directory, deploy targets, etc.). Preview directory currently auto-detects dist/ > src/ > root; config should allow explicit override (e.g., `"preview": "public/"`).
 
 ### Workspaces Service
 
