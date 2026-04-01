@@ -233,6 +233,8 @@ A minimal todo app with:
 **Current state:** ServiceClient-wired (observability.events.list). EventLogger with S3 persistence (JSONL, daily partitioned). In-memory buffer on workspace server.
 
 **Remaining work:**
+- Redesign ActivityPanel — current implementation is not useful. Redesign events model and panel function. Events fetch should work through both REST API and WebSocket.
+- Fix `/api/events` 400 error — observability.events.list routes to Lambda which doesn't have the endpoint. Should route through workspace server or support both.
 - IDE log viewer panel (filtered, searchable)
 - Structured logging migration (replace remaining raw console.* calls)
 
@@ -254,6 +256,7 @@ A minimal todo app with:
 - Problems panel error count badge
 - Code formatting (Prettier integration)
 - TypeScript language services — project-aware completions, go-to-definition, hover info
+- Fix Monaco `inmemory://model/1` console error — timing issue in editor decorations when model hasn't been created yet
 
 **Usability:**
 - Problems panel click/double-click navigation to exact position ✅ (implemented)
@@ -267,6 +270,13 @@ A minimal todo app with:
 **Remaining work:**
 - Terminal search (find text in scrollback)
 - Terminal session naming/renaming
+
+### Layout & General UI
+
+**Remaining work:**
+- Persist UI layout — panel sizes, which panels are selected/visible, sidebar state. Survive across page refreshes. Use per-project localStorage or project config.
+- Zero console errors — eliminate all noise from console (events 400, Monaco inmemory model, etc.) for clean debugging.
+- Double-click text selection prevention on interactive elements (panels, buttons, labels, tree items).
 
 ---
 
