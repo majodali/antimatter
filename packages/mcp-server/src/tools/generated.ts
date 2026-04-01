@@ -37,12 +37,7 @@ const NOT_YET_AVAILABLE = new Set([
   'agents.chats.list',
   'agents.chats.get',
   'agents.chats.history',
-  // Deployed resources — not implemented
-  'deployedResources.register',
-  'deployedResources.deregister',
-  'deployedResources.update',
-  'deployedResources.list',
-  'deployedResources.get',
+  // Deployed resources — available via automation API
   // Terminals — not exposed via automation API
   'workspaces.terminals.create',
   'workspaces.terminals.close',

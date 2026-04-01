@@ -129,6 +129,8 @@ export interface ServerCommandDependencies {
   testResultsStorage?: () => import('../routes/test-results.js').FileTestResultsStorage | undefined;
   /** Lazy getter — PTY session pool for terminal commands. */
   ptySessionPool?: () => { list(): any[]; getOrCreate(id: string, cwd: string, name?: string): any; get(id: string): any; close(id: string): boolean } | undefined;
+  /** Lazy getter — deployed resource store. */
+  deployedResourceStore?: () => import('../services/deployed-resource-store.js').DeployedResourceStore | undefined;
   /** Returns current explorer ignore patterns for file tree filtering. */
   explorerIgnore: () => string[];
 }
@@ -153,7 +155,7 @@ type CommandHandler = (params: Record<string, unknown>) => Promise<unknown>;
 export function createServerCommandExecutor(
   deps: ServerCommandDependencies,
 ): (command: string, params: Record<string, unknown>) => Promise<unknown> {
-  const { workspace, workflowManager, errorStore, testResultsStorage, ptySessionPool, explorerIgnore } = deps;
+  const { workspace, workflowManager, errorStore, testResultsStorage, ptySessionPool, deployedResourceStore, explorerIgnore } = deps;
 
   /** Helper: run a git command via workspace environment. */
   async function runGit(args: string, timeout = 30_000): Promise<{
@@ -563,6 +565,60 @@ export function createServerCommandExecutor(
     if (!session) throw new AutomationCommandError(`Terminal session '${sessionId}' not found`, 'not-found');
     session.write(data);
     return { sent: true };
+  });
+
+  // ---- Deployed resources ----
+
+  handlers.set('deployed-resources.register', async (params) => {
+    const store = deployedResourceStore?.();
+    if (!store) throw new AutomationCommandError('Deployed resource store not ready', 'execution-error');
+    const name = requireParam<string>(params, 'name');
+    const resourceType = requireParam<string>(params, 'resourceType');
+    const resource = await store.register({
+      name,
+      resourceType,
+      description: params.description as string | undefined,
+      metadata: params.metadata as Record<string, unknown> | undefined,
+      actions: params.actions as any[] | undefined,
+    });
+    return resource;
+  });
+
+  handlers.set('deployed-resources.deregister', async (params) => {
+    const store = deployedResourceStore?.();
+    if (!store) throw new AutomationCommandError('Deployed resource store not ready', 'execution-error');
+    const resourceId = requireParam<string>(params, 'resourceId');
+    const removed = await store.deregister(resourceId);
+    if (!removed) throw new AutomationCommandError(`Resource '${resourceId}' not found or is built-in`, 'not-found');
+    return { removed: true };
+  });
+
+  handlers.set('deployed-resources.update', async (params) => {
+    const store = deployedResourceStore?.();
+    if (!store) throw new AutomationCommandError('Deployed resource store not ready', 'execution-error');
+    const resourceId = requireParam<string>(params, 'resourceId');
+    const updated = await store.update(resourceId, {
+      metadata: params.metadata as Record<string, unknown> | undefined,
+      actions: params.actions as any[] | undefined,
+    });
+    if (!updated) throw new AutomationCommandError(`Resource '${resourceId}' not found`, 'not-found');
+    return updated;
+  });
+
+  handlers.set('deployed-resources.list', async (params) => {
+    const store = deployedResourceStore?.();
+    if (!store) return { resources: [] };
+    const resourceType = params.resourceType as string | undefined;
+    return { resources: store.list(resourceType) };
+  });
+
+  handlers.set('deployed-resources.get', async (params) => {
+    const store = deployedResourceStore?.();
+    if (!store) throw new AutomationCommandError('Deployed resource store not ready', 'execution-error');
+    const resourceId = requireParam<string>(params, 'resourceId');
+    const resource = store.get(resourceId);
+    if (!resource) throw new AutomationCommandError(`Resource '${resourceId}' not found`, 'not-found');
+    return resource;
   });
 
   handlers.set('workflow.emit', async (params) => {

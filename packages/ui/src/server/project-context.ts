@@ -54,6 +54,7 @@ import { createAutomationRouter } from './routes/automation.js';
 import { createServerCommandExecutor } from './automation/server-commands.js';
 import { WorkflowManager } from './services/workflow-manager.js';
 import { ErrorStore } from './services/error-store.js';
+import { DeployedResourceStore } from './services/deployed-resource-store.js';
 import {
   COMMAND_TIMEOUTS,
   DEFAULT_COMMAND_TIMEOUT,
@@ -471,6 +472,7 @@ export class ProjectContext {
   workflowManager!: WorkflowManager;
   errorStore!: ErrorStore;
   testResultsStorage!: FileTestResultsStorage;
+  deployedResourceStore!: DeployedResourceStore;
   private eventLog?: import('./event-log.js').EventLog;
   s3SyncScheduler: S3SyncScheduler | null = null;
 
@@ -588,16 +590,44 @@ export class ProjectContext {
       },
       errorStore: this.errorStore,
       eventLog: this.eventLog,
+      deployedResourceStore: this.deployedResourceStore,
       onExecStart: () => this.config.onExecStart(),
       onExecEnd: () => this.config.onExecEnd(),
     });
 
     // Test results storage (file-backed, auto-synced to S3)
     this.testResultsStorage = new FileTestResultsStorage(this.env);
+    this.deployedResourceStore = new DeployedResourceStore(this.env, () => {
+      this.broadcastToClients({
+        type: 'application-state',
+        state: { deployedResources: this.deployedResourceStore.list() },
+      });
+    });
 
     await this.errorStore.initialize();
     await this.testResultsStorage.initialize();
+    await this.deployedResourceStore.initialize();
     await this.workflowManager.start();
+
+    // Auto-register Preview resource if project has an index.html
+    const previewCandidates = ['dist/index.html', 'src/index.html'];
+    for (const candidate of previewCandidates) {
+      if (existsSync(join(this.projectPath, candidate))) {
+        // Only register if not already present
+        if (!this.deployedResourceStore.get('preview')) {
+          await this.deployedResourceStore.register({
+            name: 'Preview',
+            resourceType: 'preview',
+            metadata: {
+              url: `/workspace/${this.projectId}/preview/`,
+              directory: candidate.replace('/index.html', ''),
+            },
+            builtIn: true,
+          });
+        }
+        break;
+      }
+    }
 
     // Feed initial S3 files to workflow engine
     if (downloadedFiles.length > 0) {
@@ -910,6 +940,7 @@ export class ProjectContext {
       errorStore: () => this.errorStore,
       testResultsStorage: () => this.testResultsStorage,
       ptySessionPool: () => this.ptyManager,
+      deployedResourceStore: () => this.deployedResourceStore,
       explorerIgnore: () => this.fileChangeNotifier.getExplorerIgnore(),
     });
     router.use('/api/automation', createAutomationRouter({

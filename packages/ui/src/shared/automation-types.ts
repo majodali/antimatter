@@ -106,6 +106,13 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'tests.run-project', execution: 'server', description: 'Run project tests and return JSON results' },
   { command: 'tests.project-results', execution: 'server', description: 'Get persisted project test results' },
 
+  // Deployed resources
+  { command: 'deployed-resources.register', execution: 'server', description: 'Register a deployed resource' },
+  { command: 'deployed-resources.deregister', execution: 'server', description: 'Remove a deployed resource' },
+  { command: 'deployed-resources.update', execution: 'server', description: 'Update a deployed resource' },
+  { command: 'deployed-resources.list', execution: 'server', description: 'List deployed resources' },
+  { command: 'deployed-resources.get', execution: 'server', description: 'Get a deployed resource' },
+
   // Terminal sessions
   { command: 'terminal.list', execution: 'server', description: 'List terminal sessions' },
   { command: 'terminal.create', execution: 'server', description: 'Create a new terminal session' },

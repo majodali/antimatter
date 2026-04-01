@@ -88,10 +88,10 @@ export function DeployPanel() {
         <SecretsPanel />
       ) : (
         <>
-          {/* Deployed URLs — preview + workflow-defined URLs */}
-          <DeployedLinks
+          {/* Deployed resources — preview + workflow-registered resources */}
+          <ResourceList
             projectId={currentProjectId}
-            workflowState={workflowState}
+            onAction={handleWidgetEvent}
           />
 
           {/* Deploy widgets */}
@@ -135,91 +135,119 @@ export function DeployPanel() {
 }
 
 // ---------------------------------------------------------------------------
-// Deployed Links — preview URL + URLs from workflow state
+// Deployed Resources — preview + workflow-registered resources
 // ---------------------------------------------------------------------------
 
-interface DeployedLink {
-  label: string;
-  url: string;
-  source: 'preview' | 'workflow';
-  stateKey?: string; // key path in workflow state for deletion
+interface DeployedResourceUI {
+  id: string;
+  name: string;
+  resourceType: string;
+  url?: string;
+  description?: string;
+  builtIn?: boolean;
+  actions?: { triggerId: string; label: string; icon?: string; enabled: boolean }[];
 }
 
-function DeployedLinks({
+function ResourceList({
   projectId,
-  workflowState,
-  onRemoveUrl,
+  onAction,
 }: {
   projectId: string | null;
-  workflowState: any;
-  onRemoveUrl?: (stateKey: string) => void;
+  onAction: (event: { type: string; [key: string]: unknown }) => void;
 }) {
-  // Collect URLs from workflow state
-  const links = useMemo(() => {
-    const result: DeployedLink[] = [];
+  const [resources, setResources] = useState<DeployedResourceUI[]>([]);
 
-    // Auto-detect preview URL
-    if (projectId) {
-      result.push({
-        label: 'Preview',
-        url: `${window.location.origin}/workspace/${encodeURIComponent(projectId)}/preview/`,
-        source: 'preview',
-      });
-    }
-
-    // Scan workflow state for URLs (common patterns)
-    if (workflowState) {
-      const scan = (obj: any, prefix: string) => {
-        if (!obj || typeof obj !== 'object') return;
-        for (const [key, val] of Object.entries(obj)) {
-          if (key === '_ui') continue; // skip widget state
-          const path = prefix ? `${prefix}.${key}` : key;
-          if (typeof val === 'string' && (val.startsWith('https://') || val.startsWith('http://'))) {
-            // Found a URL in state
-            const label = key === 'siteUrl' ? 'Site' : key === 'url' ? prefix || 'URL' : key;
-            result.push({ label, url: val, source: 'workflow', stateKey: path });
-          } else if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
-            scan(val, path);
-          }
+  // Fetch resources on mount and listen for updates
+  useEffect(() => {
+    if (!projectId) return;
+    const fetchResources = async () => {
+      try {
+        const res = await fetch(`/workspace/${encodeURIComponent(projectId)}/api/automation/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: 'deployed-resources.list', params: {} }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const list = (data.data?.resources ?? data.resources ?? []).map((r: any) => ({
+            id: r.id,
+            name: r.name,
+            resourceType: r.resourceType,
+            url: r.metadata?.url as string | undefined,
+            description: r.description,
+            builtIn: r.builtIn,
+            actions: r.actions,
+          }));
+          setResources(list);
         }
-      };
-      scan(workflowState, '');
-    }
+      } catch { /* ignore */ }
+    };
+    fetchResources();
+    // Re-fetch periodically to catch broadcast updates
+    const interval = setInterval(fetchResources, 10000);
+    return () => clearInterval(interval);
+  }, [projectId]);
 
-    return result;
-  }, [projectId, workflowState]);
+  const handleDeregister = async (resourceId: string) => {
+    if (!projectId) return;
+    try {
+      await fetch(`/workspace/${encodeURIComponent(projectId)}/api/automation/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: 'deployed-resources.deregister', params: { resourceId } }),
+      });
+      setResources(prev => prev.filter(r => r.id !== resourceId));
+    } catch { /* ignore */ }
+  };
 
-  if (links.length === 0) return null;
+  if (resources.length === 0) return null;
 
   return (
     <div className="px-3 py-2 border-b border-border">
       <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
-        Deployed URLs
+        Resources
       </div>
-      <div className="space-y-1">
-        {links.map((link, i) => (
-          <div key={i} className="flex items-center gap-1.5 group">
-            {link.source === 'preview' ? (
+      <div className="space-y-1.5">
+        {resources.map((r) => (
+          <div key={r.id} className="flex items-center gap-1.5 group">
+            {r.resourceType === 'preview' ? (
               <Eye className="h-3 w-3 text-blue-400 flex-shrink-0" />
             ) : (
               <Globe className="h-3 w-3 text-green-400 flex-shrink-0" />
             )}
-            <span className="text-[10px] text-muted-foreground flex-shrink-0">{link.label}:</span>
-            <a
-              href={link.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[10px] text-blue-400 hover:text-blue-300 hover:underline truncate flex items-center gap-0.5"
-              title={link.url}
-            >
-              {link.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-              <ExternalLink className="h-2.5 w-2.5 flex-shrink-0 opacity-0 group-hover:opacity-100" />
-            </a>
-            {link.source === 'workflow' && link.stateKey && onRemoveUrl && (
+            <span className="text-[10px] text-muted-foreground flex-shrink-0">{r.name}</span>
+            {r.url && (
+              <a
+                href={r.url.startsWith('/') ? r.url : r.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10px] text-blue-400 hover:text-blue-300 hover:underline truncate flex items-center gap-0.5"
+                title={r.url}
+              >
+                {r.url.replace(/^https?:\/\//, '').replace(/\/$/, '').slice(0, 50)}
+                <ExternalLink className="h-2.5 w-2.5 flex-shrink-0 opacity-0 group-hover:opacity-100" />
+              </a>
+            )}
+            {/* Action buttons */}
+            {r.actions?.map((a) => (
+              <Button
+                key={a.triggerId}
+                variant="ghost"
+                size="icon"
+                className="h-4 w-4 opacity-0 group-hover:opacity-100"
+                onClick={() => onAction({ type: a.triggerId })}
+                disabled={!a.enabled}
+                title={a.label}
+              >
+                <ActionIcon icon={a.icon} className="h-2.5 w-2.5" />
+              </Button>
+            ))}
+            {/* Delete button (only for non-built-in) */}
+            {!r.builtIn && (
               <button
                 className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 flex-shrink-0"
-                onClick={() => onRemoveUrl(link.stateKey!)}
-                title="Remove URL"
+                onClick={() => handleDeregister(r.id)}
+                title="Remove resource"
               >
                 <Trash2 className="h-2.5 w-2.5" />
               </button>

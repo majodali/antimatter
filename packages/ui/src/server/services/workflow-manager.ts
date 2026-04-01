@@ -58,6 +58,8 @@ export interface WorkflowManagerOptions {
   readonly onExecEnd?: () => void;
   /** Event log for persistent, ordered, deduplicated event sourcing. Optional for backward compat. */
   readonly eventLog?: import('./event-log.js').EventLog;
+  /** Deployed resource store for wf.utils.registerResource. */
+  readonly deployedResourceStore?: import('./deployed-resource-store.js').DeployedResourceStore;
 }
 
 /** Tagged definition — pairs a file path with its loaded definition function. */
@@ -93,6 +95,7 @@ export class WorkflowManager {
   private readonly onExecStart?: () => void;
   private readonly onExecEnd?: () => void;
   private readonly eventLog?: import('./event-log.js').EventLog;
+  private readonly deployedResourceStore?: import('./deployed-resource-store.js').DeployedResourceStore;
 
   /** Tracks which files were loaded in the last definition load. */
   private loadedFiles: string[] = [];
@@ -111,6 +114,7 @@ export class WorkflowManager {
     this.onExecStart = options.onExecStart;
     this.onExecEnd = options.onExecEnd;
     this.eventLog = options.eventLog;
+    this.deployedResourceStore = options.deployedResourceStore;
 
     // Subscribe to event log drain — batched events arrive here
     if (this.eventLog) {
@@ -1427,6 +1431,34 @@ export class WorkflowManager {
             await browser.close().catch(() => {});
           }
         }
+      },
+
+      /**
+       * Register a deployed resource (URL, service endpoint, database, etc.).
+       * Resources appear in the Deploy panel with clickable URLs and optional actions.
+       *
+       * @param name - Human-readable name (e.g., "Production Site", "API Gateway")
+       * @param resourceType - Type category (e.g., "website", "api", "database")
+       * @param metadata - Arbitrary metadata. Include `url` for a clickable link.
+       * @param actions - Optional action buttons (triggers for workflow rules)
+       * @returns The registered resource with generated ID
+       */
+      registerResource: async (
+        name: string,
+        resourceType: string,
+        metadata?: Record<string, unknown>,
+        actions?: { triggerId: string; label: string; icon?: string; enabled?: boolean }[],
+      ) => {
+        if (!this.deployedResourceStore) {
+          console.warn('[wf.utils.registerResource] No deployed resource store available');
+          return null;
+        }
+        return this.deployedResourceStore.register({
+          name,
+          resourceType,
+          metadata,
+          actions: actions?.map(a => ({ ...a, enabled: a.enabled ?? true })),
+        });
       },
     };
   }
