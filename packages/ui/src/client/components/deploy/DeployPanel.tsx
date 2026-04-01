@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Rocket, Play, Trash2, Settings, Hammer, Pause, Globe } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Rocket, Play, Trash2, Settings, Hammer, Pause, Globe, ExternalLink, Eye } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { WidgetBar } from '../widgets/WidgetRenderer';
@@ -88,6 +88,12 @@ export function DeployPanel() {
         <SecretsPanel />
       ) : (
         <>
+          {/* Deployed URLs — preview + workflow-defined URLs */}
+          <DeployedLinks
+            projectId={currentProjectId}
+            workflowState={workflowState}
+          />
+
           {/* Deploy widgets */}
           {deployWidgets.length > 0 && (
             <WidgetBar widgets={deployWidgets} widgetStates={uiState} onEvent={handleWidgetEvent} />
@@ -124,6 +130,103 @@ export function DeployPanel() {
           </ScrollArea>
         </>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Deployed Links — preview URL + URLs from workflow state
+// ---------------------------------------------------------------------------
+
+interface DeployedLink {
+  label: string;
+  url: string;
+  source: 'preview' | 'workflow';
+  stateKey?: string; // key path in workflow state for deletion
+}
+
+function DeployedLinks({
+  projectId,
+  workflowState,
+  onRemoveUrl,
+}: {
+  projectId: string | null;
+  workflowState: any;
+  onRemoveUrl?: (stateKey: string) => void;
+}) {
+  // Collect URLs from workflow state
+  const links = useMemo(() => {
+    const result: DeployedLink[] = [];
+
+    // Auto-detect preview URL
+    if (projectId) {
+      result.push({
+        label: 'Preview',
+        url: `${window.location.origin}/workspace/${encodeURIComponent(projectId)}/preview/`,
+        source: 'preview',
+      });
+    }
+
+    // Scan workflow state for URLs (common patterns)
+    if (workflowState) {
+      const scan = (obj: any, prefix: string) => {
+        if (!obj || typeof obj !== 'object') return;
+        for (const [key, val] of Object.entries(obj)) {
+          if (key === '_ui') continue; // skip widget state
+          const path = prefix ? `${prefix}.${key}` : key;
+          if (typeof val === 'string' && (val.startsWith('https://') || val.startsWith('http://'))) {
+            // Found a URL in state
+            const label = key === 'siteUrl' ? 'Site' : key === 'url' ? prefix || 'URL' : key;
+            result.push({ label, url: val, source: 'workflow', stateKey: path });
+          } else if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+            scan(val, path);
+          }
+        }
+      };
+      scan(workflowState, '');
+    }
+
+    return result;
+  }, [projectId, workflowState]);
+
+  if (links.length === 0) return null;
+
+  return (
+    <div className="px-3 py-2 border-b border-border">
+      <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
+        Deployed URLs
+      </div>
+      <div className="space-y-1">
+        {links.map((link, i) => (
+          <div key={i} className="flex items-center gap-1.5 group">
+            {link.source === 'preview' ? (
+              <Eye className="h-3 w-3 text-blue-400 flex-shrink-0" />
+            ) : (
+              <Globe className="h-3 w-3 text-green-400 flex-shrink-0" />
+            )}
+            <span className="text-[10px] text-muted-foreground flex-shrink-0">{link.label}:</span>
+            <a
+              href={link.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] text-blue-400 hover:text-blue-300 hover:underline truncate flex items-center gap-0.5"
+              title={link.url}
+            >
+              {link.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+              <ExternalLink className="h-2.5 w-2.5 flex-shrink-0 opacity-0 group-hover:opacity-100" />
+            </a>
+            {link.source === 'workflow' && link.stateKey && onRemoveUrl && (
+              <button
+                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 flex-shrink-0"
+                onClick={() => onRemoveUrl(link.stateKey!)}
+                title="Remove URL"
+              >
+                <Trash2 className="h-2.5 w-2.5" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
