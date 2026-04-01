@@ -198,10 +198,13 @@ A minimal todo app with:
 **Current state:** FT-M1-004 demonstrates package publish to S3 as a deployed resource. Infrastructure environment registry exists (Lambda routes for infra-environments).
 
 **Remaining work:**
-- Deployed resource tracking with custom actions
-- Deploy panel per-environment actions
-- Deploy URL display — after deploying, show a clickable link to the live site in the deploy panel
-- Secrets/env vars management — UI for project secrets (API keys, credentials). Stored encrypted, injected into workflow rules and terminal env.
+- Secrets/env vars redesign:
+  - **Secrets**: per-project scoped in AWS SSM (`/antimatter/projects/{id}/secrets/{name}`). Currently global (`/antimatter/secrets/{name}`) with hardcoded `KNOWN_SECRETS` list. Projects should define their own secrets. For AWS-deployed resources (Lambda, EC2), pass the SSM parameter name/ARN — the resource reads the secret directly.
+  - **Env vars**: persisted with project (`.antimatter/env.json` or similar). Configurable per-var whether to commit to git or gitignore. Plain text values for non-sensitive config.
+  - Both are named values referenced by workflow rules. No rigid environment model — projects define environments through workflow rules and map secrets/env vars as needed.
+  - Existing SecretsPanel UI works but needs project-scoping and dynamic secret list.
+- Deploy URL display ✅ (implemented via deployed resources)
+- Deployed resource tracking with custom actions ✅ (implemented)
 
 ### Agents Service
 

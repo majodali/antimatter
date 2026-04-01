@@ -569,6 +569,86 @@ export function createServerCommandExecutor(
 
   // ---- Deployed resources ----
 
+  // ---- Secrets (per-project, SSM-backed) ----
+
+  handlers.set('secrets.list', async () => {
+    const store = deployedResourceStore?.();
+    if (!store) return { secrets: [] };
+    const resources = store.list('secret');
+    return {
+      secrets: resources.map(r => ({
+        name: r.name.replace(/^Secret: /, ''),
+        description: r.description,
+        hasValue: r.metadata?.hasValue === true,
+        ssmParameter: r.metadata?.ssmParameter,
+      })),
+    };
+  });
+
+  handlers.set('secrets.set', async (params) => {
+    const name = requireParam<string>(params, 'name');
+    const value = requireParam<string>(params, 'value');
+    const description = params.description as string | undefined;
+    // Use the workspace env to get project root for SSM path scoping
+    const projectRoot = (workspace.env as any).rootPath ?? process.cwd();
+    const projectId = projectRoot.split('/').pop() ?? 'default';
+    const paramName = `/antimatter/projects/${projectId}/secrets/${name}`;
+
+    const { SSMClient, PutParameterCommand } = await import('@aws-sdk/client-ssm');
+    const ssm = new SSMClient({ region: process.env.AWS_REGION ?? 'us-west-2' });
+    await ssm.send(new PutParameterCommand({
+      Name: paramName,
+      Value: value,
+      Type: 'SecureString',
+      Overwrite: true,
+      Description: description,
+    }));
+
+    // Register as deployed resource
+    const store = deployedResourceStore?.();
+    if (store) {
+      const existing = store.get(`secret-${name}`);
+      if (existing) {
+        await store.update(`secret-${name}`, {
+          metadata: { ssmParameter: paramName, hasValue: true },
+        });
+      } else {
+        await store.register({
+          name: `Secret: ${name}`,
+          resourceType: 'secret',
+          description,
+          metadata: { ssmParameter: paramName, hasValue: true },
+        });
+      }
+    }
+
+    return { name, ssmParameter: paramName };
+  });
+
+  handlers.set('secrets.delete', async (params) => {
+    const name = requireParam<string>(params, 'name');
+    const projectRoot = (workspace.env as any).rootPath ?? process.cwd();
+    const projectId = projectRoot.split('/').pop() ?? 'default';
+    const paramName = `/antimatter/projects/${projectId}/secrets/${name}`;
+
+    const { SSMClient, DeleteParameterCommand } = await import('@aws-sdk/client-ssm');
+    const ssm = new SSMClient({ region: process.env.AWS_REGION ?? 'us-west-2' });
+    try {
+      await ssm.send(new DeleteParameterCommand({ Name: paramName }));
+    } catch (err: any) {
+      if (err.name !== 'ParameterNotFound') throw new AutomationCommandError(err.message, 'execution-error');
+    }
+
+    const store = deployedResourceStore?.();
+    if (store) {
+      await store.deregister(`secret-${name}`);
+    }
+
+    return { deleted: true };
+  });
+
+  // ---- Deployed resources ----
+
   handlers.set('deployed-resources.register', async (params) => {
     const store = deployedResourceStore?.();
     if (!store) throw new AutomationCommandError('Deployed resource store not ready', 'execution-error');

@@ -60,6 +60,8 @@ export interface WorkflowManagerOptions {
   readonly eventLog?: import('./event-log.js').EventLog;
   /** Deployed resource store for wf.utils.registerResource. */
   readonly deployedResourceStore?: import('./deployed-resource-store.js').DeployedResourceStore;
+  /** Project ID for per-project scoping (secrets, resources, etc.). */
+  readonly projectId?: string;
 }
 
 /** Tagged definition — pairs a file path with its loaded definition function. */
@@ -96,6 +98,7 @@ export class WorkflowManager {
   private readonly onExecEnd?: () => void;
   private readonly eventLog?: import('./event-log.js').EventLog;
   private readonly deployedResourceStore?: import('./deployed-resource-store.js').DeployedResourceStore;
+  private readonly projectId?: string;
 
   /** Tracks which files were loaded in the last definition load. */
   private loadedFiles: string[] = [];
@@ -115,6 +118,7 @@ export class WorkflowManager {
     this.onExecEnd = options.onExecEnd;
     this.eventLog = options.eventLog;
     this.deployedResourceStore = options.deployedResourceStore;
+    this.projectId = options.projectId;
 
     // Subscribe to event log drain — batched events arrive here
     if (this.eventLog) {
@@ -1203,6 +1207,7 @@ export class WorkflowManager {
    * These give rules access to AWS services without needing npm dependencies.
    */
   private createUtils(projectRoot: string): Record<string, unknown> {
+    const projectId = this.projectId ?? projectRoot.split('/').pop() ?? 'default';
     return {
       /**
        * Upload a file to S3.
@@ -1443,6 +1448,84 @@ export class WorkflowManager {
        * @param actions - Optional action buttons (triggers for workflow rules)
        * @returns The registered resource with generated ID
        */
+      /**
+       * Get a secret value by name (per-project scoped).
+       * Secrets are stored in AWS SSM Parameter Store as SecureString.
+       * @param name - Secret name (e.g., "api-key", "db-password")
+       * @returns The secret value, or null if not found
+       */
+      getSecret: async (name: string): Promise<string | null> => {
+        const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
+        const ssm = new SSMClient({ region: process.env.AWS_REGION ?? 'us-west-2' });
+        const pid = projectId;
+        const paramName = `/antimatter/projects/${pid}/secrets/${name}`;
+        try {
+          const result = await ssm.send(new GetParameterCommand({ Name: paramName, WithDecryption: true }));
+          return result.Parameter?.Value ?? null;
+        } catch (err: any) {
+          if (err.name === 'ParameterNotFound') return null;
+          throw err;
+        }
+      },
+
+      /**
+       * Set a secret value by name (per-project scoped).
+       * Creates or updates the secret in AWS SSM Parameter Store.
+       * Also registers the secret as a deployed resource.
+       * @param name - Secret name
+       * @param value - Secret value (stored encrypted)
+       * @param description - Optional description
+       */
+      setSecret: async (name: string, value: string, description?: string): Promise<void> => {
+        const { SSMClient, PutParameterCommand } = await import('@aws-sdk/client-ssm');
+        const ssm = new SSMClient({ region: process.env.AWS_REGION ?? 'us-west-2' });
+        const pid = projectId;
+        const paramName = `/antimatter/projects/${pid}/secrets/${name}`;
+        await ssm.send(new PutParameterCommand({
+          Name: paramName,
+          Value: value,
+          Type: 'SecureString',
+          Overwrite: true,
+          Description: description,
+        }));
+        // Register as deployed resource so it appears in the deploy panel
+        if (this.deployedResourceStore) {
+          const existing = this.deployedResourceStore.get(`secret-${name}`);
+          if (existing) {
+            await this.deployedResourceStore.update(`secret-${name}`, {
+              metadata: { ssmParameter: paramName, hasValue: true },
+            });
+          } else {
+            await this.deployedResourceStore.register({
+              name: `Secret: ${name}`,
+              resourceType: 'secret',
+              description,
+              metadata: { ssmParameter: paramName, hasValue: true },
+            });
+          }
+        }
+      },
+
+      /**
+       * Delete a secret by name (per-project scoped).
+       * @param name - Secret name
+       */
+      deleteSecret: async (name: string): Promise<void> => {
+        const { SSMClient, DeleteParameterCommand } = await import('@aws-sdk/client-ssm');
+        const ssm = new SSMClient({ region: process.env.AWS_REGION ?? 'us-west-2' });
+        const pid = projectId;
+        const paramName = `/antimatter/projects/${pid}/secrets/${name}`;
+        try {
+          await ssm.send(new DeleteParameterCommand({ Name: paramName }));
+        } catch (err: any) {
+          if (err.name !== 'ParameterNotFound') throw err;
+        }
+        // Remove from deployed resources
+        if (this.deployedResourceStore) {
+          await this.deployedResourceStore.deregister(`secret-${name}`);
+        }
+      },
+
       registerResource: async (
         name: string,
         resourceType: string,

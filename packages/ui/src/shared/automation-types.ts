@@ -106,6 +106,11 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'tests.run-project', execution: 'server', description: 'Run project tests and return JSON results' },
   { command: 'tests.project-results', execution: 'server', description: 'Get persisted project test results' },
 
+  // Secrets (per-project, SSM-backed)
+  { command: 'secrets.list', execution: 'server', description: 'List project secrets' },
+  { command: 'secrets.set', execution: 'server', description: 'Set a project secret' },
+  { command: 'secrets.delete', execution: 'server', description: 'Delete a project secret' },
+
   // Deployed resources
   { command: 'deployed-resources.register', execution: 'server', description: 'Register a deployed resource' },
   { command: 'deployed-resources.deregister', execution: 'server', description: 'Remove a deployed resource' },

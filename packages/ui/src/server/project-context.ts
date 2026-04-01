@@ -591,6 +591,7 @@ export class ProjectContext {
       errorStore: this.errorStore,
       eventLog: this.eventLog,
       deployedResourceStore: this.deployedResourceStore,
+      projectId: this.projectId,
       onExecStart: () => this.config.onExecStart(),
       onExecEnd: () => this.config.onExecEnd(),
     });

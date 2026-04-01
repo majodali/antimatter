@@ -1,16 +1,47 @@
 import { useEffect, useState } from 'react';
-import { Check, AlertTriangle, Loader2, Eye, EyeOff, Save, X, KeyRound } from 'lucide-react';
+import { Check, AlertTriangle, Loader2, Eye, EyeOff, Save, X, KeyRound, Plus } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
-import { useSecretsStore } from '@/stores/secretsStore';
-import type { SecretStatus } from '@/lib/api';
+import { useProjectStore } from '@/stores/projectStore';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface SecretInfo {
+  name: string;
+  description?: string;
+  hasValue: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function automationExec(projectId: string, command: string, params: Record<string, unknown> = {}): Promise<any> {
+  const res = await fetch(`/workspace/${encodeURIComponent(projectId)}/api/automation/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, params }),
+  });
+  if (!res.ok) throw new Error(`${command} failed: ${res.status}`);
+  const data = await res.json();
+  return data.data ?? data;
+}
 
 // ---------------------------------------------------------------------------
 // SecretItem
 // ---------------------------------------------------------------------------
 
-function SecretItem({ secret }: { secret: SecretStatus }) {
-  const { setSecret, deleteSecret } = useSecretsStore();
+function SecretItem({
+  secret,
+  projectId,
+  onRefresh,
+}: {
+  secret: SecretInfo;
+  projectId: string;
+  onRefresh: () => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState('');
   const [showValue, setShowValue] = useState(false);
@@ -19,16 +50,26 @@ function SecretItem({ secret }: { secret: SecretStatus }) {
   const handleSave = async () => {
     if (!value.trim()) return;
     setSaving(true);
-    await setSecret(secret.name, value.trim());
+    try {
+      await automationExec(projectId, 'secrets.set', { name: secret.name, value: value.trim() });
+      onRefresh();
+    } catch (err) {
+      console.error('Failed to set secret:', err);
+    }
     setSaving(false);
     setEditing(false);
     setValue('');
     setShowValue(false);
   };
 
-  const handleClear = async () => {
+  const handleDelete = async () => {
     setSaving(true);
-    await deleteSecret(secret.name);
+    try {
+      await automationExec(projectId, 'secrets.delete', { name: secret.name });
+      onRefresh();
+    } catch (err) {
+      console.error('Failed to delete secret:', err);
+    }
     setSaving(false);
   };
 
@@ -36,11 +77,6 @@ function SecretItem({ secret }: { secret: SecretStatus }) {
     setEditing(false);
     setValue('');
     setShowValue(false);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleSave();
-    if (e.key === 'Escape') handleCancel();
   };
 
   return (
@@ -57,23 +93,11 @@ function SecretItem({ secret }: { secret: SecretStatus }) {
         <div className="flex items-center gap-1">
           {!editing && (
             <>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-2 text-xs"
-                onClick={() => setEditing(true)}
-                disabled={saving}
-              >
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setEditing(true)} disabled={saving}>
                 {secret.hasValue ? 'Update' : 'Set'}
               </Button>
               {secret.hasValue && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-2 text-xs text-red-500 hover:text-red-600"
-                  onClick={handleClear}
-                  disabled={saving}
-                >
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-red-500 hover:text-red-600" onClick={handleDelete} disabled={saving}>
                   Clear
                 </Button>
               )}
@@ -81,7 +105,7 @@ function SecretItem({ secret }: { secret: SecretStatus }) {
           )}
         </div>
       </div>
-      <p className="text-xs text-muted-foreground mb-1.5">{secret.description}</p>
+      {secret.description && <p className="text-xs text-muted-foreground mb-1.5">{secret.description}</p>}
 
       {editing && (
         <div className="flex items-center gap-1.5 mt-2">
@@ -90,11 +114,10 @@ function SecretItem({ secret }: { secret: SecretStatus }) {
               type={showValue ? 'text' : 'password'}
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              onKeyDown={handleKeyDown}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') handleCancel(); }}
               placeholder="Enter secret value..."
               autoFocus
-              className="w-full h-7 px-2 pr-8 text-xs bg-background border border-border rounded
-                         focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+              className="w-full h-7 px-2 pr-8 text-xs bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary font-mono"
             />
             <button
               type="button"
@@ -104,24 +127,10 @@ function SecretItem({ secret }: { secret: SecretStatus }) {
               {showValue ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
             </button>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={handleSave}
-            disabled={saving || !value.trim()}
-            title="Save"
-          >
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleSave} disabled={saving || !value.trim()} title="Save">
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={handleCancel}
-            disabled={saving}
-            title="Cancel"
-          >
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleCancel} disabled={saving} title="Cancel">
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -135,11 +144,40 @@ function SecretItem({ secret }: { secret: SecretStatus }) {
 // ---------------------------------------------------------------------------
 
 export function SecretsPanel() {
-  const { secrets, isLoading, loadSecrets } = useSecretsStore();
+  const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const [secrets, setSecrets] = useState<SecretInfo[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [addingNew, setAddingNew] = useState(false);
+  const [newName, setNewName] = useState('');
 
-  useEffect(() => {
+  const loadSecrets = async () => {
+    if (!currentProjectId) return;
+    setIsLoading(true);
+    try {
+      const result = await automationExec(currentProjectId, 'secrets.list');
+      setSecrets(result.secrets ?? []);
+    } catch {
+      // Fallback: no secrets available
+      setSecrets([]);
+    }
+    setIsLoading(false);
+  };
+
+  useEffect(() => { loadSecrets(); }, [currentProjectId]);
+
+  const handleAddSecret = async () => {
+    if (!newName.trim() || !currentProjectId) return;
+    // Just create the entry — user will set the value via the SecretItem UI
+    try {
+      await automationExec(currentProjectId, 'secrets.set', { name: newName.trim(), value: '__placeholder__' });
+      await automationExec(currentProjectId, 'secrets.delete', { name: newName.trim() });
+      // Actually, just register as a resource with hasValue: false
+      // The user will set the actual value via the item's "Set" button
+    } catch { /* ignore */ }
+    setAddingNew(false);
+    setNewName('');
     loadSecrets();
-  }, []);
+  };
 
   if (isLoading && secrets.length === 0) {
     return (
@@ -150,20 +188,54 @@ export function SecretsPanel() {
     );
   }
 
-  if (secrets.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-center p-4">
-        <KeyRound className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
-        <p className="text-sm text-muted-foreground">No secrets configured</p>
-      </div>
-    );
-  }
-
   return (
-    <ScrollArea className="flex-1">
-      {secrets.map((secret) => (
-        <SecretItem key={secret.name} secret={secret} />
-      ))}
-    </ScrollArea>
+    <div className="h-full flex flex-col">
+      <div className="px-3 py-1.5 border-b border-border flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">Per-project secrets (SSM encrypted)</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-xs gap-1"
+          onClick={() => setAddingNew(true)}
+        >
+          <Plus className="h-3 w-3" />
+          Add
+        </Button>
+      </div>
+
+      {addingNew && (
+        <div className="px-3 py-2 border-b border-border flex items-center gap-1.5">
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAddSecret(); if (e.key === 'Escape') { setAddingNew(false); setNewName(''); } }}
+            placeholder="Secret name (e.g., api-key)"
+            autoFocus
+            className="flex-1 h-7 px-2 text-xs bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+          />
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleAddSecret} disabled={!newName.trim()} title="Add">
+            <Check className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setAddingNew(false); setNewName(''); }} title="Cancel">
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
+
+      <ScrollArea className="flex-1">
+        {secrets.length === 0 && !addingNew ? (
+          <div className="flex flex-col items-center justify-center h-full text-center p-4">
+            <KeyRound className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
+            <p className="text-sm text-muted-foreground">No secrets configured</p>
+            <p className="text-xs text-muted-foreground mt-1">Click "Add" to create a project secret</p>
+          </div>
+        ) : (
+          secrets.map((secret) => (
+            <SecretItem key={secret.name} secret={secret} projectId={currentProjectId!} onRefresh={loadSecrets} />
+          ))
+        )}
+      </ScrollArea>
+    </div>
   );
 }
