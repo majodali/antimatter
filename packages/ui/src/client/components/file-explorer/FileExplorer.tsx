@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { RefreshCw, FolderPlus, FilePlus, MoreVertical, File, Folder, Trash2, X } from 'lucide-react';
+import { RefreshCw, FolderPlus, FilePlus, MoreVertical, File, Folder, Trash2, X, Eye, EyeOff } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { FileTree } from './FileTree';
@@ -43,6 +43,7 @@ export function FileExplorer() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creatingType, setCreatingType] = useState<'file' | 'folder' | null>(null);
+  const [showDotFiles, setShowDotFiles] = useState(false);
   const [newName, setNewName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const isSubmittingRef = useRef(false);
@@ -341,6 +342,15 @@ export function FileExplorer() {
     }
   }, [selectedFiles, selectedFile, renamingFile, clipboard, pendingDelete]);
 
+  // Filter dot files if toggle is off
+  function filterDotFiles(nodes: typeof files): typeof files {
+    if (showDotFiles) return nodes;
+    return nodes
+      .filter(n => !n.name.startsWith('.'))
+      .map(n => n.children ? { ...n, children: filterDotFiles(n.children as typeof files) } : n);
+  }
+  const visibleFiles = filterDotFiles(files);
+
   return (
     <div
       ref={containerRef}
@@ -382,6 +392,16 @@ export function FileExplorer() {
             data-testid="file-explorer-new-folder-btn"
           >
             <FolderPlus className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={() => setShowDotFiles(!showDotFiles)}
+            title={showDotFiles ? 'Hide dot files' : 'Show dot files'}
+            data-testid="file-explorer-toggle-dotfiles"
+          >
+            {showDotFiles ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
           </Button>
           <Button variant="ghost" size="icon" className="h-6 w-6" data-testid="file-explorer-more-btn">
             <MoreVertical className="h-3.5 w-3.5" />
@@ -470,13 +490,13 @@ export function FileExplorer() {
             <div className="px-4 py-2 text-xs text-red-500" data-testid="file-explorer-error">
               {error}
             </div>
-          ) : files.length === 0 && !creatingType ? (
+          ) : visibleFiles.length === 0 && !creatingType ? (
             <div className="px-4 py-2 text-xs text-muted-foreground" data-testid="file-explorer-empty">
-              No files found
+              {files.length > 0 ? 'All files are hidden (dot files)' : 'No files found'}
             </div>
           ) : (
             <FileTree
-              nodes={files}
+              nodes={visibleFiles}
               expandedFolders={expandedFolders}
               selectedFile={selectedFile}
               selectedFiles={selectedFiles}
