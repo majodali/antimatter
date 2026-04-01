@@ -1158,13 +1158,27 @@ export class WorkflowManager {
     return async (command: string, options?: ExecOptions): Promise<ExecResult> => {
       this.onExecStart?.();
       try {
+        // Stream output to the Build terminal session via broadcast
+        const broadcastChunk = (data: string) => {
+          this.broadcast?.({ type: 'output', sessionId: 'build', data });
+        };
+
+        // Write a command header to the build terminal
+        broadcastChunk(`\x1b[36m$ ${command}\x1b[0m\r\n`);
+
         const execOptions: ExecuteOptions = {
           command,
           cwd: options?.cwd,
           env: options?.env as Record<string, string>,
           timeout: options?.timeout,
-          onStdout: options?.onStdout,
-          onStderr: options?.onStderr,
+          onStdout: (chunk) => {
+            broadcastChunk(chunk);
+            options?.onStdout?.(chunk);
+          },
+          onStderr: (chunk) => {
+            broadcastChunk(chunk);
+            options?.onStderr?.(chunk);
+          },
         };
 
         const result = await this.env.execute(execOptions);

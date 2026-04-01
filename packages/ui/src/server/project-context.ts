@@ -275,7 +275,7 @@ class S3SyncScheduler {
 }
 
 // ---------------------------------------------------------------------------
-// PtyManager — shared pseudo-terminal per project
+// PtyManager — single pseudo-terminal session
 // ---------------------------------------------------------------------------
 
 const MAX_REPLAY_BYTES = 50 * 1024;
@@ -284,6 +284,9 @@ class PtyManager {
   private shell: any = null;
   private replayBuffer = '';
   private listeners = new Set<(data: string) => void>();
+  readonly name: string;
+
+  constructor(name = 'Terminal') { this.name = name; }
 
   get isRunning(): boolean { return this.shell !== null; }
 
@@ -292,7 +295,7 @@ class PtyManager {
     if (this.shell) return;
 
     if (!existsSync(cwd)) mkdirSync(cwd, { recursive: true });
-    console.log(`[pty] Starting bash shell in ${cwd}`);
+    console.log(`[pty] Starting bash shell "${this.name}" in ${cwd}`);
 
     this.shell = pty.spawn('bash', [], {
       name: 'xterm-256color',
@@ -318,10 +321,10 @@ class PtyManager {
     });
 
     this.shell.onExit(({ exitCode, signal }: { exitCode: number; signal: number }) => {
-      console.log(`[pty] Shell exited: code=${exitCode}, signal=${signal}`);
+      console.log(`[pty] Shell "${this.name}" exited: code=${exitCode}, signal=${signal}`);
       this.shell = null;
       setTimeout(() => {
-        if (!this.shell) { console.log('[pty] Restarting shell...'); this.start(cwd); }
+        if (!this.shell) { console.log(`[pty] Restarting shell "${this.name}"...`); this.start(cwd); }
       }, 1000);
     });
   }
@@ -339,6 +342,17 @@ class PtyManager {
 
   getReplayBuffer(): string { return this.replayBuffer; }
 
+  /** Append to replay buffer without a PTY (used by virtual sessions like Build). */
+  appendOutput(data: string): void {
+    this.replayBuffer += data;
+    if (this.replayBuffer.length > MAX_REPLAY_BYTES) {
+      this.replayBuffer = this.replayBuffer.slice(-MAX_REPLAY_BYTES);
+    }
+    for (const cb of this.listeners) {
+      try { cb(data); } catch { /* ignore */ }
+    }
+  }
+
   stop(): void {
     if (this.shell) {
       try { this.shell.kill(); } catch { /* ignore */ }
@@ -346,6 +360,84 @@ class PtyManager {
     }
     this.listeners.clear();
     this.replayBuffer = '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PtySessionPool — manages multiple named terminal sessions per project
+// ---------------------------------------------------------------------------
+
+interface TerminalSessionInfo {
+  id: string;
+  name: string;
+  running: boolean;
+  /** Virtual sessions (like Build) have no PTY — they're read-only output streams. */
+  virtual: boolean;
+}
+
+export class PtySessionPool {
+  private sessions = new Map<string, PtyManager>();
+
+  /** Get or create a session. Starts PTY if not virtual. */
+  getOrCreate(sessionId: string, cwd: string, name?: string): PtyManager {
+    let session = this.sessions.get(sessionId);
+    if (!session) {
+      session = new PtyManager(name ?? sessionId);
+      this.sessions.set(sessionId, session);
+      // Don't auto-start PTY for 'build' — it's a virtual (read-only) session
+      if (sessionId !== 'build') {
+        session.start(cwd);
+      }
+    }
+    return session;
+  }
+
+  /** Get an existing session (returns undefined if not found). */
+  get(sessionId: string): PtyManager | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  /** Ensure the build session exists (virtual, no PTY). */
+  ensureBuild(): PtyManager {
+    let build = this.sessions.get('build');
+    if (!build) {
+      build = new PtyManager('Build');
+      this.sessions.set('build', build);
+    }
+    return build;
+  }
+
+  /** List all sessions. */
+  list(): TerminalSessionInfo[] {
+    return Array.from(this.sessions.entries()).map(([id, mgr]) => ({
+      id,
+      name: mgr.name,
+      running: mgr.isRunning,
+      virtual: id === 'build',
+    }));
+  }
+
+  /** Close and remove a session. */
+  close(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    session.stop();
+    this.sessions.delete(sessionId);
+    return true;
+  }
+
+  /** Close all sessions. */
+  closeAll(): void {
+    for (const session of this.sessions.values()) session.stop();
+    this.sessions.clear();
+  }
+
+  /** Check if any interactive (non-virtual) session has a running PTY. */
+  get hasRunningPty(): boolean {
+    for (const [id, session] of this.sessions) {
+      if (id !== 'build' && session.isRunning) return true;
+    }
+    return false;
   }
 }
 
@@ -373,7 +465,7 @@ export class ProjectContext {
   readonly projectPath: string;
   readonly env: LocalWorkspaceEnvironment;
   workspace: WorkspaceService;
-  readonly ptyManager: PtyManager;
+  readonly ptyManager: PtySessionPool;
   readonly fileChangeNotifier: FileChangeNotifier;
   readonly eventLogger: EventLogger;
   workflowManager!: WorkflowManager;
@@ -422,7 +514,7 @@ export class ProjectContext {
       anthropicApiKey: config.anthropicApiKey,
     });
 
-    this.ptyManager = new PtyManager();
+    this.ptyManager = new PtySessionPool();
     this.fileChangeNotifier = new FileChangeNotifier(projectId);
 
     this.eventLogger = new EventLogger({
@@ -483,10 +575,17 @@ export class ProjectContext {
     this.eventLog = new EventLog({ logPath: eventLogPath });
     await this.eventLog.initialize();
 
-    // Workflow manager
+    // Workflow manager — broadcast callback also captures build terminal output
     this.workflowManager = new WorkflowManager({
       env: this.env,
-      broadcast: (msg: object) => this.broadcastToClients(msg),
+      broadcast: (msg: object) => {
+        this.broadcastToClients(msg);
+        // Capture build terminal output in the session replay buffer
+        const m = msg as { type?: string; sessionId?: string; data?: string };
+        if (m.type === 'output' && m.sessionId === 'build' && m.data) {
+          this.ptyManager.ensureBuild().appendOutput(m.data);
+        }
+      },
       errorStore: this.errorStore,
       eventLog: this.eventLog,
       onExecStart: () => this.config.onExecStart(),
@@ -725,7 +824,7 @@ export class ProjectContext {
         lastCleanupTime: this._lastCleanupTime,
         lastCleanupReason: this._lastCleanupReason,
         uptime: process.uptime(),
-        ptyRunning: this.ptyManager.isRunning,
+        ptyRunning: this.ptyManager.hasRunningPty,
       });
     });
 
@@ -810,6 +909,7 @@ export class ProjectContext {
       workflowManager: () => this.workflowManager,
       errorStore: () => this.errorStore,
       testResultsStorage: () => this.testResultsStorage,
+      ptySessionPool: () => this.ptyManager,
       explorerIgnore: () => this.fileChangeNotifier.getExplorerIgnore(),
     });
     router.use('/api/automation', createAutomationRouter({
@@ -867,23 +967,25 @@ export class ProjectContext {
     console.log(`[project-context:${this.projectId}] WebSocket client connected (total received: ${this._connectionsReceived}, current: ${this.connections.size + 1})`);
     this.connections.add(ws);
 
-    // Lazy-start PTY on first WebSocket connection.
-    // Deferred from initialize() because node-pty's native module can crash the
-    // process with std::bad_alloc. By deferring, the HTTP server stays alive for
-    // file/git/workflow operations even if PTY fails.
-    if (!this.ptyManager.isRunning) {
-      try {
-        console.log(`[project-context:${this.projectId}] Lazy-starting PTY...`);
-        this.ptyManager.start(this.projectPath);
-      } catch (err) {
-        console.error(`[project-context:${this.projectId}] PTY failed to start:`, err);
-      }
+    // Lazy-start default 'main' PTY on first WebSocket connection.
+    const mainSession = this.ptyManager.getOrCreate('main', this.projectPath, 'Terminal');
+
+    // Send session list
+    ws.send(JSON.stringify({ type: 'terminal.list', sessions: this.ptyManager.list() }));
+
+    // Send replay buffer for main session
+    const replay = mainSession.getReplayBuffer();
+    if (replay) {
+      ws.send(JSON.stringify({ type: 'replay', sessionId: 'main', data: replay }));
     }
 
-    // Send replay buffer
-    const replay = this.ptyManager.getReplayBuffer();
-    if (replay) {
-      ws.send(JSON.stringify({ type: 'replay', data: replay }));
+    // Also send replay for build session if it exists
+    const buildSession = this.ptyManager.get('build');
+    if (buildSession) {
+      const buildReplay = buildSession.getReplayBuffer();
+      if (buildReplay) {
+        ws.send(JSON.stringify({ type: 'replay', sessionId: 'build', data: buildReplay }));
+      }
     }
 
     // Send status
@@ -903,24 +1005,62 @@ export class ProjectContext {
       if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'heartbeat' }));
     }, 20_000);
 
-    // Forward PTY output
-    const unsubscribe = this.ptyManager.onData((data) => {
-      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'output', data }));
-    });
+    // Forward PTY output from ALL sessions to client (tagged with sessionId)
+    const unsubscribers: (() => void)[] = [];
+    for (const session of this.ptyManager.list()) {
+      const mgr = this.ptyManager.get(session.id);
+      if (mgr) {
+        const sid = session.id;
+        unsubscribers.push(mgr.onData((data) => {
+          if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'output', sessionId: sid, data }));
+        }));
+      }
+    }
 
     // Handle messages
     ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(raw.toString());
         switch (msg.type) {
-          case 'input':
-            this.ptyManager.write(msg.data);
+          case 'input': {
+            const sid = msg.sessionId || 'main';
+            const session = this.ptyManager.get(sid);
+            if (session) session.write(msg.data);
             break;
-          case 'resize':
+          }
+          case 'resize': {
+            const sid = msg.sessionId || 'main';
             if (typeof msg.cols === 'number' && typeof msg.rows === 'number') {
-              this.ptyManager.resize(msg.cols, msg.rows);
+              const session = this.ptyManager.get(sid);
+              if (session) session.resize(msg.cols, msg.rows);
             }
             break;
+          }
+          case 'terminal.create': {
+            const newId = msg.sessionId || `term-${Date.now().toString(36)}`;
+            const name = msg.name || `Terminal ${this.ptyManager.list().length + 1}`;
+            const newSession = this.ptyManager.getOrCreate(newId, this.projectPath, name);
+            // Subscribe output for the new session to all clients
+            const sid = newId;
+            for (const client of this.connections) {
+              // Only need to send to new subscriber but broadcast is simpler
+            }
+            this.broadcastToClients({ type: 'terminal.created', sessionId: newId, name });
+            this.broadcastToClients({ type: 'terminal.list', sessions: this.ptyManager.list() });
+            // Subscribe this client to the new session's output
+            unsubscribers.push(newSession.onData((data) => {
+              if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'output', sessionId: sid, data }));
+            }));
+            break;
+          }
+          case 'terminal.close': {
+            if (msg.sessionId && msg.sessionId !== 'main') {
+              this.ptyManager.close(msg.sessionId);
+              this.broadcastToClients({ type: 'terminal.closed', sessionId: msg.sessionId });
+              this.broadcastToClients({ type: 'terminal.list', sessions: this.ptyManager.list() });
+            }
+            break;
+          }
           case 'ping':
             ws.send(JSON.stringify({ type: 'pong' }));
             break;
@@ -962,7 +1102,7 @@ export class ProjectContext {
       this._lastCleanupReason = reason;
       console.log(`[project-context:${this.projectId}] WebSocket client disconnected (reason: ${reason}, cleaned: ${this._connectionsCleaned}, remaining: ${this.connections.size - 1})`);
       clearInterval(heartbeatTimer);
-      unsubscribe();
+      for (const unsub of unsubscribers) unsub();
       this.connections.delete(ws);
     };
 
@@ -1067,7 +1207,7 @@ export class ProjectContext {
   async shutdown(): Promise<void> {
     console.log(`[project-context:${this.projectId}] Shutting down...`);
     this.fileChangeNotifier.stop();
-    this.ptyManager.stop();
+    this.ptyManager.closeAll();
     if (this.eventLog) await this.eventLog.shutdown();
     if (this.s3SyncScheduler) await this.s3SyncScheduler.shutdown();
     await this.eventLogger.shutdown();

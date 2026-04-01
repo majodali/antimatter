@@ -106,6 +106,12 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'tests.run-project', execution: 'server', description: 'Run project tests and return JSON results' },
   { command: 'tests.project-results', execution: 'server', description: 'Get persisted project test results' },
 
+  // Terminal sessions
+  { command: 'terminal.list', execution: 'server', description: 'List terminal sessions' },
+  { command: 'terminal.create', execution: 'server', description: 'Create a new terminal session' },
+  { command: 'terminal.close', execution: 'server', description: 'Close a terminal session' },
+  { command: 'terminal.send', execution: 'server', description: 'Send input to a terminal session' },
+
   // Workflow / errors
   { command: 'workflow.state', execution: 'server', description: 'Get workflow state' },
   { command: 'workflow.errors', execution: 'server', description: 'Get project errors' },

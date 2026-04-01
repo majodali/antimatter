@@ -3,10 +3,13 @@ import {
   Terminal as TerminalIcon,
   Trash2,
   Play,
+  Plus,
+  X,
   Loader2,
   Wifi,
   WifiOff,
   RefreshCw,
+  Hammer,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { XTerm } from './XTerm';
@@ -78,11 +81,16 @@ export function TerminalPanel() {
     showReconnectOverlay,
     isRunning,
     projectId: connectedProjectId,
+    sessions,
+    activeSessionId,
     clear,
     connect,
     disconnect,
     sendInput,
     resize,
+    setActiveSession,
+    createSession,
+    closeSession,
   } = useTerminalStore();
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -233,10 +241,52 @@ export function TerminalPanel() {
         </div>
       </div>
 
+      {/* Terminal session tab bar */}
+      {sessions.length > 1 && (
+        <div className="flex items-center gap-0.5 px-2 py-0.5 border-b border-border bg-card/30 overflow-x-auto">
+          {sessions.map((s) => (
+            <div
+              key={s.id}
+              className={cn(
+                'flex items-center gap-1 px-2 py-0.5 text-[10px] rounded cursor-pointer group',
+                s.id === activeSessionId
+                  ? 'bg-accent text-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/50',
+              )}
+              onClick={() => setActiveSession(s.id)}
+            >
+              {s.id === 'build' ? (
+                <Hammer className="h-2.5 w-2.5 flex-shrink-0" />
+              ) : (
+                <TerminalIcon className="h-2.5 w-2.5 flex-shrink-0" />
+              )}
+              <span className="truncate max-w-[80px]">{s.name}</span>
+              {s.id !== 'main' && (
+                <button
+                  className="opacity-0 group-hover:opacity-100 hover:text-red-400 flex-shrink-0"
+                  onClick={(e) => { e.stopPropagation(); closeSession(s.id); }}
+                  title="Close session"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              )}
+            </div>
+          ))}
+          <button
+            className="flex items-center px-1 py-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-accent/50"
+            onClick={() => createSession()}
+            title="New terminal"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+        </div>
+      )}
+
       {/* Terminal output — xterm.js handles all I/O when WebSocket is connected */}
       <div className="flex-1 overflow-hidden relative">
         <XTerm
           projectId={currentProjectId}
+          sessionId={activeSessionId}
           onData={handleTerminalData}
           onResize={handleTerminalResize}
         />

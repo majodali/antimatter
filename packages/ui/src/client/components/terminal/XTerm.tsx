@@ -6,6 +6,7 @@ import { useTheme } from '../theme-provider';
 
 interface XTermProps {
   projectId: string | null;
+  sessionId?: string;
   onData?: (data: string) => void;
   onResize?: (cols: number, rows: number) => void;
 }
@@ -54,9 +55,9 @@ export function disposeProjectTerminal(projectId: string): void {
   }
 }
 
-export function XTerm({ projectId, onData, onResize }: XTermProps) {
+export function XTerm({ projectId, sessionId = 'main', onData, onResize }: XTermProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const activeProjectRef = useRef<string | null>(null);
+  const activeKeyRef = useRef<string | null>(null);
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
   const { theme } = useTheme();
@@ -65,18 +66,20 @@ export function XTerm({ projectId, onData, onResize }: XTermProps) {
   onDataRef.current = onData;
   onResizeRef.current = onResize;
 
-  // Attach / detach terminals when projectId changes
+  // Pool key combines project + session
+  const poolKey = projectId ? `${projectId}:${sessionId}` : null;
+
+  // Attach / detach terminals when poolKey changes
   useEffect(() => {
-    if (!containerRef.current || !projectId) return;
+    if (!containerRef.current || !poolKey) return;
 
     const container = containerRef.current;
-    const prevProjectId = activeProjectRef.current;
+    const prevKey = activeKeyRef.current;
 
     // Detach previous terminal (keep it alive in the pool)
-    if (prevProjectId && prevProjectId !== projectId) {
-      const prev = terminalPool.get(prevProjectId);
+    if (prevKey && prevKey !== poolKey) {
+      const prev = terminalPool.get(prevKey);
       if (prev) {
-        // Remove the terminal's DOM element from the container
         const el = prev.terminal.element;
         if (el && el.parentElement === container) {
           container.removeChild(el);
@@ -84,10 +87,10 @@ export function XTerm({ projectId, onData, onResize }: XTermProps) {
       }
     }
 
-    activeProjectRef.current = projectId;
+    activeKeyRef.current = poolKey;
 
-    // Get or create terminal for this project
-    let entry = terminalPool.get(projectId);
+    // Get or create terminal for this session
+    let entry = terminalPool.get(poolKey);
     if (!entry) {
       const terminal = new Terminal({
         cursorBlink: true,
@@ -106,7 +109,7 @@ export function XTerm({ projectId, onData, onResize }: XTermProps) {
       terminal.onResize(({ cols, rows }) => { onResizeRef.current?.(cols, rows); });
 
       entry = { terminal, fitAddon };
-      terminalPool.set(projectId, entry);
+      terminalPool.set(poolKey, entry);
 
       // First-time open
       terminal.open(container);
@@ -117,13 +120,12 @@ export function XTerm({ projectId, onData, onResize }: XTermProps) {
       if (el && el.parentElement !== container) {
         container.appendChild(el);
       }
-      // Re-fit after reattach (container size may have changed)
       requestAnimationFrame(() => {
         try { entry!.fitAddon.fit(); } catch { /* ignore */ }
       });
     }
 
-    // Update global terminal reference
+    // Update global terminal reference (active terminal)
     const { terminal, fitAddon } = entry;
     (window as any).__terminal = {
       write: (data: string) => terminal.write(data),
@@ -132,6 +134,14 @@ export function XTerm({ projectId, onData, onResize }: XTermProps) {
       cols: terminal.cols,
       rows: terminal.rows,
     };
+
+    // Expose terminal pool for session-targeted writes from terminalStore
+    if (!(window as any).__terminalPool) {
+      (window as any).__terminalPool = new Map();
+    }
+    (window as any).__terminalPool.set(sessionId, {
+      write: (data: string) => terminal.write(data),
+    });
 
     // Resize handlers
     const handleResize = () => {
@@ -156,7 +166,7 @@ export function XTerm({ projectId, onData, onResize }: XTermProps) {
       observer.disconnect();
       // Don't dispose — terminal stays in the pool
     };
-  }, [projectId, theme]);
+  }, [poolKey, theme]);
 
   // Update theme on all pooled terminals when it changes
   useEffect(() => {

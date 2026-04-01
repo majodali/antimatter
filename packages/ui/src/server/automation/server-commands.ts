@@ -127,6 +127,8 @@ export interface ServerCommandDependencies {
   errorStore: () => ErrorStore | undefined;
   /** Lazy getter — test results storage. */
   testResultsStorage?: () => import('../routes/test-results.js').FileTestResultsStorage | undefined;
+  /** Lazy getter — PTY session pool for terminal commands. */
+  ptySessionPool?: () => { list(): any[]; getOrCreate(id: string, cwd: string, name?: string): any; get(id: string): any; close(id: string): boolean } | undefined;
   /** Returns current explorer ignore patterns for file tree filtering. */
   explorerIgnore: () => string[];
 }
@@ -151,7 +153,7 @@ type CommandHandler = (params: Record<string, unknown>) => Promise<unknown>;
 export function createServerCommandExecutor(
   deps: ServerCommandDependencies,
 ): (command: string, params: Record<string, unknown>) => Promise<unknown> {
-  const { workspace, workflowManager, errorStore, testResultsStorage, explorerIgnore } = deps;
+  const { workspace, workflowManager, errorStore, testResultsStorage, ptySessionPool, explorerIgnore } = deps;
 
   /** Helper: run a git command via workspace environment. */
   async function runGit(args: string, timeout = 30_000): Promise<{
@@ -523,6 +525,44 @@ export function createServerCommandExecutor(
     if (!storage) return { runs: [] };
     const runs = await storage.loadProjectRuns();
     return { runs };
+  });
+
+  // ---- Terminal sessions ----
+
+  handlers.set('terminal.list', async () => {
+    const pool = ptySessionPool?.();
+    if (!pool) return { sessions: [] };
+    return { sessions: pool.list() };
+  });
+
+  handlers.set('terminal.create', async (params) => {
+    const pool = ptySessionPool?.();
+    if (!pool) throw new AutomationCommandError('Terminal pool not ready', 'execution-error');
+    const name = (params.name as string) || undefined;
+    const sessionId = (params.sessionId as string) || `term-${Date.now().toString(36)}`;
+    const projectRoot = (workspace.env as any).rootPath ?? process.cwd();
+    pool.getOrCreate(sessionId, projectRoot, name);
+    return { sessionId, name: name ?? sessionId };
+  });
+
+  handlers.set('terminal.close', async (params) => {
+    const pool = ptySessionPool?.();
+    if (!pool) throw new AutomationCommandError('Terminal pool not ready', 'execution-error');
+    const sessionId = requireParam<string>(params, 'sessionId');
+    if (sessionId === 'main') throw new AutomationCommandError('Cannot close main terminal', 'invalid-params');
+    const closed = pool.close(sessionId);
+    return { closed };
+  });
+
+  handlers.set('terminal.send', async (params) => {
+    const pool = ptySessionPool?.();
+    if (!pool) throw new AutomationCommandError('Terminal pool not ready', 'execution-error');
+    const sessionId = (params.sessionId as string) || 'main';
+    const data = requireParam<string>(params, 'data');
+    const session = pool.get(sessionId);
+    if (!session) throw new AutomationCommandError(`Terminal session '${sessionId}' not found`, 'not-found');
+    session.write(data);
+    return { sent: true };
   });
 
   handlers.set('workflow.emit', async (params) => {

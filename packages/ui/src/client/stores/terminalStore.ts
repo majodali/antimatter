@@ -59,6 +59,10 @@ interface TerminalStore {
   // Input buffer — accumulates keystrokes during silent reconnect
   inputBuffer: string[];
 
+  // Terminal sessions
+  sessions: { id: string; name: string; running: boolean; virtual: boolean }[];
+  activeSessionId: string;
+
   // Legacy support
   isRunning: boolean;
   isExecutingCommand: boolean;
@@ -70,6 +74,9 @@ interface TerminalStore {
   disconnect: () => void;
   sendInput: (data: string) => void;
   resize: (cols: number, rows: number) => void;
+  setActiveSession: (sessionId: string) => void;
+  createSession: (name?: string) => void;
+  closeSession: (sessionId: string) => void;
 
   // Legacy actions (kept for backward compat during migration)
   addLine: (text: string, type?: string) => void;
@@ -87,6 +94,23 @@ function writeln(text: string) {
 function writeRaw(data: string) {
   const term = (window as any).__terminal;
   if (term) term.write(data);
+}
+
+/**
+ * Write data to a session-specific terminal.
+ * Uses the terminal pool exposed by XTerm component.
+ */
+function writeToSession(sessionId: string, data: string) {
+  const pool = (window as any).__terminalPool as Map<string, { write: (d: string) => void }> | undefined;
+  if (pool) {
+    const entry = pool.get(sessionId);
+    if (entry) {
+      entry.write(data);
+      return;
+    }
+  }
+  // Fallback: write to the active terminal (backward compat)
+  writeRaw(data);
 }
 
 // Silent reconnect grace period — 5 seconds before showing spinner
@@ -133,11 +157,44 @@ function registerMessageSubscriptions(
   if (subscriptionsRegistered) return;
   subscriptionsRegistered = true;
 
-  // Terminal output
-  workspaceConnection.onMessage((msg) => { writeRaw(msg.data); }, { type: 'output' });
+  // Terminal output — route to session-specific xterm instance
+  workspaceConnection.onMessage((msg) => {
+    const sessionId = msg.sessionId || 'main';
+    writeToSession(sessionId, msg.data);
+  }, { type: 'output' });
 
-  // Replay buffer
-  workspaceConnection.onMessage((msg) => { if (msg.data) writeRaw(msg.data); }, { type: 'replay' });
+  // Replay buffer — route to session-specific xterm instance
+  workspaceConnection.onMessage((msg) => {
+    if (msg.data) {
+      const sessionId = msg.sessionId || 'main';
+      writeToSession(sessionId, msg.data);
+    }
+  }, { type: 'replay' });
+
+  // Terminal session list update
+  workspaceConnection.onMessage((msg) => {
+    if (msg.sessions) {
+      set({ sessions: msg.sessions });
+      // Auto-switch to build session when it appears
+      const current = get();
+      if (!current.sessions.some(s => s.id === 'build') && msg.sessions.some((s: any) => s.id === 'build')) {
+        // Build session just appeared — don't auto-switch, let user click
+      }
+    }
+  }, { type: 'terminal.list' });
+
+  // Terminal session created
+  workspaceConnection.onMessage((msg) => {
+    // Session list update follows via terminal.list broadcast
+  }, { type: 'terminal.created' });
+
+  // Terminal session closed
+  workspaceConnection.onMessage((msg) => {
+    const current = get();
+    if (current.activeSessionId === msg.sessionId) {
+      set({ activeSessionId: 'main' });
+    }
+  }, { type: 'terminal.closed' });
 
   // Workspace status
   workspaceConnection.onMessage((msg) => {
@@ -282,6 +339,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => {
     projectId: null,
     ws: null,
     inputBuffer: [],
+    sessions: [{ id: 'main', name: 'Terminal', running: false, virtual: false }],
+    activeSessionId: 'main',
 
     // Legacy
     isRunning: false,
@@ -345,9 +404,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => {
      * During reconnecting state, buffers input for replay on reconnect.
      */
     sendInput: (data: string) => {
-      const { connectionState } = get();
+      const { connectionState, activeSessionId } = get();
       if (connectionState === 'connected') {
-        workspaceConnection.send({ type: 'input', data });
+        workspaceConnection.send({ type: 'input', sessionId: activeSessionId, data });
       } else if (connectionState === 'reconnecting') {
         set((s) => {
           const totalChars = s.inputBuffer.reduce((sum, d) => sum + d.length, 0);
@@ -360,12 +419,40 @@ export const useTerminalStore = create<TerminalStore>((set, get) => {
     },
 
     /**
-     * Send a resize event to the PTY.
+     * Send a resize event to the active PTY session.
      */
     resize: (cols: number, rows: number) => {
-      const { connectionState } = get();
+      const { connectionState, activeSessionId } = get();
       if (connectionState === 'connected' || connectionState === 'reconnecting') {
-        workspaceConnection.send({ type: 'resize', cols, rows });
+        workspaceConnection.send({ type: 'resize', sessionId: activeSessionId, cols, rows });
+      }
+    },
+
+    /**
+     * Switch the active terminal session.
+     */
+    setActiveSession: (sessionId: string) => {
+      set({ activeSessionId: sessionId });
+    },
+
+    /**
+     * Create a new terminal session via WebSocket.
+     */
+    createSession: (name?: string) => {
+      const sessionId = `term-${Date.now().toString(36)}`;
+      workspaceConnection.send({ type: 'terminal.create', sessionId, name });
+      set({ activeSessionId: sessionId });
+    },
+
+    /**
+     * Close a terminal session via WebSocket.
+     */
+    closeSession: (sessionId: string) => {
+      if (sessionId === 'main') return; // Can't close main
+      workspaceConnection.send({ type: 'terminal.close', sessionId });
+      const { activeSessionId } = get();
+      if (activeSessionId === sessionId) {
+        set({ activeSessionId: 'main' });
       }
     },
 
