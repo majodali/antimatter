@@ -5,14 +5,12 @@
 > Update this list when items are completed or reprioritized. See BACKLOG.md for full details.
 
 1. **Git visual diff** — diff viewer in git panel
-5. **Git visual diff** — diff viewer in git panel
-6. **Multiple terminal tabs** — multiple sessions within a project
-7. **Secrets/env vars management** — UI for project secrets, encrypted storage
-8. **Deploy URL display** — clickable link to live site after deployment
-9. **Command palette + search** — Cmd+P file search, Cmd+Shift+P commands, Cmd+Shift+F full-text search
-10. **Show/hide dot files** — toggle in file explorer
+2. **Secrets/env vars management** — UI for project secrets, encrypted storage
+3. **Deploy URL display** — clickable link to live site after deployment
+4. **Command palette + search** — Cmd+P file search, Cmd+Shift+P commands, Cmd+Shift+F full-text search
+5. **Show/hide dot files** — toggle in file explorer
 
-**Recently completed:** M2 phases 1-4 (puppeteerTest, preview route, todo app, FT-M2 tests), s3UploadDir fix, test panel (project tests, S3 persistence, double-click nav), graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
+**Recently completed:** multiple terminal tabs (session pool, build terminal, remote execution), M2 phases 1-4, s3UploadDir fix, test panel (project tests, S3 persistence, double-click nav), graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
 
 ## What This Project Is
 

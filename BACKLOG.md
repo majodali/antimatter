@@ -262,11 +262,11 @@ A minimal todo app with:
 
 ### Terminal
 
-**Current state:** xterm.js terminal with PTY backend, WebSocket, basic resize. Per-project terminal sessions with scrollback preservation — each project gets its own xterm.js instance kept in a client-side pool; switching projects detaches/reattaches terminals without losing history. Server-side PTY isolation via ProjectContext.ptyManager with 50KB replay buffer on reconnect.
+**Current state:** Multiple named terminal sessions per project via PtySessionPool. Tab bar UI for create/switch/close. Session IDs in WebSocket protocol for routing. Dedicated "Build" terminal streams all wf.exec() output in real-time (virtual session, no PTY). Automation commands for remote terminal control (terminal.list, terminal.create, terminal.close, terminal.send). Per-project xterm.js pool with scrollback preservation across session switches.
 
 **Remaining work:**
-- Multiple terminal tabs within a single project
-- Terminal output visible for workflow commands (wf.exec)
+- Terminal search (find text in scrollback)
+- Terminal session naming/renaming
 
 ---
 
