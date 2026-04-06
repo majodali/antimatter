@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { ContextManager } from '../context/context-manager.js';
 import type { Message } from '../types.js';
 

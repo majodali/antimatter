@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { BuildExecutor } from '../build-executor.js';
 import { CacheManager } from '../cache-manager.js';
 import { DependencyResolver } from '../dependency-resolver.js';

@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import type { ToolConfig } from '@antimatter/project-model';
 import { WorkspaceEnvironmentRunnerAdapter } from '../runner-adapter.js';
 import { MemoryWorkspaceEnvironment } from '../memory-workspace-environment.js';

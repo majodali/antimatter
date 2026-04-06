@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { BuildExecutor } from '../build-executor.js';
 import type { BuildRule } from '@antimatter/project-model';
 import type { BuildContext } from '../types.js';

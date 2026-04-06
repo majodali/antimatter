@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { CacheManager } from '../cache-manager.js';
 import { CacheError } from '../types.js';
 import { MemoryFileSystem } from '@antimatter/filesystem';

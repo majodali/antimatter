@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { asyncPool } from '../async-pool.js';
 
 describe('asyncPool', () => {

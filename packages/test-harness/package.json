@@ -19,7 +19,7 @@
     "@antimatter/agent-framework": "*"
   },
   "scripts": {
-    "test": "vitest run",
+    "test": "node --import tsx --test src/__tests__/*.spec.ts",
     "lint": "eslint ."
   }
 }

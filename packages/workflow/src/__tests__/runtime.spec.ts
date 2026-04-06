@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it } from 'node:test';
+import { expect, createMockFn } from '@antimatter/test-utils';
 import { WorkflowRuntime } from '../runtime.js';
 import type {
   ExecResult,
@@ -91,7 +92,7 @@ describe('WorkflowRuntime', () => {
     });
 
     it('does not fire rules when no events match', async () => {
-      const fired = vi.fn();
+      const fired = createMockFn();
       const definition: WorkflowDefinition<{}> = (wf) => {
         wf.rule('test', (e) => e.type === 'never', fired);
       };
@@ -288,7 +289,7 @@ describe('WorkflowRuntime', () => {
 
   describe('command execution', () => {
     it('delegates exec to the provided executor', async () => {
-      const executor = vi.fn().mockResolvedValue(successResult);
+      const executor = createMockFn().mockResolvedValue(successResult);
 
       const definition: WorkflowDefinition<{}> = (wf) => {
         wf.rule('Build', () => true, async () => {
@@ -303,7 +304,7 @@ describe('WorkflowRuntime', () => {
     });
 
     it('exec result is available in the action', async () => {
-      const executor = vi.fn().mockResolvedValue({ ...failResult, stderr: 'type error' });
+      const executor = createMockFn().mockResolvedValue({ ...failResult, stderr: 'type error' });
 
       const definition: WorkflowDefinition<{ error?: string }> = (wf) => {
         wf.rule('Build', () => true, async (_e, state) => {

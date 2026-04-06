@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect, createMockFn } from '@antimatter/test-utils';
 import type { WorkspaceEnvironment, ExecutionResult } from '@antimatter/workspace';
 import type { EnvironmentConfig, Pipeline } from '@antimatter/project-model';
 import { EnvironmentManager } from '../environment-manager.js';
@@ -31,30 +32,30 @@ function createMockWorkspaceEnv(): WorkspaceEnvironment {
   return {
     id: 'test-ws-env',
     label: 'Test WS Env',
-    readFile: vi.fn().mockResolvedValue(''),
-    writeFile: vi.fn().mockResolvedValue(undefined),
-    deleteFile: vi.fn().mockResolvedValue(undefined),
-    exists: vi.fn().mockResolvedValue(false),
-    readDirectory: vi.fn().mockResolvedValue([]),
-    mkdir: vi.fn().mockResolvedValue(undefined),
-    stat: vi.fn().mockResolvedValue({ size: 0, isFile: true, isDirectory: false, modifiedAt: '' }),
-    execute: vi.fn().mockResolvedValue({
+    readFile: createMockFn().mockResolvedValue(''),
+    writeFile: createMockFn().mockResolvedValue(undefined),
+    deleteFile: createMockFn().mockResolvedValue(undefined),
+    exists: createMockFn().mockResolvedValue(false),
+    readDirectory: createMockFn().mockResolvedValue([]),
+    mkdir: createMockFn().mockResolvedValue(undefined),
+    stat: createMockFn().mockResolvedValue({ size: 0, isFile: true, isDirectory: false, modifiedAt: '' }),
+    execute: createMockFn().mockResolvedValue({
       exitCode: 0,
       stdout: '{"deployed":true}',
       stderr: '',
       durationMs: 50,
     } as ExecutionResult),
-    initialize: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn().mockResolvedValue(undefined),
+    initialize: createMockFn().mockResolvedValue(undefined),
+    dispose: createMockFn().mockResolvedValue(undefined),
     fileSystem: {
-      readTextFile: vi.fn().mockImplementation(async () => JSON.stringify(configStore)),
-      writeFile: vi.fn().mockImplementation(async (_path: string, content: string) => {
+      readTextFile: createMockFn().mockImplementation(async () => JSON.stringify(configStore)),
+      writeFile: createMockFn().mockImplementation(async (_path: string, content: string) => {
         configStore = JSON.parse(content);
       }),
-      mkdir: vi.fn().mockResolvedValue(undefined),
-      readDirectory: vi.fn().mockResolvedValue([]),
-      deleteFile: vi.fn().mockResolvedValue(undefined),
-      exists: vi.fn().mockResolvedValue(true),
+      mkdir: createMockFn().mockResolvedValue(undefined),
+      readDirectory: createMockFn().mockResolvedValue([]),
+      deleteFile: createMockFn().mockResolvedValue(undefined),
+      exists: createMockFn().mockResolvedValue(true),
     } as any,
   };
 }

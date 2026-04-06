@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "server": "tsx src/server/index.ts",
     "dev:full": "concurrently \"npm run dev\" \"npm run server\"",
-    "test": "vitest run",
+    "test": "node --import tsx --test src/server/services/__tests__/*.spec.ts",
     "build:lambda": "node scripts/build-lambda.mjs",
     "lint": "eslint . --ext ts,tsx"
   },

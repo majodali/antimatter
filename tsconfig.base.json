@@ -26,7 +26,8 @@
       "@antimatter/agent-framework": ["./packages/agent-framework/src/index.ts"],
       "@antimatter/test-harness": ["./packages/test-harness/src/index.ts"],
       "@antimatter/workspace": ["./packages/workspace/src/index.ts"],
-      "@antimatter/workflow": ["./packages/workflow/src/index.ts"]
+      "@antimatter/workflow": ["./packages/workflow/src/index.ts"],
+      "@antimatter/test-utils": ["./packages/test-utils/src/index.ts"]
     }
   }
 }

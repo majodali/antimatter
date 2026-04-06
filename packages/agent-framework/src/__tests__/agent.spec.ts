@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { Agent } from '../agent.js';
 import { MockProvider } from '../providers/mock-provider.js';
 import type { AgentConfig, AgentTool, Identifier } from '../types.js';

@@ -8,7 +8,8 @@
  * Or:  npx vitest run src/server/tests/functional.spec.ts
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { allTestModules, getTestsByArea } from '../../shared/test-modules/index.js';
 import { ServiceActionContext } from './service-action-context.js';
 

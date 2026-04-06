@@ -126,7 +126,7 @@ export interface ProjectTestResult {
 export interface ProjectTestRunSummary {
   readonly runId: string;
   readonly timestamp: string;
-  readonly runner: 'vitest' | 'jest' | 'unknown';
+  readonly runner: 'node' | 'vitest' | 'jest' | 'unknown';
   readonly total: number;
   readonly passed: number;
   readonly failed: number;

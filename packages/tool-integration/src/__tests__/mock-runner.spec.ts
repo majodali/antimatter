@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import type { ToolConfig } from '@antimatter/project-model';
 import { MockRunner } from '../mock-runner.js';
 import { ParameterError } from '../types.js';

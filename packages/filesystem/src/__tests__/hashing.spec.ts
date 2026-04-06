@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { hashContent } from '../hashing.js';
 
 describe('hashContent', () => {

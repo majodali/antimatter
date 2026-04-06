@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { platform } from 'node:os';
 import type { ToolConfig } from '@antimatter/project-model';
 import { SubprocessRunner } from '../subprocess-runner.js';

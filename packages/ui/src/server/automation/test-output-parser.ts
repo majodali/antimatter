@@ -1,9 +1,10 @@
 /**
- * Parse vitest/jest JSON output into ProjectTestRunSummary.
+ * Parse test runner output into ProjectTestRunSummary.
  *
- * Both runners support structured JSON output:
- * - vitest: `npx vitest run --reporter=json`
- * - jest:   `npx jest --json`
+ * Supports:
+ * - node:test with custom JSON reporter (@antimatter/test-utils/reporter)
+ * - vitest `--reporter=json`
+ * - jest `--json`
  */
 
 import { randomUUID } from 'crypto';
@@ -14,21 +15,27 @@ import type { ProjectTestResult, ProjectTestRunSummary } from '../../shared/test
 // ---------------------------------------------------------------------------
 
 /** Detect the test runner from package.json content. */
-export function detectTestRunner(packageJsonContent: string): 'vitest' | 'jest' | null {
+export function detectTestRunner(packageJsonContent: string): 'node' | 'vitest' | 'jest' | null {
   try {
     const pkg = JSON.parse(packageJsonContent);
     const allDeps = {
       ...pkg.dependencies,
       ...pkg.devDependencies,
     };
-    if (allDeps['vitest']) return 'vitest';
-    if (allDeps['jest']) return 'jest';
-    // Check scripts for runner hints
+
+    // Check for node:test (our primary runner)
     const scripts = pkg.scripts ?? {};
+    for (const cmd of Object.values(scripts) as string[]) {
+      if (cmd.includes('node --import tsx --test') || cmd.includes('node:test')) return 'node';
+    }
+    // Check scripts for runner hints
     for (const cmd of Object.values(scripts) as string[]) {
       if (cmd.includes('vitest')) return 'vitest';
       if (cmd.includes('jest')) return 'jest';
     }
+
+    if (allDeps['vitest']) return 'vitest';
+    if (allDeps['jest']) return 'jest';
     return null;
   } catch {
     return null;
@@ -51,6 +58,20 @@ export function extractFailureLine(stack: string, testFile: string): number | un
   // Fallback: look for any line number in the first stack frame
   const lineMatch = stack.match(/:(\d+):\d+/);
   return lineMatch ? parseInt(lineMatch[1], 10) : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Node test JSON parser (our custom reporter format)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse output from @antimatter/test-utils/reporter.
+ *
+ * Format matches vitest JSON for compatibility with parseVitestJson,
+ * so the same downstream code (test results panel) works for both.
+ */
+export function parseNodeTestJson(stdout: string, projectRoot?: string): ProjectTestRunSummary {
+  return { ...parseVitestJson(stdout, projectRoot), runner: 'node' };
 }
 
 // ---------------------------------------------------------------------------

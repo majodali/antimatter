@@ -13,7 +13,8 @@
  *   Agent tool execution    ↔ (additional service-level coverage)
  *   Multi-turn agent flow   ↔ (additional service-level coverage)
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import type { FileEntry, WorkspacePath } from '@antimatter/filesystem';
 import { createWorkspaceHarness, type WorkspaceHarness } from '../workspace-harness.js';
 import { setupSuccessfulBuild, setupBuildWithErrors } from '../scenario-factory.js';

@@ -26,7 +26,15 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/client/*"],
-      "@shared/*": ["./src/shared/*"]
+      "@shared/*": ["./src/shared/*"],
+      "@antimatter/project-model": ["../project-model/src/index.ts"],
+      "@antimatter/filesystem": ["../filesystem/src/index.ts"],
+      "@antimatter/tool-integration": ["../tool-integration/src/index.ts"],
+      "@antimatter/build-system": ["../build-system/src/index.ts"],
+      "@antimatter/agent-framework": ["../agent-framework/src/index.ts"],
+      "@antimatter/workspace": ["../workspace/src/index.ts"],
+      "@antimatter/workflow": ["../workflow/src/index.ts"],
+      "@antimatter/test-utils": ["../test-utils/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],

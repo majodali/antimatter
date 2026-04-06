@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { AgentConfigBuilder, getRolePrompt, RolePrompts } from '../config-builder.js';
 import type { AgentTool, Identifier } from '../types.js';
 

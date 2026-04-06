@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { inflateRawSync } from 'node:zlib';
 import { createZipFromFile } from '../deployers/zip-util.js';
 

@@ -1,0 +1,13 @@
+{
+  "name": "@antimatter/test-utils",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@antimatter/source": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./reporter": "./src/reporter.mjs"
+  },
+  "files": ["src"]
+}

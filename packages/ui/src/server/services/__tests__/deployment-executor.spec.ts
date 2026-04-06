@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect, createMockFn } from '@antimatter/test-utils';
 import type { DeploymentConfig } from '@antimatter/project-model';
 import type { WorkspaceEnvironment, ExecutionResult } from '@antimatter/workspace';
 import {
@@ -19,28 +20,28 @@ function createMockEnv(): WorkspaceEnvironment {
   return {
     id: 'test-env',
     label: 'Test Env',
-    readFile: vi.fn().mockResolvedValue(''),
-    writeFile: vi.fn().mockResolvedValue(undefined),
-    deleteFile: vi.fn().mockResolvedValue(undefined),
-    exists: vi.fn().mockResolvedValue(false),
-    readDirectory: vi.fn().mockResolvedValue([]),
-    mkdir: vi.fn().mockResolvedValue(undefined),
-    stat: vi.fn().mockResolvedValue({ size: 0, isFile: true, isDirectory: false, modifiedAt: '' }),
-    execute: vi.fn().mockResolvedValue({
+    readFile: createMockFn().mockResolvedValue(''),
+    writeFile: createMockFn().mockResolvedValue(undefined),
+    deleteFile: createMockFn().mockResolvedValue(undefined),
+    exists: createMockFn().mockResolvedValue(false),
+    readDirectory: createMockFn().mockResolvedValue([]),
+    mkdir: createMockFn().mockResolvedValue(undefined),
+    stat: createMockFn().mockResolvedValue({ size: 0, isFile: true, isDirectory: false, modifiedAt: '' }),
+    execute: createMockFn().mockResolvedValue({
       exitCode: 0,
       stdout: 'build output',
       stderr: '',
       durationMs: 100,
     } as ExecutionResult),
-    initialize: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn().mockResolvedValue(undefined),
+    initialize: createMockFn().mockResolvedValue(undefined),
+    dispose: createMockFn().mockResolvedValue(undefined),
     fileSystem: {} as any,
   };
 }
 
 function createMockS3Client(): any {
   return {
-    send: vi.fn().mockImplementation((cmd: any) => {
+    send: createMockFn().mockImplementation((cmd: any) => {
       const cmdName = cmd.constructor?.name ?? '';
       if (cmdName === 'GetObjectCommand') {
         return Promise.resolve({
@@ -68,11 +69,11 @@ function createMockS3Client(): any {
 
 function createMockLambdaClient(): DeployLambdaClient {
   return {
-    updateFunctionCode: vi.fn().mockResolvedValue({
+    updateFunctionCode: createMockFn().mockResolvedValue({
       FunctionName: 'test-function',
       LastUpdateStatus: 'Successful',
     }),
-    getFunctionConfiguration: vi.fn().mockResolvedValue({
+    getFunctionConfiguration: createMockFn().mockResolvedValue({
       LastUpdateStatus: 'Successful',
       State: 'Active',
     }),
@@ -81,7 +82,7 @@ function createMockLambdaClient(): DeployLambdaClient {
 
 function createMockCloudfrontClient(): DeployCloudfrontClient {
   return {
-    createInvalidation: vi.fn().mockResolvedValue({
+    createInvalidation: createMockFn().mockResolvedValue({
       Invalidation: { Id: 'inv-123' },
     }),
   };

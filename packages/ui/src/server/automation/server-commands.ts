@@ -16,7 +16,7 @@ import { COMMAND_CATALOG } from '../../shared/automation-types.js';
 import type { AutomationErrorCode } from '../../shared/automation-types.js';
 import type { ProjectError } from '@antimatter/workflow';
 import { ErrorTypes } from '@antimatter/workflow';
-import { detectTestRunner, parseVitestJson, parseJestJson } from './test-output-parser.js';
+import { detectTestRunner, parseNodeTestJson, parseVitestJson, parseJestJson } from './test-output-parser.js';
 
 // ---------------------------------------------------------------------------
 // Error helper
@@ -458,31 +458,40 @@ export function createServerCommandExecutor(
     }
     const runner = detectTestRunner(packageJson);
     if (!runner) {
-      return { runner: null, tests: [], error: 'No vitest or jest found in dependencies' };
+      return { runner: null, tests: [], error: 'No test runner found in package.json' };
     }
-    // Use vitest --list or jest --listTests to find test files
-    const cmd = runner === 'vitest'
-      ? 'npx vitest --list --reporter=json 2>/dev/null || true'
-      : 'npx jest --listTests --json 2>/dev/null || true';
-    const result = await workspace.env.execute({ command: cmd, timeout: 30_000 });
     let testFiles: string[] = [];
-    try {
-      if (runner === 'vitest') {
-        // vitest --list --reporter=json outputs the full JSON with testResults
-        const data = JSON.parse(result.stdout);
-        testFiles = (data.testResults ?? []).map((r: any) => r.name ?? r);
-      } else {
-        testFiles = JSON.parse(result.stdout);
-      }
-    } catch {
-      // Fallback: glob for test files
+    if (runner === 'node') {
+      // Glob for spec files
       try {
         const globResult = await workspace.env.execute({
-          command: 'find . -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" -o -name "*.spec.js" | grep -v node_modules | head -100',
+          command: 'find . -name "*.spec.ts" -o -name "*.test.ts" | grep -v node_modules | head -100',
           timeout: 10_000,
         });
         testFiles = globResult.stdout.split('\n').filter(Boolean).map(f => f.replace(/^\.\//, ''));
       } catch { /* ignore */ }
+    } else {
+      // Use vitest --list or jest --listTests to find test files
+      const cmd = runner === 'vitest'
+        ? 'npx vitest --list --reporter=json 2>/dev/null || true'
+        : 'npx jest --listTests --json 2>/dev/null || true';
+      const result = await workspace.env.execute({ command: cmd, timeout: 30_000 });
+      try {
+        if (runner === 'vitest') {
+          const data = JSON.parse(result.stdout);
+          testFiles = (data.testResults ?? []).map((r: any) => r.name ?? r);
+        } else {
+          testFiles = JSON.parse(result.stdout);
+        }
+      } catch {
+        try {
+          const globResult = await workspace.env.execute({
+            command: 'find . -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" -o -name "*.spec.js" | grep -v node_modules | head -100',
+            timeout: 10_000,
+          });
+          testFiles = globResult.stdout.split('\n').filter(Boolean).map(f => f.replace(/^\.\//, ''));
+        } catch { /* ignore */ }
+      }
     }
     // Normalize to relative paths
     const projectRoot = (workspace.env as any).rootPath ?? process.cwd();
@@ -504,15 +513,24 @@ export function createServerCommandExecutor(
     }
     const runner = detectTestRunner(packageJson);
     if (!runner) {
-      throw new AutomationCommandError('No vitest or jest found in dependencies', 'execution-error');
+      throw new AutomationCommandError('No test runner found in dependencies', 'execution-error');
     }
     const projectRoot = (workspace.env as any).rootPath ?? process.cwd();
     const fileFilter = file ? ` ${file}` : '';
-    const cmd = runner === 'vitest'
-      ? `npx vitest run --reporter=json${fileFilter} 2>/dev/null || true`
-      : `npx jest --json${fileFilter} 2>/dev/null || true`;
+    let cmd: string;
+    let parser: typeof parseVitestJson;
+    if (runner === 'node') {
+      // Use npm test with our custom JSON reporter
+      cmd = `npm test -- --test-reporter=@antimatter/test-utils/reporter${fileFilter} 2>/dev/null || true`;
+      parser = parseNodeTestJson;
+    } else if (runner === 'vitest') {
+      cmd = `npx vitest run --reporter=json${fileFilter} 2>/dev/null || true`;
+      parser = parseVitestJson;
+    } else {
+      cmd = `npx jest --json${fileFilter} 2>/dev/null || true`;
+      parser = parseJestJson;
+    }
     const result = await workspace.env.execute({ command: cmd, timeout: 300_000 });
-    const parser = runner === 'vitest' ? parseVitestJson : parseJestJson;
     const summary = parser(result.stdout, projectRoot);
     // Persist results
     const storage = testResultsStorage?.();

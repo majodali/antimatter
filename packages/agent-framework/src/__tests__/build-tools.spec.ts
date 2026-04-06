@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { MemoryFileSystem } from '@antimatter/filesystem';
 import type { WorkspacePath } from '@antimatter/filesystem';
 import { MockRunner } from '@antimatter/tool-integration';

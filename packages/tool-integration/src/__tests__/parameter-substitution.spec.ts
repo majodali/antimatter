@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import type { ToolConfig } from '@antimatter/project-model';
 import { validateParameters, substituteParameters } from '../parameter-substitution.js';
 import { ParameterError } from '../types.js';

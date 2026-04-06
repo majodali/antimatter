@@ -12,7 +12,8 @@
  *   Delete file           ↔ Smoke: Delete File
  *   Error cases           ↔ (additional service-level coverage)
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import type { WorkspacePath, FileEntry } from '@antimatter/filesystem';
 import { createWorkspaceHarness, type WorkspaceHarness } from '../workspace-harness.js';
 

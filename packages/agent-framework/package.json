@@ -19,7 +19,7 @@
     "@anthropic-ai/sdk": "^0.38.0"
   },
   "scripts": {
-    "test": "vitest run",
+    "test": "node --import tsx --test src/__tests__/*.spec.ts",
     "lint": "eslint ."
   }
 }

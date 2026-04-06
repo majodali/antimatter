@@ -15,7 +15,8 @@
  *   Clear cache             ↔ FT: Clear Build Cache
  *   Clear results           ↔ FT: Clear Build Results
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { createWorkspaceHarness, type WorkspaceHarness } from '../workspace-harness.js';
 import { setupSuccessfulBuild, setupBuildWithErrors } from '../scenario-factory.js';
 

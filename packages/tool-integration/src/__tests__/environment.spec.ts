@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import type { ToolConfig } from '@antimatter/project-model';
 import type { RunToolOptions } from '../types.js';
 import { mergeEnvironment, sanitizeEnvironment } from '../environment.js';

@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it } from 'node:test';
+import { expect, createMockFn } from '@antimatter/test-utils';
 import { MemoryFileSystem } from '../memory-fs.js';
 
 describe('MemoryFileSystem', () => {
@@ -160,7 +161,7 @@ describe('MemoryFileSystem', () => {
   describe('watch', () => {
     it('emits create event on new file', async () => {
       const fs = new MemoryFileSystem();
-      const listener = vi.fn();
+      const listener = createMockFn();
       fs.watch('', listener);
       await fs.writeFile('file.txt', 'data');
       expect(listener).toHaveBeenCalledWith([
@@ -171,7 +172,7 @@ describe('MemoryFileSystem', () => {
     it('emits modify event on overwrite', async () => {
       const fs = new MemoryFileSystem();
       await fs.writeFile('file.txt', 'first');
-      const listener = vi.fn();
+      const listener = createMockFn();
       fs.watch('', listener);
       await fs.writeFile('file.txt', 'second');
       expect(listener).toHaveBeenCalledWith([
@@ -182,7 +183,7 @@ describe('MemoryFileSystem', () => {
     it('emits delete event', async () => {
       const fs = new MemoryFileSystem();
       await fs.writeFile('file.txt', 'data');
-      const listener = vi.fn();
+      const listener = createMockFn();
       fs.watch('', listener);
       await fs.deleteFile('file.txt');
       expect(listener).toHaveBeenCalledWith([
@@ -192,7 +193,7 @@ describe('MemoryFileSystem', () => {
 
     it('stops emitting after close', async () => {
       const fs = new MemoryFileSystem();
-      const listener = vi.fn();
+      const listener = createMockFn();
       const watcher = fs.watch('', listener);
       watcher.close();
       await fs.writeFile('file.txt', 'data');

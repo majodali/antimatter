@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, beforeEach } from 'node:test';
+import { expect } from '@antimatter/test-utils';
 import { MemoryFileSystem } from '../memory-fs.js';
 import { createSnapshot, diffSnapshots } from '../change-tracker.js';
 import { scanDirectory } from '../source-file-utils.js';
