@@ -55,7 +55,7 @@ const WEBSITE_BUCKET = process.env.WEBSITE_BUCKET || '';
 const SESSION_TOKEN = process.env.SESSION_TOKEN || '';
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/workspace/data';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
-const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '0', 10) || 60 * 60 * 1000; // default 1 hour, 0 = disabled
 
 // PROJECT_ID is now optional — server starts empty and loads projects on demand.
 // If set, that project is auto-initialized on startup (backward compat).
@@ -189,6 +189,10 @@ class ConnectionManager {
   }
 
   private startShutdownTimer(): void {
+    if (process.env.IDLE_TIMEOUT_MS === '0') {
+      console.log('[connections] No connections — idle shutdown disabled');
+      return;
+    }
     console.log(`[connections] No connections — starting ${IDLE_TIMEOUT_MS / 1000}s shutdown timer`);
     globalEventLogger.info('workspace', `No connections — idle shutdown timer started (${IDLE_TIMEOUT_MS / 1000}s)`);
     this.shutdownTimer = setTimeout(async () => {
