@@ -36,6 +36,7 @@ writeFileSync(resolve(outDir, 'package.json'), JSON.stringify({
   name: 'antimatter-workspace-server',
   private: true,
   dependencies: {
+    'esbuild': '^0.21.5',
     'puppeteer-core': '^24.0.0',
   },
 }, null, 2));
