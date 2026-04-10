@@ -250,47 +250,8 @@ export class AntimatterStack extends cdk.Stack {
       }),
     });
 
-    // Security group for S3 Files mount targets
-    const s3FilesSg = new ec2.SecurityGroup(this, 'S3FilesSg', {
-      vpc: this.vpc,
-      description: 'Security group for S3 Files NFS mount targets',
-    });
-
-    const s3FilesFs = new cdk.CustomResource(this, 'S3FilesFileSystem', {
-      serviceToken: s3FilesProvider.serviceToken,
-      properties: {
-        BucketArn: dataBucket.bucketArn,
-        RoleArn: s3FilesRole.roleArn,
-        SubnetIds: this.vpc.privateSubnets.map(s => s.subnetId).join(','),
-        SecurityGroupId: s3FilesSg.securityGroupId,
-      },
-    });
-
-    const s3FilesFileSystemId = s3FilesFs.getAttString('FileSystemId');
-
-    // NFS ingress rule added after workspaceSg is created (see below)
-
-    // ==========================================
-    // S3 Event Notifications → SQS (file change detection)
-    // ==========================================
-
-    const s3EventQueue = new sqs.Queue(this, 'S3EventQueue', {
-      queueName: 'antimatter-s3-events',
-      visibilityTimeout: cdk.Duration.seconds(30),
-      retentionPeriod: cdk.Duration.hours(4),
-    });
-
-    // EventBridge rule: S3 object events from data bucket → SQS
-    new events.Rule(this, 'S3ObjectEventRule', {
-      eventPattern: {
-        source: ['aws.s3'],
-        detailType: ['Object Created', 'Object Deleted'],
-        detail: {
-          bucket: { name: [dataBucket.bucketName] },
-        },
-      },
-      targets: [new events_targets.SqsQueue(s3EventQueue)],
-    });
+    // S3 Files security group, custom resource, and SQS queue are created
+    // after the VPC (see below — they reference this.vpc)
 
     // ==========================================
     // Authentication — Cognito User Pool
@@ -355,6 +316,47 @@ export class AntimatterStack extends cdk.Stack {
     this.vpc = new ec2.Vpc(this, 'Vpc', {
       maxAzs: 2,
       natGateways: 1,
+    });
+
+    // ==========================================
+    // S3 Files — mount targets + SQS event queue (requires VPC)
+    // ==========================================
+
+    // Security group for S3 Files mount targets
+    const s3FilesSg = new ec2.SecurityGroup(this, 'S3FilesSg', {
+      vpc: this.vpc,
+      description: 'Security group for S3 Files NFS mount targets',
+    });
+
+    const s3FilesFs = new cdk.CustomResource(this, 'S3FilesFileSystem', {
+      serviceToken: s3FilesProvider.serviceToken,
+      properties: {
+        BucketArn: dataBucket.bucketArn,
+        RoleArn: s3FilesRole.roleArn,
+        SubnetIds: this.vpc.privateSubnets.map(s => s.subnetId).join(','),
+        SecurityGroupId: s3FilesSg.securityGroupId,
+      },
+    });
+
+    const s3FilesFileSystemId = s3FilesFs.getAttString('FileSystemId');
+
+    // SQS queue for S3 event notifications (file change detection)
+    const s3EventQueue = new sqs.Queue(this, 'S3EventQueue', {
+      queueName: 'antimatter-s3-events',
+      visibilityTimeout: cdk.Duration.seconds(30),
+      retentionPeriod: cdk.Duration.hours(4),
+    });
+
+    // EventBridge rule: S3 object events from data bucket → SQS
+    new events.Rule(this, 'S3ObjectEventRule', {
+      eventPattern: {
+        source: ['aws.s3'],
+        detailType: ['Object Created', 'Object Deleted'],
+        detail: {
+          bucket: { name: [dataBucket.bucketName] },
+        },
+      },
+      targets: [new events_targets.SqsQueue(s3EventQueue)],
     });
 
     // ==========================================
