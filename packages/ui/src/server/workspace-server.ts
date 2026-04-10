@@ -220,6 +220,7 @@ const sharedConfig: SharedConfig = {
   ssmClient: new SSMClient({}),
   eventBridgeClient: new EventBridgeClient({}),
   eventBusName: process.env.EVENT_BUS_NAME || 'antimatter',
+  sqsQueueUrl: process.env.SQS_QUEUE_URL || undefined,
   getDeployLambdaClient,
   getDeployCloudfrontClient,
   onExecStart: () => connectionManager.holdShutdown(),

@@ -166,7 +166,7 @@ export class EventLog {
       // Deduplication: only suppress watcher events that duplicate recent rest-api events.
       // rest-api events are always accepted (they represent explicit user actions).
       // watcher events are redundant when a rest-api event for the same path was just processed.
-      if (dedupeKey && source === 'watcher') {
+      if (dedupeKey && (source === 'watcher' || source === 's3-event')) {
         const prev = this.dedupeWindow.get(dedupeKey);
         if (prev && (now - prev.loggedAt) < DEDUPE_WINDOW_MS) {
           continue; // Watcher event duplicates a recent rest-api event — skip

@@ -5,8 +5,8 @@
  * - LocalWorkspaceEnvironment (file system, command execution)
  * - WorkspaceService (file APIs, build, agent, etc.)
  * - PtyManager (pseudo-terminal)
- * - S3SyncScheduler (periodic workspace → S3 backup)
- * - FileChangeNotifier (filesystem watcher → WebSocket broadcasts)
+ * - S3EventPoller (S3 event notifications → workflow triggers)
+ * - FileChangeNotifier (event routing → WebSocket broadcasts)
  * - WorkflowManager (event-driven rule engine)
  * - ErrorStore (project error storage)
  * - EventLogger (structured logging)
@@ -15,28 +15,21 @@
  *
  * Lifecycle:
  *  1. Constructor creates lightweight shell (no I/O)
- *  2. initialize() does heavy lifting: S3 sync, git init, PTY, workflow engine
+ *  2. initialize() does heavy lifting: git init, PTY, workflow engine, S3 event poller
  *  3. shutdown() stops all subsystems and flushes pending data
  */
 
 import express from 'express';
-import { existsSync, readdirSync, mkdirSync, createWriteStream } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { pipeline } from 'node:stream/promises';
-import { Readable } from 'node:stream';
+import { existsSync, mkdirSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { WebSocket } from 'ws';
-import {
-  S3Client,
-  ListObjectsV2Command,
-  GetObjectCommand,
-} from '@aws-sdk/client-s3';
+import { S3Client } from '@aws-sdk/client-s3';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
-import { LocalWorkspaceEnvironment, syncToS3 } from '@antimatter/workspace';
-import type { SyncOptions, SyncResult } from '@antimatter/workspace';
-import { watchDebounced } from '@antimatter/filesystem';
-import type { FileSystem, WatchEvent, Watcher, WorkspacePath } from '@antimatter/filesystem';
+import { LocalWorkspaceEnvironment } from '@antimatter/workspace';
+import type { WatchEvent, WorkspacePath } from '@antimatter/filesystem';
+import { S3EventPoller } from './services/s3-event-poller.js';
 import { EventLogger } from './services/event-logger.js';
 import type { BuildRule, BuildResult } from '@antimatter/project-model';
 import { WorkspaceService } from './services/workspace-service.js';
@@ -89,6 +82,8 @@ export interface SharedConfig {
   getDeployCloudfrontClient: () => DeployCloudfrontClient;
   /** S3 bucket for the public website (CloudFront origin). Used for package publishing. */
   websiteBucket: string;
+  /** SQS queue URL for S3 event notifications (file change detection). */
+  sqsQueueUrl?: string;
   /** Called when a workflow command starts — holds global idle shutdown. */
   onExecStart: () => void;
   /** Called when a workflow command ends — releases global idle shutdown hold. */
@@ -103,15 +98,13 @@ const DEFAULT_WATCHER_IGNORE = ['.git/', '.vite-temp/', '.antimatter-cache/'];
 const DEFAULT_EXPLORER_IGNORE = [
   'node_modules/', '.antimatter-cache/', 'dist/', '.next/', '__pycache__/', '.git/',
 ];
-const NOISE_FILES = ['.antimatter-sync.json'];
+const NOISE_FILES: string[] = [];
 
 // ---------------------------------------------------------------------------
 // FileChangeNotifier — broadcasts filesystem changes via WebSocket
 // ---------------------------------------------------------------------------
 
 class FileChangeNotifier {
-  private watcher: Watcher | null = null;
-  private onBulkChange: (() => void) | null = null;
   private onFilteredChanges: ((events: readonly WatchEvent[], source?: string) => void) | null = null;
 
   private pendingBroadcast: { type: string; path: string }[] = [];
@@ -136,20 +129,38 @@ class FileChangeNotifier {
   setExplorerIgnore(patterns: string[]): void { this.explorerIgnorePatterns = patterns; }
   getExplorerIgnore(): string[] { return this.explorerIgnorePatterns; }
 
+  /** Initialize the notifier with broadcast and event routing callbacks. */
+  initialize(
+    broadcast: (msg: object) => void,
+    onFilteredChanges?: (events: readonly WatchEvent[], source?: string) => void,
+  ): void {
+    this.broadcastFn = broadcast;
+    this.onFilteredChanges = onFilteredChanges ?? null;
+  }
+
   /**
-   * Emit synthetic file change events (from REST API mutations).
-   * Follows the same filtering and routing as the filesystem watcher callback,
-   * ensuring workflow rules trigger reliably even when inotify doesn't fire.
-   * Deduplication with watcher events is handled by the workflow manager's
-   * serialized event processing.
+   * Emit synthetic file change events from REST API mutations (source='rest-api').
+   * Provides immediate workflow triggering for IDE-originated writes.
    */
   emitSynthetic(events: readonly { type: 'change' | 'delete'; path: string }[]): void {
+    this.emitEvents(events, 'rest-api');
+  }
+
+  /**
+   * Emit external file change events from S3 event notifications (source='s3-event').
+   * Provides eventual-consistency triggering for terminal/git/npm-originated writes.
+   */
+  emitExternal(events: readonly { type: 'change' | 'delete'; path: string }[]): void {
+    this.emitEvents(events, 's3-event');
+  }
+
+  private emitEvents(events: readonly { type: 'change' | 'delete'; path: string }[], source: string): void {
     const asWatch: WatchEvent[] = events.map(e => ({ type: e.type, path: e.path }));
     const filtered = asWatch.filter(e => !this.isWatcherIgnored(e.path));
     if (filtered.length === 0) return;
 
     if (this.onFilteredChanges) {
-      this.onFilteredChanges(filtered, 'rest-api');
+      this.onFilteredChanges(filtered, source);
     }
 
     const uiFiltered = filtered.filter(e => !this.isExplorerIgnored(e.path));
@@ -168,40 +179,6 @@ class FileChangeNotifier {
     const normalized = path.startsWith('/') ? path.slice(1) : path;
     return this.explorerIgnorePatterns.some(p => normalized.startsWith(p))
       || NOISE_FILES.includes(normalized);
-  }
-
-  start(
-    fs: FileSystem,
-    broadcast: (msg: object) => void,
-    onBulkChange?: () => void,
-    onFilteredChanges?: (events: readonly WatchEvent[], source?: string) => void,
-  ): void {
-    this.onBulkChange = onBulkChange ?? null;
-    this.onFilteredChanges = onFilteredChanges ?? null;
-    this.broadcastFn = broadcast;
-
-    this.watcher = watchDebounced(
-      fs,
-      '/' as WorkspacePath,
-      (events: readonly WatchEvent[]) => {
-        const watcherFiltered = events.filter(e => !this.isWatcherIgnored(e.path));
-        if (watcherFiltered.length === 0) return;
-
-        if (this.onFilteredChanges) {
-          this.onFilteredChanges(watcherFiltered, 'watcher');
-        }
-
-        const uiFiltered = watcherFiltered.filter(e => !this.isExplorerIgnored(e.path));
-        if (uiFiltered.length > 0) {
-          this.queueBroadcast(uiFiltered);
-        }
-
-        if (watcherFiltered.length > 20 && this.onBulkChange) {
-          this.onBulkChange();
-        }
-      },
-      300,
-    );
   }
 
   private queueBroadcast(events: readonly WatchEvent[]): void {
@@ -226,52 +203,6 @@ class FileChangeNotifier {
 
   stop(): void {
     this.flushBroadcast();
-    this.watcher?.close();
-    this.watcher = null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// S3SyncScheduler — periodic workspace → S3 backup
-// ---------------------------------------------------------------------------
-
-class S3SyncScheduler {
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private syncing = false;
-
-  constructor(
-    private readonly syncOptions: SyncOptions,
-    private readonly eventLogger: EventLogger,
-  ) {}
-
-  start(intervalMs = 30_000): void {
-    this.timer = setInterval(() => this.sync(), intervalMs);
-  }
-
-  async sync(): Promise<SyncResult | null> {
-    if (this.syncing) return null;
-    this.syncing = true;
-    try {
-      const result = await syncToS3(this.syncOptions);
-      if (result.uploaded > 0 || result.deleted > 0) {
-        this.eventLogger.info('system',
-          `S3 sync: ${result.uploaded} uploaded, ${result.deleted} deleted (${result.durationMs}ms)`,
-          { uploaded: result.uploaded, deleted: result.deleted, durationMs: result.durationMs });
-      }
-      return result;
-    } catch (err) {
-      this.eventLogger.error('system', 'S3 sync failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    } finally {
-      this.syncing = false;
-    }
-  }
-
-  async shutdown(): Promise<void> {
-    if (this.timer) { clearInterval(this.timer); this.timer = null; }
-    await this.sync();
   }
 }
 
@@ -474,7 +405,7 @@ export class ProjectContext {
   testResultsStorage!: FileTestResultsStorage;
   deployedResourceStore!: DeployedResourceStore;
   private eventLog?: import('./event-log.js').EventLog;
-  s3SyncScheduler: S3SyncScheduler | null = null;
+  private s3EventPoller?: S3EventPoller;
 
   /** WebSocket connections scoped to this project (for broadcast isolation). */
   readonly connections = new Set<WebSocket>();
@@ -546,8 +477,7 @@ export class ProjectContext {
     // Start event logger
     this.eventLogger.startPeriodicFlush(10_000);
 
-    // Initial sync from S3 (only if directory is empty)
-    const downloadedFiles = await this.initialSyncFromS3();
+    // With S3 Files, project files are available via NFS mount — no download needed.
 
     // Fetch Anthropic API key from SSM (fall back to config value)
     const ssmKey = await getSSMSecret(this.config.ssmClient, 'anthropic-api-key');
@@ -630,36 +560,27 @@ export class ProjectContext {
       }
     }
 
-    // Feed initial S3 files to workflow engine
-    if (downloadedFiles.length > 0) {
-      const syntheticEvents: WatchEvent[] = downloadedFiles
-        .map(p => ({ type: 'change' as const, path: p as WorkspacePath }));
-      console.log(`[project-context:${this.projectId}] Feeding ${syntheticEvents.length} initial files to workflow engine`);
-      this.workflowManager.onFileChanges(syntheticEvents);
-    }
-
     // Load ignore config
     await this.loadIgnoreConfig();
 
-    // S3 sync scheduler
-    if (this.config.projectsBucket) {
-      this.s3SyncScheduler = new S3SyncScheduler({
-        s3Client: new S3Client({}),
-        bucket: this.config.projectsBucket,
-        s3Prefix: `projects/${this.projectId}/files/`,
-        localPath: this.projectPath,
-        excludePatterns: ['node_modules/', '.git/', '.antimatter-cache/', 'dist/', 'dist-lambda/'],
-      }, this.eventLogger);
-      this.s3SyncScheduler.start(30_000);
-    }
-
-    // File change notifier
-    this.fileChangeNotifier.start(
-      this.env.fileSystem,
+    // File change notifier — routes events to workflow engine and WebSocket clients
+    this.fileChangeNotifier.initialize(
       (msg: object) => this.broadcastToClients(msg),
-      () => this.s3SyncScheduler?.sync(),
       (events, source) => this.workflowManager.onFileChanges(events, source as any),
     );
+
+    // S3 event poller — replaces inotify file watcher.
+    // Polls SQS for S3 object events (via EventBridge) to detect file changes
+    // from terminal/git/npm operations. IDE writes trigger immediately via emitSynthetic().
+    if (this.config.sqsQueueUrl) {
+      this.s3EventPoller = new S3EventPoller({
+        queueUrl: this.config.sqsQueueUrl,
+        s3Prefix: `projects/${this.projectId}/files/`,
+        ignorePatterns: [...DEFAULT_WATCHER_IGNORE, 'node_modules/'],
+        onEvents: (events) => this.fileChangeNotifier.emitExternal(events),
+      });
+      this.s3EventPoller.start();
+    }
 
     this.initialized = true;
     console.log(`[project-context] Project ${this.projectId} initialized`);
@@ -668,67 +589,6 @@ export class ProjectContext {
   }
 
   // ---- S3 Initial Sync ----
-
-  private async initialSyncFromS3(): Promise<string[]> {
-    const bucket = this.config.projectsBucket;
-    if (!bucket) {
-      console.log(`[sync:${this.projectId}] No S3 bucket configured — skipping sync`);
-      return [];
-    }
-
-    if (existsSync(this.projectPath)) {
-      const entries = readdirSync(this.projectPath);
-      if (entries.length > 0) {
-        console.log(`[sync:${this.projectId}] Project directory has ${entries.length} entries — skipping S3 sync`);
-        return [];
-      }
-    }
-
-    console.log(`[sync:${this.projectId}] Empty project directory — syncing from S3...`);
-    const s3 = this.config.s3Client;
-    const prefix = `projects/${this.projectId}/files/`;
-    const downloadedFiles: string[] = [];
-
-    try {
-      let continuationToken: string | undefined;
-      do {
-        const result = await s3.send(new ListObjectsV2Command({
-          Bucket: bucket,
-          Prefix: prefix,
-          ContinuationToken: continuationToken,
-        }));
-
-        for (const obj of result.Contents ?? []) {
-          if (!obj.Key || obj.Key.endsWith('/')) continue;
-          const relativePath = obj.Key.slice(prefix.length);
-          const localPath = join(this.projectPath, relativePath);
-          await mkdir(dirname(localPath), { recursive: true });
-
-          const getResult = await s3.send(new GetObjectCommand({
-            Bucket: bucket, Key: obj.Key,
-          }));
-          if (getResult.Body) {
-            const stream = getResult.Body as Readable;
-            const ws = createWriteStream(localPath);
-            await pipeline(stream, ws);
-            downloadedFiles.push(relativePath);
-          }
-        }
-        continuationToken = result.NextContinuationToken;
-      } while (continuationToken);
-
-      console.log(`[sync:${this.projectId}] Downloaded ${downloadedFiles.length} files from S3`);
-      this.eventLogger.info('workspace', `S3 sync complete: ${downloadedFiles.length} files downloaded`,
-        { downloaded: downloadedFiles.length });
-    } catch (err) {
-      console.error(`[sync:${this.projectId}] S3 sync failed:`, err);
-      this.eventLogger.error('workspace', 'S3 initial sync failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    return downloadedFiles;
-  }
 
   // ---- Git Auto-Init ----
 
@@ -764,7 +624,7 @@ export class ProjectContext {
       const gitignorePath = join(this.projectPath, '.gitignore');
       let gitignoreContent = '';
       try { gitignoreContent = await readFile(gitignorePath, 'utf-8'); } catch { /* no .gitignore */ }
-      const ignoreEntries = ['.antimatter-sync.json', '.antimatter-cache/'];
+      const ignoreEntries = ['.antimatter-cache/'];
       const missing = ignoreEntries.filter(e => !gitignoreContent.split('\n').some(l => l.trim() === e));
       if (missing.length > 0) {
         const suffix = (gitignoreContent && !gitignoreContent.endsWith('\n')) ? '\n' : '';
@@ -1239,9 +1099,9 @@ export class ProjectContext {
   async shutdown(): Promise<void> {
     console.log(`[project-context:${this.projectId}] Shutting down...`);
     this.fileChangeNotifier.stop();
+    if (this.s3EventPoller) await this.s3EventPoller.stop();
     this.ptyManager.closeAll();
     if (this.eventLog) await this.eventLog.shutdown();
-    if (this.s3SyncScheduler) await this.s3SyncScheduler.shutdown();
     await this.eventLogger.shutdown();
     // Reject all pending browser automation commands
     for (const [requestId, pending] of this.pendingBrowserCommands) {

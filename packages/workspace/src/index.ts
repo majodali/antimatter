@@ -18,6 +18,4 @@ export type { MemoryWorkspaceEnvironmentOptions } from './memory-workspace-envir
 // Adapter
 export { WorkspaceEnvironmentRunnerAdapter } from './runner-adapter.js';
 
-// Sync engine
-export { syncFromS3, syncToS3 } from './s3-sync.js';
-export type { SyncOptions, SyncResult, SyncManifest } from './s3-sync.js';
+// S3 sync engine removed — S3 Files mount replaces EBS + sync

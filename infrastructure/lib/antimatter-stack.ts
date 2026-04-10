@@ -9,10 +9,14 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as events from 'aws-cdk-lib/aws-events';
+import * as events_targets from 'aws-cdk-lib/aws-events-targets';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as cr from 'aws-cdk-lib/custom-resources';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -112,6 +116,8 @@ export class AntimatterStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY, // WARNING: For dev only
       autoDeleteObjects: true, // WARNING: For dev only
       encryption: s3.BucketEncryption.S3_MANAGED,
+      versioned: true, // Required for S3 Files
+      eventBridgeEnabled: true, // S3 event notifications → EventBridge (for file change detection)
     });
 
     // ==========================================
@@ -120,6 +126,170 @@ export class AntimatterStack extends cdk.Stack {
 
     const eventBus = new events.EventBus(this, 'EventBus', {
       eventBusName: 'antimatter',
+    });
+
+    // ==========================================
+    // S3 Files — Mount S3 bucket as POSIX filesystem
+    // ==========================================
+
+    // IAM role that S3 Files assumes to access the data bucket
+    const s3FilesRole = new iam.Role(this, 'S3FilesRole', {
+      assumedBy: new iam.ServicePrincipal('elasticfilesystem.amazonaws.com'),
+      description: 'IAM role for S3 Files to access data bucket',
+    });
+    // Scope down the trust policy with source conditions
+    (s3FilesRole.assumeRolePolicy as iam.PolicyDocument).addStatements(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        principals: [new iam.ServicePrincipal('elasticfilesystem.amazonaws.com')],
+        actions: ['sts:AssumeRole'],
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': this.account },
+          ArnLike: { 'aws:SourceArn': `arn:aws:s3files:${this.region}:${this.account}:file-system/*` },
+        },
+      }),
+    );
+    s3FilesRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'S3BucketPermissions',
+      actions: ['s3:ListBucket', 's3:ListBucketVersions'],
+      resources: [dataBucket.bucketArn],
+    }));
+    s3FilesRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'S3ObjectPermissions',
+      actions: ['s3:AbortMultipartUpload', 's3:DeleteObject*', 's3:GetObject*', 's3:List*', 's3:PutObject*'],
+      resources: [dataBucket.arnForObjects('*')],
+    }));
+    s3FilesRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'EventBridgeManage',
+      actions: ['events:DeleteRule', 'events:DisableRule', 'events:EnableRule', 'events:PutRule', 'events:PutTargets', 'events:RemoveTargets'],
+      resources: ['arn:aws:events:*:*:rule/DO-NOT-DELETE-S3-Files*'],
+      conditions: { StringEquals: { 'events:ManagedBy': 'elasticfilesystem.amazonaws.com' } },
+    }));
+    s3FilesRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'EventBridgeRead',
+      actions: ['events:DescribeRule', 'events:ListRuleNamesByTarget', 'events:ListRules', 'events:ListTargetsByRule'],
+      resources: ['arn:aws:events:*:*:rule/*'],
+    }));
+
+    // S3 Files filesystem — created via Custom Resource (no CloudFormation type yet)
+    const s3FilesProvider = new cr.Provider(this, 'S3FilesProvider', {
+      onEventHandler: new lambda.Function(this, 'S3FilesHandler', {
+        runtime: lambda.Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: lambda.Code.fromInline(`
+          const { execSync } = require('child_process');
+          exports.handler = async (event) => {
+            const region = process.env.AWS_REGION;
+            if (event.RequestType === 'Create') {
+              const bucketArn = event.ResourceProperties.BucketArn;
+              const roleArn = event.ResourceProperties.RoleArn;
+              const subnetIds = event.ResourceProperties.SubnetIds;
+              const sgId = event.ResourceProperties.SecurityGroupId;
+              // Create file system
+              const fsResult = JSON.parse(execSync(
+                'aws s3files create-file-system --region ' + region +
+                ' --bucket ' + bucketArn +
+                ' --role-arn ' + roleArn,
+                { encoding: 'utf-8' }
+              ));
+              const fsId = fsResult.FileSystemId || fsResult.fileSystemId;
+              // Create mount targets in each subnet
+              for (const subnetId of subnetIds.split(',')) {
+                try {
+                  execSync(
+                    'aws s3files create-mount-target --region ' + region +
+                    ' --file-system-id ' + fsId +
+                    ' --subnet-id ' + subnetId +
+                    ' --security-groups ' + sgId,
+                    { encoding: 'utf-8' }
+                  );
+                } catch (e) { console.log('Mount target error (may already exist):', e.message); }
+              }
+              return { PhysicalResourceId: fsId, Data: { FileSystemId: fsId } };
+            }
+            if (event.RequestType === 'Delete') {
+              const fsId = event.PhysicalResourceId;
+              try {
+                // List and delete mount targets first
+                const mtResult = JSON.parse(execSync(
+                  'aws s3files describe-mount-targets --region ' + region +
+                  ' --file-system-id ' + fsId,
+                  { encoding: 'utf-8' }
+                ));
+                for (const mt of (mtResult.MountTargets || [])) {
+                  execSync(
+                    'aws s3files delete-mount-target --region ' + region +
+                    ' --mount-target-id ' + mt.MountTargetId,
+                    { encoding: 'utf-8' }
+                  );
+                }
+                // Wait for mount targets to be deleted
+                await new Promise(r => setTimeout(r, 30000));
+                execSync(
+                  'aws s3files delete-file-system --region ' + region +
+                  ' --file-system-id ' + fsId,
+                  { encoding: 'utf-8' }
+                );
+              } catch (e) { console.log('Delete error:', e.message); }
+              return { PhysicalResourceId: fsId };
+            }
+            return { PhysicalResourceId: event.PhysicalResourceId };
+          };
+        `),
+        timeout: cdk.Duration.minutes(5),
+        initialPolicy: [
+          new iam.PolicyStatement({
+            actions: ['s3files:*', 'iam:PassRole'],
+            resources: ['*'],
+          }),
+        ],
+      }),
+      logGroup: new logs.LogGroup(this, 'S3FilesProviderLogs', {
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    });
+
+    // Security group for S3 Files mount targets
+    const s3FilesSg = new ec2.SecurityGroup(this, 'S3FilesSg', {
+      vpc: this.vpc,
+      description: 'Security group for S3 Files NFS mount targets',
+    });
+
+    const s3FilesFs = new cdk.CustomResource(this, 'S3FilesFileSystem', {
+      serviceToken: s3FilesProvider.serviceToken,
+      properties: {
+        BucketArn: dataBucket.bucketArn,
+        RoleArn: s3FilesRole.roleArn,
+        SubnetIds: this.vpc.privateSubnets.map(s => s.subnetId).join(','),
+        SecurityGroupId: s3FilesSg.securityGroupId,
+      },
+    });
+
+    const s3FilesFileSystemId = s3FilesFs.getAttString('FileSystemId');
+
+    // NFS ingress rule added after workspaceSg is created (see below)
+
+    // ==========================================
+    // S3 Event Notifications → SQS (file change detection)
+    // ==========================================
+
+    const s3EventQueue = new sqs.Queue(this, 'S3EventQueue', {
+      queueName: 'antimatter-s3-events',
+      visibilityTimeout: cdk.Duration.seconds(30),
+      retentionPeriod: cdk.Duration.hours(4),
+    });
+
+    // EventBridge rule: S3 object events from data bucket → SQS
+    new events.Rule(this, 'S3ObjectEventRule', {
+      eventPattern: {
+        source: ['aws.s3'],
+        detailType: ['Object Created', 'Object Deleted'],
+        detail: {
+          bucket: { name: [dataBucket.bucketName] },
+        },
+      },
+      targets: [new events_targets.SqsQueue(s3EventQueue)],
     });
 
     // ==========================================
@@ -247,6 +417,9 @@ export class AntimatterStack extends cdk.Stack {
       description: 'IAM role for EC2 workspace instances',
     });
 
+    // Grant workspace role SQS access for S3 event polling
+    s3EventQueue.grantConsumeMessages(workspaceRole);
+
     const instanceProfile = new iam.InstanceProfile(this, 'WorkspaceInstanceProfile', {
       role: workspaceRole,
     });
@@ -293,6 +466,9 @@ export class AntimatterStack extends cdk.Stack {
 
     // Allow ALB to reach workspace instances on port 8080
     workspaceAlb.connections.allowTo(workspaceSg, ec2.Port.tcp(8080), 'Allow ALB to reach workspace instances');
+
+    // Allow workspace instances to reach S3 Files mount targets via NFS (TCP 2049)
+    s3FilesSg.addIngressRule(workspaceSg, ec2.Port.tcp(2049), 'Allow NFS from workspace instances');
 
     // EC2 Launch Template — base config for workspace instances.
     // User-data is provided at RunInstances time by workspace-ec2-service
@@ -393,6 +569,8 @@ export class AntimatterStack extends cdk.Stack {
     apiFunction.addEnvironment('WORKSPACE_TARGET_GROUP_ARN', workspaceTargetGroup.targetGroupArn);
     apiFunction.addEnvironment('WORKSPACE_ALB_DNS', workspaceAlb.loadBalancerDnsName);
     apiFunction.addEnvironment('WORKSPACE_SHARED_MODE', 'true');
+    apiFunction.addEnvironment('S3_FILES_FS_ID', s3FilesFileSystemId);
+    apiFunction.addEnvironment('SQS_QUEUE_URL', s3EventQueue.queueUrl);
 
     // ==========================================
     // Self-Deployment Permissions (Step 5)
@@ -545,6 +723,16 @@ export class AntimatterStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'EventBusName', {
       value: eventBus.eventBusName,
       description: 'EventBridge event bus for system events',
+    });
+
+    new cdk.CfnOutput(this, 'S3FilesFileSystemId', {
+      value: s3FilesFileSystemId,
+      description: 'S3 Files filesystem ID for workspace mounts',
+    });
+
+    new cdk.CfnOutput(this, 'S3EventQueueUrl', {
+      value: s3EventQueue.queueUrl,
+      description: 'SQS queue URL for S3 event notifications',
     });
 
     // ==========================================

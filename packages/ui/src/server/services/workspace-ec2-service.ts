@@ -18,10 +18,6 @@ import {
   StartInstancesCommand,
   TerminateInstancesCommand,
   DescribeInstancesCommand,
-  CreateVolumeCommand,
-  AttachVolumeCommand,
-  DescribeVolumesCommand,
-  DescribeSubnetsCommand,
   CreateTagsCommand,
 } from '@aws-sdk/client-ec2';
 import type { Instance } from '@aws-sdk/client-ec2';
@@ -46,7 +42,6 @@ export interface WorkspaceInstanceInfo {
   port: number;
   sessionToken: string;
   startedAt?: string;
-  volumeId?: string;
 }
 
 export interface WorkspaceEc2ServiceConfig {
@@ -65,6 +60,10 @@ export interface WorkspaceEc2ServiceConfig {
    * initializes project contexts lazily when traffic arrives.
    */
   sharedMode?: boolean;
+  /** S3 Files filesystem ID for mounting project data. */
+  s3FilesFileSystemId?: string;
+  /** SQS queue URL for S3 event notifications. */
+  sqsQueueUrl?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,14 +151,6 @@ export class WorkspaceEc2Service {
       }
     }
 
-    // Find EBS data volume
-    let volumeId: string | undefined;
-    for (const bdm of instance.BlockDeviceMappings ?? []) {
-      if (bdm.DeviceName === '/dev/sdf' || bdm.DeviceName === '/dev/xvdf') {
-        volumeId = bdm.Ebs?.VolumeId;
-      }
-    }
-
     // If the instance is RUNNING and we have an IP, ensure it's registered in the target group
     if (status === 'RUNNING' && privateIp) {
       await this.ensureTargetRegistered(privateIp);
@@ -173,7 +164,6 @@ export class WorkspaceEc2Service {
       port: 8080,
       sessionToken: sessionToken ?? '',
       startedAt: instance.LaunchTime?.toISOString(),
-      volumeId,
     };
   }
 
@@ -195,12 +185,8 @@ export class WorkspaceEc2Service {
     const sessionToken = randomUUID();
     WorkspaceEc2Service.tokenCache.set(projectId, sessionToken);
 
-    // Pin to the first private subnet (single AZ for EBS compatibility)
+    // Pin to the first private subnet
     const subnetId = this.config.subnetIds[0];
-    const az = await this.getSubnetAz(subnetId);
-
-    // Find or create EBS data volume in the same AZ
-    const volumeId = await this.findOrCreateVolume(projectId, az);
 
     // Generate user-data script with project-specific config
     const userData = this.generateUserData(projectId, sessionToken);
@@ -233,25 +219,8 @@ export class WorkspaceEc2Service {
     const instanceId = instance.InstanceId;
     console.log(`[workspace-ec2] Launched instance ${instanceId} for project ${projectId}`);
 
-    // Attach EBS data volume
-    try {
-      await this.ec2.send(new AttachVolumeCommand({
-        InstanceId: instanceId,
-        VolumeId: volumeId,
-        Device: '/dev/sdf',
-      }));
-      console.log(`[workspace-ec2] Attached volume ${volumeId} to ${instanceId}`);
-      this.eventLogger?.info('workspace', `Attached volume ${volumeId} to ${instanceId}`, { instanceId, volumeId });
-    } catch (err) {
-      console.error(`[workspace-ec2] Failed to attach volume ${volumeId}:`, err);
-      this.eventLogger?.error('workspace', `Failed to attach volume ${volumeId}`, {
-        instanceId, volumeId, error: err instanceof Error ? err.message : String(err),
-      });
-      // Continue — instance can still work without data volume
-    }
-
     await this.eventLogger?.emit('workspace.instance.launched', 'workspace', 'info',
-      `Launched new instance ${instanceId}`, { instanceId, volumeId });
+      `Launched new instance ${instanceId}`, { instanceId });
 
     return {
       projectId,
@@ -259,7 +228,6 @@ export class WorkspaceEc2Service {
       status: 'PENDING',
       port: 8080,
       sessionToken,
-      volumeId,
     };
   }
 
@@ -440,61 +408,6 @@ export class WorkspaceEc2Service {
     };
   }
 
-  // ---- EBS volume management ----
-
-  /**
-   * Find an existing data volume for a project, or create a new one.
-   * Volumes are tagged with antimatter:projectId for lookup.
-   */
-  private async findOrCreateVolume(projectId: string, az: string): Promise<string> {
-    // Look for existing volume in the same AZ
-    const describeResult = await this.ec2.send(new DescribeVolumesCommand({
-      Filters: [
-        { Name: 'tag:antimatter:projectId', Values: [projectId] },
-        { Name: 'tag:antimatter:volumeType', Values: ['data'] },
-        { Name: 'status', Values: ['available', 'in-use'] },
-      ],
-    }));
-
-    const existing = describeResult.Volumes?.find(v => v.AvailabilityZone === az);
-    if (existing?.VolumeId) {
-      console.log(`[workspace-ec2] Found existing volume ${existing.VolumeId} for ${projectId}`);
-      return existing.VolumeId;
-    }
-
-    // Create new volume
-    const createResult = await this.ec2.send(new CreateVolumeCommand({
-      AvailabilityZone: az,
-      Size: 50, // 50 GB gp3 — ~$4/month
-      VolumeType: 'gp3',
-      Encrypted: true,
-      TagSpecifications: [{
-        ResourceType: 'volume',
-        Tags: [
-          { Key: 'Name', Value: `antimatter-data-${projectId}` },
-          { Key: 'antimatter:projectId', Value: projectId },
-          { Key: 'antimatter:volumeType', Value: 'data' },
-          { Key: 'antimatter:managed', Value: 'true' },
-        ],
-      }],
-    }));
-
-    const volumeId = createResult.VolumeId!;
-    console.log(`[workspace-ec2] Created new volume ${volumeId} for ${projectId} in ${az}`);
-    this.eventLogger?.info('workspace', `Created new EBS volume ${volumeId}`, { volumeId, az });
-    return volumeId;
-  }
-
-  /**
-   * Get the availability zone of a subnet.
-   */
-  private async getSubnetAz(subnetId: string): Promise<string> {
-    const result = await this.ec2.send(new DescribeSubnetsCommand({
-      SubnetIds: [subnetId],
-    }));
-    return result.Subnets?.[0]?.AvailabilityZone ?? 'us-west-2a';
-  }
-
   // ---- User data script ----
 
   /**
@@ -513,6 +426,8 @@ export class WorkspaceEc2Service {
     const cognitoUserPoolId = process.env.COGNITO_USER_POOL_ID ?? '';
     const cognitoClientId = process.env.COGNITO_CLIENT_ID ?? '';
     const targetGroupArn = this.config.targetGroupArn;
+    const s3FilesFileSystemId = this.config.s3FilesFileSystemId ?? '';
+    const sqsQueueUrl = this.config.sqsQueueUrl ?? '';
 
     return `#!/bin/bash
 set -x
@@ -569,34 +484,30 @@ EVENT_BUS_NAME=${eventBusName}
 COGNITO_USER_POOL_ID=${cognitoUserPoolId}
 COGNITO_CLIENT_ID=${cognitoClientId}
 WORKSPACE_TARGET_GROUP_ARN=${targetGroupArn}
+S3_FILES_FS_ID=${s3FilesFileSystemId}
+SQS_QUEUE_URL=${sqsQueueUrl}
+IDLE_TIMEOUT_MS=0
 ENVEOF
 
-# ---- Mount EBS data volume ----
-DATA_DEVICE=""
+# ---- Mount S3 Files filesystem ----
 MOUNT_POINT="/workspace/data"
 mkdir -p "$MOUNT_POINT"
 
-# Wait for device to appear (handles various naming: sdf, xvdf, nvme1n1)
-for i in $(seq 1 30); do
-  if [ -e "/dev/sdf" ]; then DATA_DEVICE="/dev/sdf"; break; fi
-  if [ -e "/dev/xvdf" ]; then DATA_DEVICE="/dev/xvdf"; break; fi
-  if [ -e "/dev/nvme1n1" ]; then DATA_DEVICE="/dev/nvme1n1"; break; fi
-  sleep 1
-done
+# Increase inotify limits (S3 Files NFS may still use some watchers internally)
+echo "fs.inotify.max_user_watches=524288" > /etc/sysctl.d/99-inotify.conf
+sysctl -p /etc/sysctl.d/99-inotify.conf 2>/dev/null || true
 
-if [ -n "$DATA_DEVICE" ]; then
-  # Format if new volume (no filesystem)
-  if ! blkid "$DATA_DEVICE" 2>/dev/null; then
-    echo "[workspace] Formatting new data volume at $DATA_DEVICE"
-    mkfs.ext4 "$DATA_DEVICE"
-  fi
-  mount "$DATA_DEVICE" "$MOUNT_POINT" || true
+if [ -n "${s3FilesFileSystemId}" ]; then
+  # Install amazon-efs-utils (required for S3 Files mount)
+  yum install -y amazon-efs-utils 2>/dev/null || true
 
-  # Create project directory
-  mkdir -p "$MOUNT_POINT/${safeProjectId}"
-  echo "[workspace] Data volume mounted at $MOUNT_POINT"
+  mount -t s3files ${s3FilesFileSystemId}:/ "$MOUNT_POINT" || {
+    echo "[workspace] ERROR: S3 Files mount failed — using local storage as fallback"
+  }
+  mkdir -p "$MOUNT_POINT/projects/${safeProjectId}/files"
+  echo "[workspace] S3 Files mounted at $MOUNT_POINT"
 else
-  echo "[workspace] WARNING: No data device found — using ephemeral storage"
+  echo "[workspace] WARNING: No S3 Files filesystem ID — using local storage"
   mkdir -p "$MOUNT_POINT/${safeProjectId}"
 fi
 
@@ -621,7 +532,7 @@ After=network.target docker.service
 Type=simple
 EnvironmentFile=/opt/antimatter/config.env
 WorkingDirectory=/opt/antimatter
-ExecStartPre=/bin/bash -c 'mkdir -p /workspace/data && (mount /dev/sdf /workspace/data 2>/dev/null || mount /dev/xvdf /workspace/data 2>/dev/null || mount /dev/nvme1n1 /workspace/data 2>/dev/null || true)'
+ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && mkdir -p /workspace/data && (mountpoint -q /workspace/data || mount -t s3files $S3_FILES_FS_ID:/ /workspace/data 2>/dev/null || true)'
 ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && aws s3 cp "s3://$PROJECTS_BUCKET/workspace-server/workspace-server.js" /opt/antimatter/workspace-server.js 2>/dev/null || echo "[workspace] S3 download failed — using existing binary"'
 ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && aws s3 cp "s3://$PROJECTS_BUCKET/workspace-server/package.json" /opt/antimatter/package.json 2>/dev/null && cd /opt/antimatter && npm install --production 2>/dev/null || true'
 ExecStart=/usr/bin/node /opt/antimatter/workspace-server.js

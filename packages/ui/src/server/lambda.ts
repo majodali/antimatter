@@ -154,6 +154,8 @@ const workspaceConfig: WorkspaceEc2ServiceConfig | null = process.env.WORKSPACE_
       albDns: process.env.WORKSPACE_ALB_DNS ?? '',
       projectsBucket,
       sharedMode: process.env.WORKSPACE_SHARED_MODE === 'true',
+      s3FilesFileSystemId: process.env.S3_FILES_FS_ID || undefined,
+      sqsQueueUrl: process.env.SQS_QUEUE_URL || undefined,
     }
   : null;
 
