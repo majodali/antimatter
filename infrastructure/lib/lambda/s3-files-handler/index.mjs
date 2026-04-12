@@ -21,23 +21,23 @@ export async function handler(event) {
     if (event.RequestType === 'Create') {
       const { BucketArn, RoleArn, SubnetIds, SecurityGroupId } = event.ResourceProperties;
 
-      // Create filesystem
+      // Create filesystem (SDK v3 uses camelCase parameters)
       const fsResult = await client.send(new CreateFileSystemCommand({
-        Bucket: BucketArn,
-        RoleArn: RoleArn,
+        bucket: BucketArn,
+        roleArn: RoleArn,
       }));
-      const fsId = fsResult.FileSystemId;
+      const fsId = fsResult.fileSystemId;
       console.log(`Created filesystem: ${fsId}`);
 
       // Create mount targets in each subnet
       for (const subnetId of SubnetIds.split(',')) {
         try {
           const mtResult = await client.send(new CreateMountTargetCommand({
-            FileSystemId: fsId,
-            SubnetId: subnetId,
-            SecurityGroups: [SecurityGroupId],
+            fileSystemId: fsId,
+            subnetId: subnetId,
+            securityGroups: [SecurityGroupId],
           }));
-          console.log(`Created mount target ${mtResult.MountTargetId} in ${subnetId}`);
+          console.log(`Created mount target ${mtResult.mountTargetId} in ${subnetId}`);
         } catch (e) {
           console.log(`Mount target error in ${subnetId} (may already exist):`, e.message);
         }
@@ -45,7 +45,7 @@ export async function handler(event) {
 
       return {
         PhysicalResourceId: fsId,
-        Data: { FileSystemId: fsId },
+        Data: { FileSystemId: fsId },  // PascalCase for CloudFormation getAtt
       };
     }
 
@@ -59,24 +59,24 @@ export async function handler(event) {
       try {
         // List and delete mount targets first
         const mtResult = await client.send(new DescribeMountTargetsCommand({
-          FileSystemId: fsId,
+          fileSystemId: fsId,
         }));
-        for (const mt of (mtResult.MountTargets || [])) {
-          console.log(`Deleting mount target ${mt.MountTargetId}`);
+        for (const mt of (mtResult.mountTargets || [])) {
+          console.log(`Deleting mount target ${mt.mountTargetId}`);
           await client.send(new DeleteMountTargetCommand({
-            MountTargetId: mt.MountTargetId,
+            mountTargetId: mt.mountTargetId,
           }));
         }
 
         // Wait for mount targets to be deleted
-        if (mtResult.MountTargets?.length > 0) {
+        if (mtResult.mountTargets?.length > 0) {
           console.log('Waiting 60s for mount targets to be deleted...');
           await new Promise(r => setTimeout(r, 60000));
         }
 
         console.log(`Deleting filesystem ${fsId}`);
         await client.send(new DeleteFileSystemCommand({
-          FileSystemId: fsId,
+          fileSystemId: fsId,
         }));
       } catch (e) {
         console.log('Delete error (may already be deleted):', e.message);
