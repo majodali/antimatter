@@ -17,6 +17,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@aws-sdk/client-s3files": "^3.1029.0",
     "@types/node": "^25.2.3",
     "@types/source-map-support": "^0.5.10",
     "aws-cdk-lib": "^2.238.0",

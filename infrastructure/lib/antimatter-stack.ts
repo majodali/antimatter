@@ -17,6 +17,7 @@ import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -171,7 +172,30 @@ export class AntimatterStack extends cdk.Stack {
       resources: ['arn:aws:events:*:*:rule/*'],
     }));
 
-    // S3 Files filesystem — created via AwsCustomResource (SDK calls).
+    // S3 Files filesystem — custom resource backed by NodejsFunction.
+    // The @aws-sdk/client-s3files package is too new for the Lambda runtime,
+    // so we bundle it with the handler via NodejsFunction (esbuild).
+    const s3FilesHandler = new NodejsFunction(this, 'S3FilesHandler', {
+      entry: path.join(__dirname, 'lambda/s3-files-handler/index.mjs'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      timeout: cdk.Duration.minutes(5),
+      initialPolicy: [
+        new iam.PolicyStatement({
+          actions: ['s3files:*', 'iam:PassRole'],
+          resources: ['*'],
+        }),
+      ],
+    });
+
+    const s3FilesProvider = new cr.Provider(this, 'S3FilesProvider', {
+      onEventHandler: s3FilesHandler,
+      logGroup: new logs.LogGroup(this, 'S3FilesProviderLogs', {
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    });
+
     // Security group, mount targets, and SQS queue are created after the VPC (see below).
 
     // ==========================================
@@ -243,69 +267,26 @@ export class AntimatterStack extends cdk.Stack {
     // S3 Files — filesystem + mount targets + SQS event queue (requires VPC)
     // ==========================================
 
-    const s3FilesPolicy = new iam.PolicyStatement({
-      actions: ['s3files:*', 'iam:PassRole'],
-      resources: ['*'],
-    });
-
-    // Create the S3 Files filesystem via SDK call
-    const s3FilesFsResource = new cr.AwsCustomResource(this, 'S3FilesFileSystem', {
-      onCreate: {
-        service: '@aws-sdk/client-s3files',
-        action: 'CreateFileSystem',
-        parameters: {
-          Bucket: dataBucket.bucketArn,
-          RoleArn: s3FilesRole.roleArn,
-        },
-        physicalResourceId: cr.PhysicalResourceId.fromResponse('FileSystemId'),
-      },
-      onDelete: {
-        service: '@aws-sdk/client-s3files',
-        action: 'DeleteFileSystem',
-        parameters: {
-          FileSystemId: new cr.PhysicalResourceIdReference(),
-        },
-      },
-      policy: cr.AwsCustomResourcePolicy.fromStatements([s3FilesPolicy]),
-      logGroup: new logs.LogGroup(this, 'S3FilesProviderLogs', {
-        retention: logs.RetentionDays.ONE_WEEK,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-      }),
-    });
-
-    const s3FilesFileSystemId = s3FilesFsResource.getResponseField('FileSystemId');
-
     // Security group for S3 Files mount targets
     const s3FilesSg = new ec2.SecurityGroup(this, 'S3FilesSg', {
       vpc: this.vpc,
       description: 'Security group for S3 Files NFS mount targets',
     });
 
-    // Create mount targets in each private subnet
-    for (let i = 0; i < this.vpc.privateSubnets.length; i++) {
-      const subnet = this.vpc.privateSubnets[i];
-      const mt = new cr.AwsCustomResource(this, `S3FilesMountTarget${i}`, {
-        onCreate: {
-          service: '@aws-sdk/client-s3files',
-          action: 'CreateMountTarget',
-          parameters: {
-            FileSystemId: s3FilesFileSystemId,
-            SubnetId: subnet.subnetId,
-            SecurityGroups: [s3FilesSg.securityGroupId],
-          },
-          physicalResourceId: cr.PhysicalResourceId.fromResponse('MountTargetId'),
-        },
-        onDelete: {
-          service: '@aws-sdk/client-s3files',
-          action: 'DeleteMountTarget',
-          parameters: {
-            MountTargetId: new cr.PhysicalResourceIdReference(),
-          },
-        },
-        policy: cr.AwsCustomResourcePolicy.fromStatements([s3FilesPolicy]),
-      });
-      mt.node.addDependency(s3FilesFsResource);
-    }
+    // Create S3 Files filesystem + mount targets via custom resource.
+    // The handler creates the filesystem and mount targets in one call,
+    // and cleans up on delete.
+    const s3FilesFs = new cdk.CustomResource(this, 'S3FilesFileSystem', {
+      serviceToken: s3FilesProvider.serviceToken,
+      properties: {
+        BucketArn: dataBucket.bucketArn,
+        RoleArn: s3FilesRole.roleArn,
+        SubnetIds: this.vpc.privateSubnets.map(s => s.subnetId).join(','),
+        SecurityGroupId: s3FilesSg.securityGroupId,
+      },
+    });
+
+    const s3FilesFileSystemId = s3FilesFs.getAttString('FileSystemId');
 
     // SQS queue for S3 event notifications (file change detection)
     const s3EventQueue = new sqs.Queue(this, 'S3EventQueue', {

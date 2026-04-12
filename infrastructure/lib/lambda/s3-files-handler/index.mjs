@@ -1,0 +1,94 @@
+/**
+ * Custom Resource handler for S3 Files filesystem lifecycle.
+ * Uses @aws-sdk/client-s3files to create/delete filesystems and mount targets.
+ */
+import {
+  S3FilesClient,
+  CreateFileSystemCommand,
+  DeleteFileSystemCommand,
+  CreateMountTargetCommand,
+  DeleteMountTargetCommand,
+  DescribeMountTargetsCommand,
+} from '@aws-sdk/client-s3files';
+
+const client = new S3FilesClient({});
+
+export async function handler(event) {
+  const region = process.env.AWS_REGION;
+  console.log('Event:', JSON.stringify(event, null, 2));
+
+  try {
+    if (event.RequestType === 'Create') {
+      const { BucketArn, RoleArn, SubnetIds, SecurityGroupId } = event.ResourceProperties;
+
+      // Create filesystem
+      const fsResult = await client.send(new CreateFileSystemCommand({
+        Bucket: BucketArn,
+        RoleArn: RoleArn,
+      }));
+      const fsId = fsResult.FileSystemId;
+      console.log(`Created filesystem: ${fsId}`);
+
+      // Create mount targets in each subnet
+      for (const subnetId of SubnetIds.split(',')) {
+        try {
+          const mtResult = await client.send(new CreateMountTargetCommand({
+            FileSystemId: fsId,
+            SubnetId: subnetId,
+            SecurityGroups: [SecurityGroupId],
+          }));
+          console.log(`Created mount target ${mtResult.MountTargetId} in ${subnetId}`);
+        } catch (e) {
+          console.log(`Mount target error in ${subnetId} (may already exist):`, e.message);
+        }
+      }
+
+      return {
+        PhysicalResourceId: fsId,
+        Data: { FileSystemId: fsId },
+      };
+    }
+
+    if (event.RequestType === 'Delete') {
+      const fsId = event.PhysicalResourceId;
+      if (!fsId || fsId === 'CREATE_FAILED') {
+        console.log('No filesystem to delete');
+        return { PhysicalResourceId: fsId || 'NONE' };
+      }
+
+      try {
+        // List and delete mount targets first
+        const mtResult = await client.send(new DescribeMountTargetsCommand({
+          FileSystemId: fsId,
+        }));
+        for (const mt of (mtResult.MountTargets || [])) {
+          console.log(`Deleting mount target ${mt.MountTargetId}`);
+          await client.send(new DeleteMountTargetCommand({
+            MountTargetId: mt.MountTargetId,
+          }));
+        }
+
+        // Wait for mount targets to be deleted
+        if (mtResult.MountTargets?.length > 0) {
+          console.log('Waiting 60s for mount targets to be deleted...');
+          await new Promise(r => setTimeout(r, 60000));
+        }
+
+        console.log(`Deleting filesystem ${fsId}`);
+        await client.send(new DeleteFileSystemCommand({
+          FileSystemId: fsId,
+        }));
+      } catch (e) {
+        console.log('Delete error (may already be deleted):', e.message);
+      }
+
+      return { PhysicalResourceId: fsId };
+    }
+
+    // Update — no-op
+    return { PhysicalResourceId: event.PhysicalResourceId };
+  } catch (err) {
+    console.error('Handler error:', err);
+    throw err;
+  }
+}
