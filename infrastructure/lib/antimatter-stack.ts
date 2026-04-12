@@ -171,87 +171,8 @@ export class AntimatterStack extends cdk.Stack {
       resources: ['arn:aws:events:*:*:rule/*'],
     }));
 
-    // S3 Files filesystem — created via Custom Resource (no CloudFormation type yet)
-    const s3FilesProvider = new cr.Provider(this, 'S3FilesProvider', {
-      onEventHandler: new lambda.Function(this, 'S3FilesHandler', {
-        runtime: lambda.Runtime.NODEJS_20_X,
-        handler: 'index.handler',
-        code: lambda.Code.fromInline(`
-          const { execSync } = require('child_process');
-          exports.handler = async (event) => {
-            const region = process.env.AWS_REGION;
-            if (event.RequestType === 'Create') {
-              const bucketArn = event.ResourceProperties.BucketArn;
-              const roleArn = event.ResourceProperties.RoleArn;
-              const subnetIds = event.ResourceProperties.SubnetIds;
-              const sgId = event.ResourceProperties.SecurityGroupId;
-              // Create file system
-              const fsResult = JSON.parse(execSync(
-                'aws s3files create-file-system --region ' + region +
-                ' --bucket ' + bucketArn +
-                ' --role-arn ' + roleArn,
-                { encoding: 'utf-8' }
-              ));
-              const fsId = fsResult.FileSystemId || fsResult.fileSystemId;
-              // Create mount targets in each subnet
-              for (const subnetId of subnetIds.split(',')) {
-                try {
-                  execSync(
-                    'aws s3files create-mount-target --region ' + region +
-                    ' --file-system-id ' + fsId +
-                    ' --subnet-id ' + subnetId +
-                    ' --security-groups ' + sgId,
-                    { encoding: 'utf-8' }
-                  );
-                } catch (e) { console.log('Mount target error (may already exist):', e.message); }
-              }
-              return { PhysicalResourceId: fsId, Data: { FileSystemId: fsId } };
-            }
-            if (event.RequestType === 'Delete') {
-              const fsId = event.PhysicalResourceId;
-              try {
-                // List and delete mount targets first
-                const mtResult = JSON.parse(execSync(
-                  'aws s3files describe-mount-targets --region ' + region +
-                  ' --file-system-id ' + fsId,
-                  { encoding: 'utf-8' }
-                ));
-                for (const mt of (mtResult.MountTargets || [])) {
-                  execSync(
-                    'aws s3files delete-mount-target --region ' + region +
-                    ' --mount-target-id ' + mt.MountTargetId,
-                    { encoding: 'utf-8' }
-                  );
-                }
-                // Wait for mount targets to be deleted
-                await new Promise(r => setTimeout(r, 30000));
-                execSync(
-                  'aws s3files delete-file-system --region ' + region +
-                  ' --file-system-id ' + fsId,
-                  { encoding: 'utf-8' }
-                );
-              } catch (e) { console.log('Delete error:', e.message); }
-              return { PhysicalResourceId: fsId };
-            }
-            return { PhysicalResourceId: event.PhysicalResourceId };
-          };
-        `),
-        timeout: cdk.Duration.minutes(5),
-        initialPolicy: [
-          new iam.PolicyStatement({
-            actions: ['s3files:*', 'iam:PassRole'],
-            resources: ['*'],
-          }),
-        ],
-      }),
-      logGroup: new logs.LogGroup(this, 'S3FilesProviderLogs', {
-        retention: logs.RetentionDays.ONE_WEEK,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-      }),
-    });
-
-    // S3 Files security group, custom resource, and SQS queue are created
-    // after the VPC (see below — they reference this.vpc)
+    // S3 Files filesystem — created via AwsCustomResource (SDK calls).
+    // Security group, mount targets, and SQS queue are created after the VPC (see below).
 
     // ==========================================
     // Authentication — Cognito User Pool
@@ -319,8 +240,40 @@ export class AntimatterStack extends cdk.Stack {
     });
 
     // ==========================================
-    // S3 Files — mount targets + SQS event queue (requires VPC)
+    // S3 Files — filesystem + mount targets + SQS event queue (requires VPC)
     // ==========================================
+
+    const s3FilesPolicy = new iam.PolicyStatement({
+      actions: ['s3files:*', 'iam:PassRole'],
+      resources: ['*'],
+    });
+
+    // Create the S3 Files filesystem via SDK call
+    const s3FilesFsResource = new cr.AwsCustomResource(this, 'S3FilesFileSystem', {
+      onCreate: {
+        service: '@aws-sdk/client-s3files',
+        action: 'CreateFileSystem',
+        parameters: {
+          Bucket: dataBucket.bucketArn,
+          RoleArn: s3FilesRole.roleArn,
+        },
+        physicalResourceId: cr.PhysicalResourceId.fromResponse('FileSystemId'),
+      },
+      onDelete: {
+        service: '@aws-sdk/client-s3files',
+        action: 'DeleteFileSystem',
+        parameters: {
+          FileSystemId: new cr.PhysicalResourceIdReference(),
+        },
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([s3FilesPolicy]),
+      logGroup: new logs.LogGroup(this, 'S3FilesProviderLogs', {
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    });
+
+    const s3FilesFileSystemId = s3FilesFsResource.getResponseField('FileSystemId');
 
     // Security group for S3 Files mount targets
     const s3FilesSg = new ec2.SecurityGroup(this, 'S3FilesSg', {
@@ -328,17 +281,31 @@ export class AntimatterStack extends cdk.Stack {
       description: 'Security group for S3 Files NFS mount targets',
     });
 
-    const s3FilesFs = new cdk.CustomResource(this, 'S3FilesFileSystem', {
-      serviceToken: s3FilesProvider.serviceToken,
-      properties: {
-        BucketArn: dataBucket.bucketArn,
-        RoleArn: s3FilesRole.roleArn,
-        SubnetIds: this.vpc.privateSubnets.map(s => s.subnetId).join(','),
-        SecurityGroupId: s3FilesSg.securityGroupId,
-      },
-    });
-
-    const s3FilesFileSystemId = s3FilesFs.getAttString('FileSystemId');
+    // Create mount targets in each private subnet
+    for (let i = 0; i < this.vpc.privateSubnets.length; i++) {
+      const subnet = this.vpc.privateSubnets[i];
+      const mt = new cr.AwsCustomResource(this, `S3FilesMountTarget${i}`, {
+        onCreate: {
+          service: '@aws-sdk/client-s3files',
+          action: 'CreateMountTarget',
+          parameters: {
+            FileSystemId: s3FilesFileSystemId,
+            SubnetId: subnet.subnetId,
+            SecurityGroups: [s3FilesSg.securityGroupId],
+          },
+          physicalResourceId: cr.PhysicalResourceId.fromResponse('MountTargetId'),
+        },
+        onDelete: {
+          service: '@aws-sdk/client-s3files',
+          action: 'DeleteMountTarget',
+          parameters: {
+            MountTargetId: new cr.PhysicalResourceIdReference(),
+          },
+        },
+        policy: cr.AwsCustomResourcePolicy.fromStatements([s3FilesPolicy]),
+      });
+      mt.node.addDependency(s3FilesFsResource);
+    }
 
     // SQS queue for S3 event notifications (file change detection)
     const s3EventQueue = new sqs.Queue(this, 'S3EventQueue', {
