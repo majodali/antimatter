@@ -498,8 +498,9 @@ echo "fs.inotify.max_user_watches=524288" > /etc/sysctl.d/99-inotify.conf
 sysctl -p /etc/sysctl.d/99-inotify.conf 2>/dev/null || true
 
 if [ -n "${s3FilesFileSystemId}" ]; then
-  # Install amazon-efs-utils (required for S3 Files mount)
-  yum install -y amazon-efs-utils 2>/dev/null || true
+  # Install amazon-efs-utils v3.0+ (required for S3 Files mount).
+  # AL2023 repos may have an older version, so use the installer script.
+  curl -s https://amazon-efs-utils.aws.com/efs-utils-installer.sh | bash -s -- --install 2>/dev/null || yum install -y amazon-efs-utils 2>/dev/null || true
 
   mount -t s3files ${s3FilesFileSystemId}:/ "$MOUNT_POINT" || {
     echo "[workspace] ERROR: S3 Files mount failed — using local storage as fallback"
