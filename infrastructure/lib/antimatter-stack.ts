@@ -180,6 +180,11 @@ export class AntimatterStack extends cdk.Stack {
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_20_X,
       timeout: cdk.Duration.minutes(5),
+      bundling: {
+        // @aws-sdk/client-s3files is NOT in the Lambda runtime (too new).
+        // Override the default externalModules which excludes all @aws-sdk/*.
+        externalModules: [],
+      },
       initialPolicy: [
         new iam.PolicyStatement({
           actions: ['s3files:*', 'iam:PassRole'],
