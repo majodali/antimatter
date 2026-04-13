@@ -8,7 +8,8 @@ import {
   DeleteFileSystemCommand,
   CreateMountTargetCommand,
   DeleteMountTargetCommand,
-  DescribeMountTargetsCommand,
+  ListMountTargetsCommand,
+  GetFileSystemCommand,
 } from '@aws-sdk/client-s3files';
 
 const client = new S3FilesClient({});
@@ -28,6 +29,15 @@ export async function handler(event) {
       }));
       const fsId = fsResult.fileSystemId;
       console.log(`Created filesystem: ${fsId}`);
+
+      // Wait for filesystem to become available (status != 'creating')
+      for (let i = 0; i < 30; i++) {
+        const fs = await client.send(new GetFileSystemCommand({ fileSystemId: fsId }));
+        console.log(`Filesystem status: ${fs.status} (attempt ${i + 1})`);
+        if (fs.status === 'available') break;
+        if (fs.status === 'error') throw new Error(`Filesystem creation failed: ${fs.statusMessage}`);
+        await new Promise(r => setTimeout(r, 10000)); // 10s between checks
+      }
 
       // Create mount targets in each subnet
       for (const subnetId of SubnetIds.split(',')) {
@@ -58,7 +68,7 @@ export async function handler(event) {
 
       try {
         // List and delete mount targets first
-        const mtResult = await client.send(new DescribeMountTargetsCommand({
+        const mtResult = await client.send(new ListMountTargetsCommand({
           fileSystemId: fsId,
         }));
         for (const mt of (mtResult.mountTargets || [])) {

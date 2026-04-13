@@ -152,7 +152,7 @@ export class AntimatterStack extends cdk.Stack {
     );
     s3FilesRole.addToPolicy(new iam.PolicyStatement({
       sid: 'S3BucketPermissions',
-      actions: ['s3:ListBucket', 's3:ListBucketVersions'],
+      actions: ['s3:ListBucket', 's3:ListBucketVersions', 's3:GetBucketNotification', 's3:PutBucketNotification', 's3:GetBucketVersioning', 's3:GetBucketLocation'],
       resources: [dataBucket.bucketArn],
     }));
     s3FilesRole.addToPolicy(new iam.PolicyStatement({
