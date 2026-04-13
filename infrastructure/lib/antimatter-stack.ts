@@ -288,6 +288,7 @@ export class AntimatterStack extends cdk.Stack {
         RoleArn: s3FilesRole.roleArn,
         SubnetIds: this.vpc.privateSubnets.map(s => s.subnetId).join(','),
         SecurityGroupId: s3FilesSg.securityGroupId,
+        Version: '2', // Bump to force re-creation after IAM policy fix
       },
     });
 
