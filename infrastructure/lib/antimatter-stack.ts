@@ -179,7 +179,7 @@ export class AntimatterStack extends cdk.Stack {
       entry: path.join(__dirname, 'lambda/s3-files-handler/index.mjs'),
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_20_X,
-      timeout: cdk.Duration.minutes(5),
+      timeout: cdk.Duration.minutes(14), // S3 Files creation + mount targets can take 10+ minutes
       bundling: {
         // @aws-sdk/client-s3files is NOT in the Lambda runtime (too new).
         // Override the default externalModules which excludes all @aws-sdk/*.
@@ -189,6 +189,11 @@ export class AntimatterStack extends cdk.Stack {
         new iam.PolicyStatement({
           actions: ['s3files:*', 'iam:PassRole'],
           resources: ['*'],
+        }),
+        // S3 Files API requires the *caller* to also have S3 bucket permissions
+        new iam.PolicyStatement({
+          actions: ['s3:GetBucketNotification', 's3:PutBucketNotification', 's3:GetBucketVersioning', 's3:GetBucketLocation', 's3:ListBucket'],
+          resources: [dataBucket.bucketArn],
         }),
       ],
     });
@@ -288,7 +293,7 @@ export class AntimatterStack extends cdk.Stack {
         RoleArn: s3FilesRole.roleArn,
         SubnetIds: this.vpc.privateSubnets.map(s => s.subnetId).join(','),
         SecurityGroupId: s3FilesSg.securityGroupId,
-        Version: '2', // Bump to force re-creation after IAM policy fix
+        Version: '3', // Bump to force re-creation after handler IAM fix
       },
     });
 
