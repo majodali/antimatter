@@ -190,10 +190,19 @@ export class AntimatterStack extends cdk.Stack {
           actions: ['s3files:*', 'iam:PassRole'],
           resources: ['*'],
         }),
-        // S3 Files API requires the *caller* to also have S3 bucket permissions
+        // S3 Files API requires the *caller* to have S3 + EventBridge permissions
+        // (not just the service role). Mirror the service role permissions here.
         new iam.PolicyStatement({
           actions: ['s3:GetBucketNotification', 's3:PutBucketNotification', 's3:GetBucketVersioning', 's3:GetBucketLocation', 's3:ListBucket'],
           resources: [dataBucket.bucketArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ['events:DeleteRule', 'events:DisableRule', 'events:EnableRule', 'events:PutRule', 'events:PutTargets', 'events:RemoveTargets', 'events:DescribeRule', 'events:ListRuleNamesByTarget', 'events:ListRules', 'events:ListTargetsByRule'],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          actions: ['ec2:DescribeSubnets', 'ec2:DescribeSecurityGroups', 'ec2:DescribeNetworkInterfaces', 'ec2:CreateNetworkInterface', 'ec2:DeleteNetworkInterface'],
+          resources: ['*'],
         }),
       ],
     });
@@ -293,7 +302,7 @@ export class AntimatterStack extends cdk.Stack {
         RoleArn: s3FilesRole.roleArn,
         SubnetIds: this.vpc.privateSubnets.map(s => s.subnetId).join(','),
         SecurityGroupId: s3FilesSg.securityGroupId,
-        Version: '3', // Bump to force re-creation after handler IAM fix
+        Version: '4', // Bump to force re-creation after handler EventBridge/EC2 fix
       },
     });
 
