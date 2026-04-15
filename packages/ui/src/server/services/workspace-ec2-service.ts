@@ -499,14 +499,48 @@ sysctl -p /etc/sysctl.d/99-inotify.conf 2>/dev/null || true
 
 if [ -n "${s3FilesFileSystemId}" ]; then
   # Install amazon-efs-utils v3.0+ (required for S3 Files mount).
-  # AL2023 repos may have an older version, so use the installer script.
-  curl -s https://amazon-efs-utils.aws.com/efs-utils-installer.sh | bash -s -- --install 2>/dev/null || yum install -y amazon-efs-utils 2>/dev/null || true
+  # AL2023 default repo has v2.4.1 — explicitly install v3.0.1 from efs-utils repo.
+  curl -s https://amazon-efs-utils.aws.com/efs-utils-installer.sh | bash -s -- --install 2>/dev/null || true
+  yum install -y amazon-efs-utils-3.0.1 2>/dev/null || yum install -y amazon-efs-utils 2>/dev/null || true
 
   mount -t s3files ${s3FilesFileSystemId}:/ "$MOUNT_POINT" || {
     echo "[workspace] ERROR: S3 Files mount failed — using local storage as fallback"
   }
-  mkdir -p "$MOUNT_POINT/projects/${safeProjectId}/files"
+  mkdir -p "$MOUNT_POINT/${safeProjectId}"
   echo "[workspace] S3 Files mounted at $MOUNT_POINT"
+
+  # ---- Hybrid: bind-mount hot paths to local ephemeral storage ----
+  # S3 Files has slow writes and close() hangs on large files. Keep build
+  # artifacts, node_modules, and caches on local storage to avoid hitting NFS.
+  # These paths are regenerable from source (npm install, build, cdk synth).
+  SCRATCH_ROOT="/opt/workspace-scratch/${safeProjectId}"
+  mkdir -p "$SCRATCH_ROOT"
+  for HOT_PATH in \
+      "node_modules" \
+      "infrastructure/cdk.out" \
+      "infrastructure/node_modules" \
+      "packages/ui/dist" \
+      "packages/ui/dist-lambda" \
+      "packages/ui/dist-workspace" \
+      "packages/ui/node_modules" \
+      "packages/project-model/node_modules" \
+      "packages/filesystem/node_modules" \
+      "packages/tool-integration/node_modules" \
+      "packages/build-system/node_modules" \
+      "packages/agent-framework/node_modules" \
+      "packages/workflow/node_modules" \
+      "packages/workspace/node_modules" \
+      "packages/test-harness/node_modules" \
+      "packages/test-utils/node_modules" \
+      "packages/service-interface/node_modules" \
+      "packages/mcp-server/node_modules"; do
+    PROJ_HOT="$MOUNT_POINT/${safeProjectId}/$HOT_PATH"
+    SCRATCH_HOT="$SCRATCH_ROOT/$(echo $HOT_PATH | tr '/' '_')"
+    mkdir -p "$SCRATCH_HOT" "$(dirname $PROJ_HOT)"
+    # Create the mount point on S3 Files (empty dir) only if missing
+    [ -d "$PROJ_HOT" ] || mkdir -p "$PROJ_HOT" 2>/dev/null || true
+    mount --bind "$SCRATCH_HOT" "$PROJ_HOT" 2>/dev/null && echo "[workspace] bind-mounted $HOT_PATH → $SCRATCH_HOT" || echo "[workspace] bind mount failed for $HOT_PATH (non-fatal)"
+  done
 else
   echo "[workspace] WARNING: No S3 Files filesystem ID — using local storage"
   mkdir -p "$MOUNT_POINT/${safeProjectId}"
