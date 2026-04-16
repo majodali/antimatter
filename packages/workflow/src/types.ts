@@ -511,7 +511,7 @@ export interface PersistedWorkflowState<S = unknown> {
 // ---------------------------------------------------------------------------
 
 /** Source of an event entering the log. */
-export type EventSource = 'watcher' | 'rest-api' | 's3-event' | 'workflow-emit' | 'startup';
+export type EventSource = 'watcher' | 'rest-api' | 'workflow-emit' | 'startup';
 
 /**
  * A single entry in the append-only event log.
