@@ -93,6 +93,17 @@ export interface SharedConfig {
   onExecStart: () => void;
   /** Called when a workflow command ends — releases global idle shutdown hold. */
   onExecEnd: () => void;
+  /**
+   * Optional IPC broadcast function (worker mode).
+   * When set, broadcastToClients() delegates to this instead of iterating over WebSocket objects.
+   * This enables running ProjectContext in a child process where WebSocket objects don't exist.
+   */
+  broadcastFn?: (msg: object) => void;
+  /**
+   * Optional callback to send a message to a specific WebSocket client by connectionId (worker mode).
+   * Used for targeted sends (e.g., automation responses, PTY output to single client).
+   */
+  sendToClientFn?: (connectionId: string, msg: object) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +297,8 @@ class PtyManager {
   private replayBuffer = '';
   private listeners = new Set<(data: string) => void>();
   readonly name: string;
+  /** Whether a broadcast subscriber has been attached (worker mode, one per session). */
+  hasBroadcastSubscriber = false;
 
   constructor(name = 'Terminal') { this.name = name; }
 
@@ -991,7 +1004,165 @@ export class ProjectContext {
     return router;
   }
 
-  // ---- WebSocket Connection Handling ----
+  // ---- WebSocket Connection Handling (IPC-compatible) ----
+
+  /** Track active virtual connections by ID (worker mode). */
+  private readonly virtualConnections = new Set<string>();
+
+  /**
+   * Handle a new client connection (worker mode — no WebSocket object).
+   * Returns an array of initial messages to send to the client.
+   */
+  handleClientConnect(connectionId: string): object[] {
+    this._connectionsReceived++;
+    this._lastConnectTime = new Date().toISOString();
+    this.virtualConnections.add(connectionId);
+    console.log(`[project-context:${this.projectId}] Virtual client connected: ${connectionId}`);
+
+    const messages: object[] = [];
+
+    // Lazy-start 'main' PTY
+    const mainSession = this.ptyManager.getOrCreate('main', this.projectPath, 'Terminal');
+
+    // Session list
+    messages.push({ type: 'terminal.list', sessions: this.ptyManager.list() });
+
+    // Replay buffers
+    const replay = mainSession.getReplayBuffer();
+    if (replay) messages.push({ type: 'replay', sessionId: 'main', data: replay });
+    const buildSession = this.ptyManager.get('build');
+    if (buildSession) {
+      const buildReplay = buildSession.getReplayBuffer();
+      if (buildReplay) messages.push({ type: 'replay', sessionId: 'build', data: buildReplay });
+    }
+
+    // Status + application state
+    messages.push({ type: 'status', state: 'ready' });
+    if (this.workflowManager) {
+      messages.push({ type: 'application-state', full: true, state: this.workflowManager.getApplicationState() });
+    }
+
+    // Subscribe PTY output → broadcast (single subscription, not per-client)
+    // In worker mode, PTY output goes to parent via ws-broadcast IPC and parent fans out.
+    // This is already handled by the existing PTY → broadcastToClients path in workflow-manager.
+    // For terminal output specifically, we need per-session broadcast:
+    for (const session of this.ptyManager.list()) {
+      const mgr = this.ptyManager.get(session.id);
+      if (mgr && !mgr.hasBroadcastSubscriber) {
+        const sid = session.id;
+        mgr.onData((data) => {
+          this.broadcastToClients({ type: 'output', sessionId: sid, data });
+        });
+        mgr.hasBroadcastSubscriber = true;
+      }
+    }
+
+    return messages;
+  }
+
+  /**
+   * Handle an incoming message from a client (worker mode — by connectionId).
+   * Dispatches the same message types as the WebSocket on('message') handler.
+   */
+  handleClientMessage(connectionId: string, rawData: string): void {
+    try {
+      const msg = JSON.parse(rawData);
+      this.dispatchClientMessage(msg, connectionId);
+    } catch {
+      // Ignore malformed messages
+    }
+  }
+
+  /**
+   * Handle client disconnect (worker mode — by connectionId).
+   */
+  handleClientDisconnect(connectionId: string): void {
+    this._connectionsCleaned++;
+    this._lastCleanupTime = new Date().toISOString();
+    this._lastCleanupReason = 'virtual-disconnect';
+    this.virtualConnections.delete(connectionId);
+    console.log(`[project-context:${this.projectId}] Virtual client disconnected: ${connectionId}`);
+  }
+
+  /**
+   * Dispatch a parsed client message. Used by both handleConnection (monolith)
+   * and handleClientMessage (worker mode).
+   */
+  private dispatchClientMessage(msg: any, connectionId?: string): void {
+    switch (msg.type) {
+      case 'input': {
+        const sid = msg.sessionId || 'main';
+        const session = this.ptyManager.get(sid);
+        if (session) session.write(msg.data);
+        break;
+      }
+      case 'resize': {
+        const sid = msg.sessionId || 'main';
+        if (typeof msg.cols === 'number' && typeof msg.rows === 'number') {
+          const session = this.ptyManager.get(sid);
+          if (session) session.resize(msg.cols, msg.rows);
+        }
+        break;
+      }
+      case 'terminal.create': {
+        const newId = msg.sessionId || `term-${Date.now().toString(36)}`;
+        const name = msg.name || `Terminal ${this.ptyManager.list().length + 1}`;
+        this.ptyManager.getOrCreate(newId, this.projectPath, name);
+        this.broadcastToClients({ type: 'terminal.created', sessionId: newId, name });
+        this.broadcastToClients({ type: 'terminal.list', sessions: this.ptyManager.list() });
+        // Subscribe broadcast for the new session
+        const newMgr = this.ptyManager.get(newId);
+        if (newMgr && !newMgr.hasBroadcastSubscriber) {
+          const sid = newId;
+          newMgr.onData((data) => {
+            this.broadcastToClients({ type: 'output', sessionId: sid, data });
+          });
+          newMgr.hasBroadcastSubscriber = true;
+        }
+        break;
+      }
+      case 'terminal.close': {
+        if (msg.sessionId && msg.sessionId !== 'main') {
+          this.ptyManager.close(msg.sessionId);
+          this.broadcastToClients({ type: 'terminal.closed', sessionId: msg.sessionId });
+          this.broadcastToClients({ type: 'terminal.list', sessions: this.ptyManager.list() });
+        }
+        break;
+      }
+      case 'ping':
+        // In worker mode, respond via targeted send
+        if (connectionId && this.config.sendToClientFn) {
+          this.sendToClient(connectionId, { type: 'pong' });
+        }
+        break;
+      case 'workflow-emit':
+        this.workflowManager?.emitEvent(msg.event).catch((err: unknown) => {
+          console.error(`[project-context:${this.projectId}] Workflow emit failed:`, err);
+        });
+        break;
+      case 'workflow-hold':
+        this.workflowManager?.hold();
+        break;
+      case 'workflow-release':
+        this.workflowManager?.release();
+        break;
+      case 'workflow-reload':
+        this.workflowManager?.start().catch((err: unknown) => {
+          console.error(`[project-context:${this.projectId}] Workflow reload failed:`, err);
+        });
+        break;
+      case 'agents.chats.send':
+        if (msg.message) {
+          processChatMessage(msg.message, this.workspace, (m: object) => this.broadcastToClients(m));
+        }
+        break;
+      case 'automation-response':
+        this.handleAutomationResponse(msg);
+        break;
+    }
+  }
+
+  // ---- WebSocket Connection Handling (monolith mode — direct WebSocket) ----
 
   handleConnection(ws: WebSocket): void {
     this._connectionsReceived++;
@@ -1226,11 +1397,24 @@ export class ProjectContext {
   // ---- Broadcast ----
 
   broadcastToClients(msg: object): void {
+    // Worker mode: delegate to IPC broadcast function
+    if (this.config.broadcastFn) {
+      this.config.broadcastFn(msg);
+      return;
+    }
+    // Monolith mode: iterate WebSocket objects directly
     const data = JSON.stringify(msg);
     for (const client of this.connections) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data);
       }
+    }
+  }
+
+  /** Send a message to a specific client by connectionId (worker mode). */
+  sendToClient(connectionId: string, msg: object): void {
+    if (this.config.sendToClientFn) {
+      this.config.sendToClientFn(connectionId, msg);
     }
   }
 
