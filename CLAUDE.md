@@ -8,7 +8,7 @@
 2. **Command palette + search** — Cmd+P file search, Cmd+Shift+P commands, Cmd+Shift+F full-text search
 3. **Secrets/env vars redesign** — per-project scoping, dynamic secret list, env vars with git commit config (backlogged — current SecretsPanel works for immediate needs)
 
-**Recently completed:** deployed resources service (CRUD + preview auto-registration + deploy panel), show/hide dot files, multiple terminal tabs (session pool, build terminal, remote execution), M2 phases 1-4, s3UploadDir fix, test panel (project tests, S3 persistence, double-click nav), graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
+**Recently completed:** **Layered child-process workspace server** (Router + Project Workers via fork(), crash recovery, HTTP proxy via UNIX socket, WebSocket IPC relay), vitest → node:test migration (676 tests), deployed resources service (CRUD + preview auto-registration + deploy panel), show/hide dot files, multiple terminal tabs (session pool, build terminal, remote execution), M2 phases 1-4, s3UploadDir fix, test panel (project tests, S3 persistence, double-click nav), graceful workflow reload, widget/state persistence across recompilation, file annotations REST API, slug-based project IDs, per-project terminal sessions, URL routing fix, wf.utils, chat panel WebSocket migration, git panel UI, file annotations model+UI, compilation errors in Problems, client.state completeness, FT-XTAB-006 fix.
 
 ## What This Project Is
 
@@ -31,7 +31,7 @@ For full details see `docs/architecture.md`.
 ### Execution Contexts
 
 - **Lambda API** — Stateless Express server (REST). S3-backed file storage. Handles agent chat, file ops, tests, auth, git.
-- **EC2 Workspace Server** — Stateful per-project server. PTY terminal, S3 sync (30s), workflow engine, WebSocket connections.
+- **EC2 Workspace Server** — Layered architecture: lightweight **Router** (parent) spawns isolated **Project Workers** (child processes via fork()). Each worker owns one project's PTY terminal, S3 sync (30s), workflow engine, WebSocket connections. Router proxies HTTP via UNIX socket, relays WebSocket via IPC. Crash recovery built in. See `docs/architecture.md` §4.
 - **CloudFront SPA** — React frontend connecting to Lambda (REST) and workspace server (WebSocket).
 
 ### Monorepo (npm workspaces)

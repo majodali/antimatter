@@ -10,7 +10,7 @@
 Antimatter is a self-hosting online IDE with AI agent integration, deployed on AWS. The system has three main execution contexts:
 
 - **Lambda API** — Stateless Express server handling REST requests (file ops, agent chat, tests, auth). Backed by S3 for file storage.
-- **EC2 Workspace Server** — Stateful per-project server providing PTY terminal, real-time file sync, workflow engine, and WebSocket connections.
+- **EC2 Workspace Server** — Layered process architecture: a lightweight **Router** (parent) that spawns isolated **Project Workers** (child processes) via `fork()`. Workers own PTY terminal, real-time file sync, workflow engine, and WebSocket connections for a single project.
 - **CloudFront SPA** — React frontend served from S3, connecting to both Lambda (REST) and workspace server (WebSocket).
 
 ```
@@ -27,18 +27,27 @@ Antimatter is a self-hosting online IDE with AI agent integration, deployed on A
                               S3 Data Bucket
                             (project files)
 
-        EC2 Instance (shared or per-project)
-        +---------------------------+
-        | Workspace Server          |
-        | - ProjectContext per proj  |
-        |   - PTY Manager           |
-        |   - S3 Sync (30s)         |
-        |   - Workflow Engine       |
-        |   - WebSocket connections |
-        |   - Express Router        |
-        | - Dynamic project routing |
-        | - Idle shutdown (global)  |
-        +---------------------------+
+        EC2 Instance
+        +-----------------------------------+
+        | Router (parent process)            |
+        | - Express on :8080                 |
+        | - ALB health, auth, WebSocket      |
+        | - Proxies HTTP → child UNIX socket |
+        | - Relays WebSocket via IPC         |
+        | - Crash recovery (auto-respawn)    |
+        +-----------------------------------+
+           | fork()            | fork()
+           v                   v
+        +---------------+   +---------------+
+        | Project Worker|   | Project Worker|
+        | - antimatter  |   | - other-proj  |
+        |   ProjectCtx  |   |   ProjectCtx  |
+        |   Workflow    |   |   Workflow    |
+        |   S3 Sync     |   |   S3 Sync     |
+        |   PTY         |   |   PTY         |
+        |   Express on  |   |   Express on  |
+        |   UNIX socket |   |   UNIX socket |
+        +---------------+   +---------------+
                     |
         Application Load Balancer
          (per-project path rules)
@@ -95,52 +104,100 @@ Each environment (dev/staging/prod/feature) gets its own S3 buckets, CloudFront 
 
 ---
 
-## 4. Workspace Server
+## 4. Workspace Server — Layered Process Architecture
 
 Files:
-- `packages/ui/src/server/workspace-server.ts` — Main server: Express app, WebSocket handler, project routing, idle shutdown
-- `packages/ui/src/server/project-context.ts` — `ProjectContext` class: per-project state (env, PTY, workflow, S3 sync, routes)
+- `packages/ui/src/server/workspace-server.ts` — **Router** (parent process): Express app, WebSocket handler, HTTP proxy, child lifecycle
+- `packages/ui/src/server/project-worker.ts` — **Project Worker** (child process entry point): hosts a single ProjectContext
+- `packages/ui/src/server/child-process-manager.ts` — Child lifecycle: spawn, IPC, crash recovery
+- `packages/ui/src/server/ipc-types.ts` — Typed IPC message protocol
+- `packages/ui/src/server/project-context.ts` — `ProjectContext` class: per-project state (env, PTY, workflow, S3 sync, routes). Runs inside each child process.
 
-The workspace server is an Express + WebSocket server running on EC2. It supports **multiple projects per instance** via lazy-initialized `ProjectContext` objects.
+The workspace server uses a **two-layer process architecture** to isolate projects and improve resilience. A lightweight Router handles HTTP/WebSocket and auth, while each project runs in its own forked child process.
 
-### Multi-Project Architecture
+### Router (Parent Process)
 
-Each project gets its own `ProjectContext` containing:
-- `LocalWorkspaceEnvironment` — file system, command execution
-- `WorkspaceService` — file APIs, build, agent
-- `PtyManager` — pseudo-terminal (bash shell)
-- `S3SyncScheduler` — periodic workspace → S3 backup
-- `FileChangeNotifier` — filesystem watcher → WebSocket broadcasts
-- `WorkflowManager` — event-driven rule engine
-- `ErrorStore` — project error storage
-- `EventLogger` — structured logging
-- Express Router — project-scoped API routes
-- WebSocket connections — for broadcast isolation
+The Router owns the HTTP server on port 8080. It:
+- Serves `/health`, `/status`, `/internal/*` directly
+- Runs Cognito auth middleware for `/api/*` routes
+- Parses projectId from URL: `/workspace/{projectId}/...`, `/{PROJECT_ID}/...`, or `/api/*` (primary project)
+- Spawns a **ChildProcessManager** for each unique projectId (lazy, first-request)
+- Proxies HTTP to the child's UNIX socket at `/tmp/am-{projectId}.sock`
+- Holds all WebSocket connections, relays messages to/from children via IPC
+- Maintains heartbeat to WebSocket clients (needs actual socket objects)
+- Auto-respawns children on crash with exponential backoff
 
-Project contexts are stored in a `Map<string, ProjectContext>` and lazy-initialized via `getOrCreateContext(projectId)` with promise coalescing (prevents duplicate init for concurrent requests).
+The Router is small (~85 MB RSS) and stable — it rarely needs updates.
 
-**Backward compat**: If `PROJECT_ID` env var is set, that project is auto-initialized on startup.
+### Project Worker (Child Process)
 
-**Shared mode**: The EC2 service (`workspace-ec2-service.ts`) supports `sharedMode` where multiple projects route to the same EC2 instance via per-project ALB rules.
+Each project runs in a forked Node.js process (`child_process.fork()`). The worker:
+- Receives `SerializableConfig` via IPC on startup
+- Creates its own AWS SDK clients (S3, SSM, EventBridge) locally
+- Instantiates a `ProjectContext` with all project state:
+  - `LocalWorkspaceEnvironment` — file system, command execution
+  - `WorkspaceService` — file APIs, build, agent
+  - `PtySessionPool` — one or more PTY sessions (bash shells)
+  - `S3SyncScheduler` — periodic workspace → S3 backup (30s)
+  - `FileChangeNotifier` — filesystem watcher → broadcasts via IPC
+  - `WorkflowManager` — event-driven rule engine
+  - `ErrorStore`, `EventLog`, `DeployedResourceStore`, `FileTestResultsStorage`
+  - Express Router — project-scoped API routes
+- Listens on a UNIX socket `/tmp/am-{projectId}.sock` for HTTP from the Router
+- Sends `ready` IPC message when initialized
+- Runs `broadcastFn` through IPC: `ws-send` (single client) or `ws-broadcast` (all clients)
+
+Workers are larger (~250+ MB RSS including esbuild, git). They can crash independently without affecting the Router or other projects.
+
+### IPC Protocol
+
+**Parent → Child:**
+- `initialize` — boot config (projectId, bucket names, region, auth info)
+- `ws-connect` / `ws-message` / `ws-disconnect` — WebSocket relay by connectionId
+- `shutdown` — graceful stop
+
+**Child → Parent:**
+- `ready` — initialization complete, UNIX socket listening
+- `ws-send` / `ws-broadcast` — route messages to WebSocket client(s)
+- `connection-change` — +1/-1 for global tracking
+- `error` — non-fatal errors (fatal errors cause process.exit)
+
+HTTP requests never cross the IPC channel — they flow via the UNIX socket for performance.
+
+### Crash Recovery
+
+`ChildProcessManager` detects child exit events:
+- Auto-respawn after 2s delay (exponential backoff up to 30s)
+- After 5 consecutive crashes within 5 minutes, give up and mark project dead
+- On respawn, re-send `ws-connect` for active WebSocket connections (seamless reconnect)
+- HTTP requests during respawn return 503 with `retryAfter: 5`
 
 ### Lifecycle
 
-1. **Start**: `POST /api/workspace/start` — Lambda launches EC2 instance (or reuses existing in shared mode), creates ALB routing rules, returns connection info
-2. **Init**: EC2 user data script installs Node.js, downloads workspace server from S3, starts via systemd
-3. **Request arrives**: Dynamic routing middleware parses project ID from URL, calls `getOrCreateContext(projectId)`
-4. **Context init**: S3 sync, git init, PTY start, workflow engine start, file watcher start
-5. **Ready**: WebSocket accepts connections, PTY available, API routes active
-6. **Idle shutdown**: When ALL projects have zero connections for 10 min, instance self-stops
+1. **Instance start**: EC2 user-data downloads both `workspace-server.js` and `project-worker.js` from S3, starts Router via systemd
+2. **Router ready**: Listens on :8080 immediately, `/health` returns 200
+3. **First request**: Router parses projectId, calls `getOrCreateChild(projectId)` which:
+   - Forks `project-worker.js`
+   - Sends `initialize` IPC message
+   - Waits for `ready` (worker runs S3 sync, git init, workflow load — 30-60s)
+   - Returns after ready or 90s timeout
+4. **Subsequent requests**: Proxied to child's UNIX socket (~1ms latency)
+5. **WebSocket**: Router handles upgrade, assigns connectionId, relays via IPC
+6. **Child crash**: Router respawns worker, re-registers WebSocket connections
+
+### Feature Flag
+
+`CHILD_PROCESS_MODE=0` env var reverts to the legacy monolith (ProjectContext in-process), for safe rollback.
 
 ### URL Routing
 
-The main Express app routes requests to the correct ProjectContext:
-- `/workspace/{projectId}/api/*` → project context router (standard path)
-- `/{projectId}/api/*` → project context router (ALB health check compat)
-- `/api/*` → primary project context (backward compat, when `PROJECT_ID` is set)
-- `/health` → global health check (lists active projects)
-- `/internal/project-contexts` → list active contexts
-- `DELETE /internal/project-context/{projectId}` — tear down a project context
+- `/workspace/{projectId}/api/*` → proxy to child worker (standard path)
+- `/{projectId}/api/*` → proxy to child worker (ALB health check compat)
+- `/api/*` → primary project child (backward compat, when `PROJECT_ID` is set)
+- `/health` → Router health (lists spawned children)
+- `/status` → Router status (mode, projects, total connections)
+- `/internal/project-contexts` → list active children
+- `DELETE /internal/project-context/{projectId}` — tear down a child process
 
 ### S3 Sync
 
@@ -453,8 +510,11 @@ cd packages/ui && npx vite build
 # 2. Bundle Lambda
 node packages/ui/scripts/build-lambda.mjs
 
-# 3. Bundle workspace server
+# 3. Bundle workspace server (produces two bundles: router + worker)
 node packages/ui/scripts/build-workspace-server.mjs
+#   → dist-workspace/workspace-server.js  (Router / parent process)
+#   → dist-workspace/project-worker.js    (Project Worker / child process)
+#   → dist-workspace/package.json         (runtime deps: esbuild, puppeteer-core)
 
 # 4. Deploy CDK
 cd infrastructure && MSYS_NO_PATHCONV=1 npx cdk deploy --require-approval never
