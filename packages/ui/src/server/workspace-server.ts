@@ -1,21 +1,28 @@
 /**
- * Workspace Server — runs on EC2 instances, providing the full workspace backend.
+ * Workspace Server — Router process.
  *
- * Supports multiple projects per server. Each project gets its own ProjectContext
- * with isolated: file system, PTY terminal, S3 sync, workflow engine, and WebSocket
- * connections. Projects are lazy-initialized on first request.
+ * Lightweight parent process that manages per-project child processes (workers).
+ * Handles HTTP routing, WebSocket upgrades, auth, and health checks.
+ * Proxies HTTP to child UNIX sockets; relays WebSocket via IPC.
+ *
+ * In LEGACY mode (CHILD_PROCESS_MODE=0), runs the old monolith architecture
+ * with ProjectContext in-process for safe rollback.
  *
  * Lifecycle:
  *  1. EC2 user-data downloads this bundle from S3 and starts it via systemd
- *  2. If PROJECT_ID env var is set, that project is auto-initialized (backward compat)
- *  3. Additional projects are initialized on demand via /workspace/{projectId}/* routes
- *  4. Idle shutdown: stops EC2 instance after 10 min with no WebSocket connections
+ *  2. Express server starts on PORT, /health returns immediately
+ *  3. First request for a project → spawns a child process (project-worker.js)
+ *  4. HTTP requests proxied to child's UNIX socket
+ *  5. WebSocket connections upgraded in parent, relayed to child via IPC
  */
 
 import express from 'express';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { URL } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -28,21 +35,15 @@ import {
   CloudFrontClient,
   CreateInvalidationCommand,
 } from '@aws-sdk/client-cloudfront';
-import {
-  EC2Client,
-  StopInstancesCommand,
-} from '@aws-sdk/client-ec2';
-import {
-  ElasticLoadBalancingV2Client,
-  DeregisterTargetsCommand,
-} from '@aws-sdk/client-elastic-load-balancing-v2';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import { SSMClient } from '@aws-sdk/client-ssm';
 import { EventLogger } from './services/event-logger.js';
 import { createAuthMiddleware } from './middleware/auth.js';
+import { ChildProcessManager } from './child-process-manager.js';
+import type { SerializableConfig } from './ipc-types.js';
+
+// Legacy mode imports (only used when CHILD_PROCESS_MODE=0)
 import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
-import { ProjectContext } from './project-context.js';
-import type { SharedConfig } from './project-context.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -55,18 +56,17 @@ const WEBSITE_BUCKET = process.env.WEBSITE_BUCKET || '';
 const SESSION_TOKEN = process.env.SESSION_TOKEN || '';
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/workspace/data';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
-const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '0', 10) || 60 * 60 * 1000; // default 1 hour, 0 = disabled
+const CHILD_PROCESS_MODE = process.env.CHILD_PROCESS_MODE !== '0'; // default: true
 
-// PROJECT_ID is now optional — server starts empty and loads projects on demand.
-// If set, that project is auto-initialized on startup (backward compat).
 if (PROJECT_ID) {
   console.log(`[workspace-server] Primary project: ${PROJECT_ID}`);
 }
 console.log(`[workspace-server] Workspace root: ${WORKSPACE_ROOT}`);
 console.log(`[workspace-server] S3 bucket: ${PROJECTS_BUCKET}`);
+console.log(`[workspace-server] Mode: ${CHILD_PROCESS_MODE ? 'child-process' : 'legacy-monolith'}`);
 
 // ---------------------------------------------------------------------------
-// Global Event Logger — for server-wide events (not project-scoped)
+// Global Event Logger
 // ---------------------------------------------------------------------------
 
 const globalEventLogger = new EventLogger({
@@ -80,234 +80,273 @@ const globalEventLogger = new EventLogger({
 globalEventLogger.startPeriodicFlush(10_000);
 
 // ---------------------------------------------------------------------------
-// Lazy-initialized deployment clients (shared across all projects)
+// Child Process Management (child-process mode)
 // ---------------------------------------------------------------------------
 
-let deployLambdaClient: DeployLambdaClient | undefined;
-let deployCloudfrontClient: DeployCloudfrontClient | undefined;
+const children = new Map<string, ChildProcessManager>();
+const childInitPromises = new Map<string, Promise<ChildProcessManager>>();
 
-function getDeployLambdaClient(): DeployLambdaClient {
-  if (!deployLambdaClient) {
-    const client = new LambdaClient({});
-    deployLambdaClient = {
-      async updateFunctionCode(params) {
-        const res = await client.send(new UpdateFunctionCodeCommand({
-          FunctionName: params.FunctionName,
-          ZipFile: params.ZipFile,
-        }));
-        return { FunctionName: res.FunctionName, LastUpdateStatus: res.LastUpdateStatus };
-      },
-      async getFunctionConfiguration(params) {
-        const res = await client.send(new GetFunctionConfigurationCommand({
-          FunctionName: params.FunctionName,
-        }));
-        return { LastUpdateStatus: res.LastUpdateStatus, State: res.State };
-      },
-    };
-  }
-  return deployLambdaClient;
-}
+/** WebSocket connections tracked by the router: connectionId → {ws, projectId}. */
+const wsConnections = new Map<string, { ws: WebSocket; projectId: string }>();
 
-function getDeployCloudfrontClient(): DeployCloudfrontClient {
-  if (!deployCloudfrontClient) {
-    const client = new CloudFrontClient({});
-    deployCloudfrontClient = {
-      async createInvalidation(params) {
-        const res = await client.send(new CreateInvalidationCommand({
-          DistributionId: params.DistributionId,
-          InvalidationBatch: params.InvalidationBatch,
-        }));
-        return { Invalidation: { Id: res.Invalidation?.Id } };
-      },
-    };
-  }
-  return deployCloudfrontClient;
-}
+/** Total WebSocket connection count (for status reporting). */
+let totalConnections = 0;
 
-// ---------------------------------------------------------------------------
-// Connection Manager — global idle shutdown across all projects
-// ---------------------------------------------------------------------------
-
-class ConnectionManager {
-  private totalConnections = 0;
-  private shutdownTimer: ReturnType<typeof setTimeout> | null = null;
-  private workflowHoldCount = 0;
-  private holdSafetyTimer: ReturnType<typeof setTimeout> | null = null;
-  private static readonly MAX_HOLD_DURATION_MS = 30 * 60 * 1000; // 30 minutes
-
-  get count(): number { return this.totalConnections; }
-
-  private get isHeld(): boolean { return this.workflowHoldCount > 0; }
-
-  add(): void {
-    this.totalConnections++;
-    globalEventLogger.info('workspace', `Client connected (${this.totalConnections} total)`);
-    if (this.shutdownTimer) {
-      clearTimeout(this.shutdownTimer);
-      this.shutdownTimer = null;
-      console.log(`[connections] Shutdown timer cancelled (${this.totalConnections} connected)`);
-    }
-  }
-
-  remove(): void {
-    this.totalConnections = Math.max(0, this.totalConnections - 1);
-    globalEventLogger.info('workspace', `Client disconnected (${this.totalConnections} remaining)`);
-    console.log(`[connections] Client removed (${this.totalConnections} remaining)`);
-    if (this.totalConnections === 0 && !this.isHeld) {
-      this.startShutdownTimer();
-    }
-  }
-
-  holdShutdown(): void {
-    this.workflowHoldCount++;
-    console.log(`[connections] Shutdown hold acquired (count: ${this.workflowHoldCount})`);
-    if (this.shutdownTimer) {
-      clearTimeout(this.shutdownTimer);
-      this.shutdownTimer = null;
-      console.log('[connections] Shutdown timer cancelled (workflow hold active)');
-    }
-    if (!this.holdSafetyTimer) {
-      this.holdSafetyTimer = setTimeout(() => {
-        console.warn(`[connections] Max hold duration exceeded — force releasing all holds`);
-        this.workflowHoldCount = 0;
-        this.holdSafetyTimer = null;
-        if (this.totalConnections === 0) this.startShutdownTimer();
-      }, ConnectionManager.MAX_HOLD_DURATION_MS);
-    }
-  }
-
-  releaseShutdown(): void {
-    if (this.workflowHoldCount > 0) this.workflowHoldCount--;
-    console.log(`[connections] Shutdown hold released (count: ${this.workflowHoldCount})`);
-    if (this.workflowHoldCount === 0 && this.holdSafetyTimer) {
-      clearTimeout(this.holdSafetyTimer);
-      this.holdSafetyTimer = null;
-    }
-    if (this.workflowHoldCount === 0 && this.totalConnections === 0) {
-      this.startShutdownTimer();
-    }
-  }
-
-  private startShutdownTimer(): void {
-    if (process.env.IDLE_TIMEOUT_MS === '0') {
-      console.log('[connections] No connections — idle shutdown disabled');
-      return;
-    }
-    console.log(`[connections] No connections — starting ${IDLE_TIMEOUT_MS / 1000}s shutdown timer`);
-    globalEventLogger.info('workspace', `No connections — idle shutdown timer started (${IDLE_TIMEOUT_MS / 1000}s)`);
-    this.shutdownTimer = setTimeout(async () => {
-      console.log('[connections] Idle timeout reached — stopping instance');
-      await selfStop();
-    }, IDLE_TIMEOUT_MS);
+/** Determine the worker bundle path relative to this file. */
+function getWorkerPath(): string {
+  // In production (CJS bundle), project-worker.js is alongside workspace-server.js
+  try {
+    return resolve(dirname(fileURLToPath(import.meta.url)), 'project-worker.js');
+  } catch {
+    // CJS fallback
+    return resolve(__dirname, 'project-worker.js');
   }
 }
 
-const connectionManager = new ConnectionManager();
-
-// ---------------------------------------------------------------------------
-// Project Context Management — lazy initialization with promise coalescing
-// ---------------------------------------------------------------------------
-
-const projectContexts = new Map<string, ProjectContext>();
-const contextInitPromises = new Map<string, Promise<ProjectContext>>();
-
-const sharedConfig: SharedConfig = {
-  workspaceRoot: WORKSPACE_ROOT,
-  projectsBucket: PROJECTS_BUCKET,
-  websiteBucket: WEBSITE_BUCKET,
-  anthropicApiKey: ANTHROPIC_API_KEY,
-  s3Client: new S3Client({}),
-  ssmClient: new SSMClient({}),
-  eventBridgeClient: new EventBridgeClient({}),
-  eventBusName: process.env.EVENT_BUS_NAME || 'antimatter',
-  sqsQueueUrl: process.env.SQS_QUEUE_URL || undefined,
-  getDeployLambdaClient,
-  getDeployCloudfrontClient,
-  onExecStart: () => connectionManager.holdShutdown(),
-  onExecEnd: () => connectionManager.releaseShutdown(),
-};
+function createSerializableConfig(projectId: string): SerializableConfig {
+  return {
+    projectId,
+    workspaceRoot: WORKSPACE_ROOT,
+    projectsBucket: PROJECTS_BUCKET,
+    websiteBucket: WEBSITE_BUCKET,
+    anthropicApiKey: ANTHROPIC_API_KEY,
+    eventBusName: process.env.EVENT_BUS_NAME || 'antimatter',
+    sqsQueueUrl: process.env.SQS_QUEUE_URL || undefined,
+    awsRegion: process.env.AWS_REGION || 'us-west-2',
+    cognitoUserPoolId: process.env.COGNITO_USER_POOL_ID || undefined,
+    cognitoClientId: process.env.COGNITO_CLIENT_ID || undefined,
+  };
+}
 
 /**
- * Get or create a ProjectContext for the given project ID.
- * Uses promise coalescing to prevent duplicate initializations.
+ * Get or create a child process for a project.
+ * Uses promise coalescing to prevent duplicate spawns.
  */
-async function getOrCreateContext(projectId: string): Promise<ProjectContext> {
-  // Already initialized
-  const existing = projectContexts.get(projectId);
-  if (existing) return existing;
+async function getOrCreateChild(projectId: string): Promise<ChildProcessManager> {
+  const existing = children.get(projectId);
+  if (existing?.isReady) return existing;
 
-  // In-progress initialization — coalesce concurrent requests
-  const pending = contextInitPromises.get(projectId);
+  const pending = childInitPromises.get(projectId);
   if (pending) return pending;
 
-  // New context — initialize
   const promise = (async () => {
-    console.log(`[workspace-server] Creating context for project: ${projectId}`);
-    const ctx = new ProjectContext(projectId, sharedConfig);
-    await ctx.initialize();
-    projectContexts.set(projectId, ctx);
-    contextInitPromises.delete(projectId);
-    return ctx;
+    console.log(`[workspace-server] Spawning child for project: ${projectId}`);
+    const child = new ChildProcessManager({
+      config: createSerializableConfig(projectId),
+      workerPath: getWorkerPath(),
+      onWsSend: (connectionId, data) => {
+        const conn = wsConnections.get(connectionId);
+        if (conn?.ws.readyState === WebSocket.OPEN) {
+          conn.ws.send(data);
+        }
+      },
+      onWsBroadcast: (projId, data) => {
+        // Broadcast to all WebSocket clients for this project
+        for (const [, conn] of wsConnections) {
+          if (conn.projectId === projId && conn.ws.readyState === WebSocket.OPEN) {
+            conn.ws.send(data);
+          }
+        }
+      },
+      onConnectionChange: (delta) => {
+        totalConnections = Math.max(0, totalConnections + delta);
+      },
+      onExecHold: () => { /* No idle shutdown — no-op */ },
+      onExecRelease: () => { /* No idle shutdown — no-op */ },
+      onReady: () => {
+        console.log(`[workspace-server] Child ready: ${projectId}`);
+      },
+      onError: (message, fatal) => {
+        console.error(`[workspace-server] Child error (${projectId}): ${message}`);
+        if (fatal) {
+          globalEventLogger.error('workspace', `Project ${projectId} fatal error: ${message}`);
+        }
+      },
+      onExit: (code, signal) => {
+        console.log(`[workspace-server] Child exited (${projectId}): code=${code}, signal=${signal}`);
+        // Auto-respawn
+        const child = children.get(projectId);
+        if (child && !child.isDead) return; // Already being respawned
+        setTimeout(async () => {
+          const c = children.get(projectId);
+          if (c) {
+            const ok = await c.respawn();
+            if (ok) {
+              // Re-register existing WebSocket connections with the new child
+              for (const [connId, conn] of wsConnections) {
+                if (conn.projectId === projectId) {
+                  c.sendWsConnect(connId);
+                }
+              }
+            }
+          }
+        }, 100);
+      },
+      onLog: (level, message) => {
+        console.log(`[child:${projectId}] [${level}] ${message}`);
+      },
+    });
+
+    await child.spawn();
+    children.set(projectId, child);
+    childInitPromises.delete(projectId);
+    return child;
   })();
 
-  contextInitPromises.set(projectId, promise);
+  childInitPromises.set(projectId, promise);
   return promise;
 }
 
 // ---------------------------------------------------------------------------
-// Self-Stop — stops this EC2 instance on idle timeout
+// HTTP Proxy — forward requests to child's UNIX socket
 // ---------------------------------------------------------------------------
 
-async function selfStop(): Promise<void> {
-  try {
-    const tokenRes = await fetch('http://169.254.169.254/latest/api/token', {
-      method: 'PUT',
-      headers: { 'X-aws-ec2-metadata-token-ttl-seconds': '21600' },
-    });
-    const token = await tokenRes.text();
+function proxyToChild(socketPath: string, url: string, req: express.Request, res: express.Response): void {
+  const options = {
+    socketPath,
+    path: url,
+    method: req.method,
+    headers: { ...req.headers, host: 'localhost' },
+  };
 
-    const idRes = await fetch('http://169.254.169.254/latest/meta-data/instance-id', {
-      headers: { 'X-aws-ec2-metadata-token': token },
-    });
-    const instanceId = await idRes.text();
+  const proxyReq = httpRequest(options, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode || 500, proxyRes.headers);
+    proxyRes.pipe(res, { end: true });
+  });
 
-    // Get our private IP for ALB deregistration
-    const ipRes = await fetch('http://169.254.169.254/latest/meta-data/local-ipv4', {
-      headers: { 'X-aws-ec2-metadata-token': token },
-    });
-    const privateIp = await ipRes.text();
-
-    console.log(`[workspace-server] Stopping instance ${instanceId}...`);
-
-    // Deregister from ALB target group FIRST so traffic stops arriving immediately
-    const targetGroupArn = process.env.WORKSPACE_TARGET_GROUP_ARN;
-    if (targetGroupArn && privateIp) {
-      try {
-        const elbv2 = new ElasticLoadBalancingV2Client({});
-        await elbv2.send(new DeregisterTargetsCommand({
-          TargetGroupArn: targetGroupArn,
-          Targets: [{ Id: privateIp, Port: PORT }],
-        }));
-        console.log(`[workspace-server] Deregistered from ALB target group`);
-      } catch (albErr) {
-        console.error('[workspace-server] Failed to deregister from ALB:', albErr);
-        // Continue with shutdown — stale target will be cleaned up by health checks
-      }
+  proxyReq.on('error', (err) => {
+    console.error(`[proxy] Error proxying to ${socketPath}:`, err.message);
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Project worker unavailable', message: err.message });
     }
+  });
 
-    // Shutdown all project contexts (stops file watchers, PTYs, flushes S3 sync)
-    for (const ctx of projectContexts.values()) {
-      await ctx.shutdown();
+  // Forward request body
+  if (req.readable) {
+    req.pipe(proxyReq, { end: true });
+  } else {
+    // Body already parsed by express.json()
+    if (req.body && Object.keys(req.body).length > 0) {
+      const bodyStr = JSON.stringify(req.body);
+      proxyReq.setHeader('Content-Type', 'application/json');
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyStr));
+      proxyReq.end(bodyStr);
+    } else {
+      proxyReq.end();
     }
-
-    await globalEventLogger.emit('workspace.idle.shutdown', 'workspace', 'info',
-      `Stopping instance ${instanceId} due to idle timeout`, { instanceId });
-
-    const ec2 = new EC2Client({});
-    await ec2.send(new StopInstancesCommand({ InstanceIds: [instanceId] }));
-  } catch (err) {
-    console.error('[workspace-server] Failed to self-stop:', err);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Legacy Mode — in-process monolith (for rollback)
+// ---------------------------------------------------------------------------
+
+let legacyGetOrCreateContext: ((projectId: string) => Promise<any>) | null = null;
+
+async function initLegacyMode(): Promise<void> {
+  // Dynamic import to avoid loading ProjectContext when in child-process mode
+  const { ProjectContext } = await import('./project-context.js');
+
+  const projectContexts = new Map<string, InstanceType<typeof ProjectContext>>();
+  const contextInitPromises = new Map<string, Promise<InstanceType<typeof ProjectContext>>>();
+
+  // Lazy-initialized deployment clients
+  let deployLambdaClient: DeployLambdaClient | undefined;
+  let deployCloudfrontClient: DeployCloudfrontClient | undefined;
+
+  function getDeployLambdaClient(): DeployLambdaClient {
+    if (!deployLambdaClient) {
+      const client = new LambdaClient({});
+      deployLambdaClient = {
+        async updateFunctionCode(params: any) {
+          return client.send(new UpdateFunctionCodeCommand(params));
+        },
+        async getFunctionConfiguration(params: any) {
+          return client.send(new GetFunctionConfigurationCommand(params));
+        },
+      };
+    }
+    return deployLambdaClient;
+  }
+
+  function getDeployCloudfrontClient(): DeployCloudfrontClient {
+    if (!deployCloudfrontClient) {
+      const client = new CloudFrontClient({});
+      deployCloudfrontClient = {
+        async createInvalidation(params: any) {
+          return client.send(new CreateInvalidationCommand(params));
+        },
+      };
+    }
+    return deployCloudfrontClient;
+  }
+
+  const sharedConfig = {
+    workspaceRoot: WORKSPACE_ROOT,
+    projectsBucket: PROJECTS_BUCKET,
+    websiteBucket: WEBSITE_BUCKET,
+    anthropicApiKey: ANTHROPIC_API_KEY,
+    s3Client: new S3Client({}),
+    ssmClient: new SSMClient({}),
+    eventBridgeClient: new EventBridgeClient({}),
+    eventBusName: process.env.EVENT_BUS_NAME || 'antimatter',
+    sqsQueueUrl: process.env.SQS_QUEUE_URL || undefined,
+    getDeployLambdaClient,
+    getDeployCloudfrontClient,
+    onExecStart: () => {},
+    onExecEnd: () => {},
+  };
+
+  legacyGetOrCreateContext = async (projectId: string) => {
+    const existing = projectContexts.get(projectId);
+    if (existing) return existing;
+    const pending = contextInitPromises.get(projectId);
+    if (pending) return pending;
+    const promise = (async () => {
+      const ctx = new ProjectContext(projectId, sharedConfig);
+      await ctx.initialize();
+      projectContexts.set(projectId, ctx);
+      contextInitPromises.delete(projectId);
+      return ctx;
+    })();
+    contextInitPromises.set(projectId, promise);
+    return promise;
+  };
+
+  // Store for shutdown
+  (globalThis as any).__legacyProjectContexts = projectContexts;
+}
+
+// ---------------------------------------------------------------------------
+// Route Parsing
+// ---------------------------------------------------------------------------
+
+function parseProjectRoute(url: string): { projectId: string | null; strippedUrl: string } {
+  // Match /workspace/{projectId}/...
+  const workspaceMatch = url.match(/^\/workspace\/([^/?]+)(\/.*)?$/);
+  if (workspaceMatch) {
+    return {
+      projectId: decodeURIComponent(workspaceMatch[1]),
+      strippedUrl: workspaceMatch[2] || '/',
+    };
+  }
+
+  // Backward compat: /{PROJECT_ID}/... prefix
+  if (PROJECT_ID) {
+    if (url.startsWith(`/${PROJECT_ID}/`)) {
+      return { projectId: PROJECT_ID, strippedUrl: url.slice(`/${PROJECT_ID}`.length) };
+    }
+    if (url === `/${PROJECT_ID}`) {
+      return { projectId: PROJECT_ID, strippedUrl: '/' };
+    }
+  }
+
+  // Backward compat: bare /api/* routes → primary project
+  if (PROJECT_ID && url.startsWith('/api/')) {
+    return { projectId: PROJECT_ID, strippedUrl: url };
+  }
+
+  return { projectId: null, strippedUrl: url };
 }
 
 // ---------------------------------------------------------------------------
@@ -329,35 +368,36 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '10mb' }));
 
-// ---- Global endpoints (no project context needed) ----
+// ---- Global endpoints ----
 
 app.get('/health', (_req, res) => {
   res.json({
     status: 'healthy',
-    projects: [...projectContexts.keys()],
+    mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy',
+    projects: CHILD_PROCESS_MODE
+      ? [...children.keys()].map(id => ({ id, ready: children.get(id)?.isReady }))
+      : [],
     primaryProject: PROJECT_ID || null,
     uptime: process.uptime(),
   });
 });
 
 app.get('/status', (_req, res) => {
-  const projectStatuses: Record<string, { connections: number }> = {};
-  for (const [id, ctx] of projectContexts) {
-    projectStatuses[id] = { connections: ctx.connections.size };
-  }
   res.json({
-    projects: projectStatuses,
-    totalConnections: connectionManager.count,
+    mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy',
+    projects: [...children.keys()],
+    totalConnections,
     uptime: process.uptime(),
   });
 });
 
-// ---- Auth middleware for API routes ----
+// ---- Auth middleware ----
 const COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID || '';
 const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID || '';
 
 if (COGNITO_USER_POOL_ID && COGNITO_CLIENT_ID) {
   console.log('[workspace-server] Auth middleware enabled');
+  // Auth applies to /api routes and /workspace/*/api routes
   app.use('/api', createAuthMiddleware({
     userPoolId: COGNITO_USER_POOL_ID,
     region: process.env.AWS_REGION ?? 'us-west-2',
@@ -365,73 +405,62 @@ if (COGNITO_USER_POOL_ID && COGNITO_CLIENT_ID) {
   }));
 }
 
-// ---- Internal project context management ----
+// ---- Internal management endpoints ----
 
-/** Shut down a single project's context (PTY, sync, watcher) without stopping the server. */
 app.delete('/internal/project-context/:projectId', async (req, res) => {
   const { projectId } = req.params;
-  const ctx = projectContexts.get(projectId);
-  if (!ctx) {
-    return res.status(404).json({ error: 'No active context for this project' });
+  if (CHILD_PROCESS_MODE) {
+    const child = children.get(projectId);
+    if (!child) return res.status(404).json({ error: 'No active child for this project' });
+    await child.shutdown();
+    children.delete(projectId);
+    res.json({ success: true });
+  } else {
+    res.status(501).json({ error: 'Legacy mode — use legacy shutdown' });
   }
-  await ctx.shutdown();
-  projectContexts.delete(projectId);
-  console.log(`[workspace-server] Project context ${projectId} removed`);
-  res.json({ success: true });
 });
 
-/** List active project contexts. */
 app.get('/internal/project-contexts', (_req, res) => {
-  const contexts = [...projectContexts.keys()].map(id => ({
-    projectId: id,
-    connections: projectContexts.get(id)!.connections.size,
-  }));
-  res.json({ contexts });
+  if (CHILD_PROCESS_MODE) {
+    const contexts = [...children.entries()].map(([id, child]) => ({
+      projectId: id,
+      state: child.isReady ? 'ready' : child.isDead ? 'dead' : 'initializing',
+    }));
+    res.json({ contexts });
+  } else {
+    res.json({ contexts: [] });
+  }
 });
 
 // ---- Dynamic project routing ----
-// Parses project ID from URL, strips prefix, and delegates to the project's router.
 
-app.use((req, res, next) => {
-  let projectId: string | null = null;
-  let strippedUrl: string | null = null;
+app.use(async (req, res, next) => {
+  const { projectId, strippedUrl } = parseProjectRoute(req.url);
+  if (!projectId) return next();
 
-  // Match /workspace/{projectId}/...
-  const workspaceMatch = req.url.match(/^\/workspace\/([^/?]+)(\/.*)?$/);
-  if (workspaceMatch) {
-    projectId = decodeURIComponent(workspaceMatch[1]);
-    strippedUrl = workspaceMatch[2] || '/';
-  }
-
-  // Backward compat: /{PROJECT_ID}/... prefix (ALB health checks use this)
-  if (!projectId && PROJECT_ID) {
-    if (req.url.startsWith(`/${PROJECT_ID}/`)) {
-      projectId = PROJECT_ID;
-      strippedUrl = req.url.slice(`/${PROJECT_ID}`.length);
-    } else if (req.url === `/${PROJECT_ID}`) {
-      projectId = PROJECT_ID;
-      strippedUrl = '/';
+  if (CHILD_PROCESS_MODE) {
+    // Child-process mode: proxy to child's UNIX socket
+    try {
+      const child = await getOrCreateChild(projectId);
+      if (!child.isReady) {
+        return res.status(503).json({ error: 'Project initializing', retryAfter: 5 });
+      }
+      proxyToChild(child.getSocketPath(), strippedUrl, req, res);
+    } catch (err) {
+      console.error(`[workspace-server] Failed to get child for ${projectId}:`, err);
+      res.status(503).json({ error: 'Failed to initialize project', message: String(err) });
+    }
+  } else {
+    // Legacy mode: in-process routing
+    try {
+      const ctx = await legacyGetOrCreateContext!(projectId);
+      req.url = strippedUrl;
+      ctx.router(req, res, next);
+    } catch (err) {
+      console.error(`[workspace-server] Legacy context error for ${projectId}:`, err);
+      res.status(500).json({ error: 'Failed to initialize project', message: String(err) });
     }
   }
-
-  // Backward compat: bare /api/* routes → primary project (single-project mode)
-  if (!projectId && PROJECT_ID && req.url.startsWith('/api/')) {
-    projectId = PROJECT_ID;
-    strippedUrl = req.url; // Don't strip — router expects /api/*
-  }
-
-  if (!projectId) return next(); // No project ID found → fall through (404)
-
-  // Get or create project context and delegate to its router
-  getOrCreateContext(projectId)
-    .then(ctx => {
-      req.url = strippedUrl!;
-      ctx.router(req, res, next);
-    })
-    .catch(err => {
-      console.error(`[workspace-server] Failed to get context for ${projectId}:`, err);
-      res.status(500).json({ error: 'Failed to initialize project', message: String(err) });
-    });
 });
 
 // ---------------------------------------------------------------------------
@@ -441,24 +470,15 @@ app.use((req, res, next) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
-// Handle WebSocket upgrade
-server.on('upgrade', (req, socket, head) => {
+server.on('upgrade', async (req, socket, head) => {
   const url = new URL(req.url || '/', `http://${req.headers.host}`);
   const pathParts = url.pathname.split('/').filter(Boolean);
 
-  // Accept /terminal/{projectId}, /ws/terminal/{projectId},
-  // and /workspace/{projectId}/ws/terminal/{projectId}
   const terminalIdx = pathParts.indexOf('terminal');
-  if (terminalIdx === -1) {
-    socket.destroy();
-    return;
-  }
+  if (terminalIdx === -1) { socket.destroy(); return; }
 
   const requestedProjectId = pathParts[terminalIdx + 1];
-  if (!requestedProjectId) {
-    socket.destroy();
-    return;
-  }
+  if (!requestedProjectId) { socket.destroy(); return; }
 
   // Validate session token
   const token = url.searchParams.get('token');
@@ -468,27 +488,62 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
 
-  // Get or create project context, then upgrade
-  getOrCreateContext(requestedProjectId)
-    .then(ctx => {
+  if (CHILD_PROCESS_MODE) {
+    // Child-process mode: upgrade in parent, relay via IPC
+    try {
+      const child = await getOrCreateChild(requestedProjectId);
+      if (!child.isReady) {
+        socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
       wss.handleUpgrade(req, socket, head, (ws) => {
-        // Track in global connection manager (for idle shutdown)
-        connectionManager.add();
+        const connectionId = randomUUID();
+        wsConnections.set(connectionId, { ws, projectId: requestedProjectId });
+        totalConnections++;
 
-        // Delegate to project context for connection handling
-        ctx.handleConnection(ws);
+        // Tell child about the new connection
+        child.sendWsConnect(connectionId);
 
-        // Track disconnection in global connection manager
-        const onClose = () => { connectionManager.remove(); };
-        ws.on('close', onClose);
-        ws.on('error', onClose);
+        // Relay client messages to child
+        ws.on('message', (raw) => {
+          child.sendWsMessage(connectionId, raw.toString());
+        });
+
+        // Heartbeat (stays in parent — needs actual WebSocket object)
+        const heartbeat = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'heartbeat' }));
+        }, 20_000);
+
+        const cleanup = () => {
+          clearInterval(heartbeat);
+          wsConnections.delete(connectionId);
+          totalConnections = Math.max(0, totalConnections - 1);
+          child.sendWsDisconnect(connectionId);
+        };
+
+        ws.on('close', cleanup);
+        ws.on('error', cleanup);
       });
-    })
-    .catch(err => {
-      console.error(`[workspace-server] WebSocket context error for ${requestedProjectId}:`, err);
+    } catch (err) {
+      console.error(`[workspace-server] WebSocket child error for ${requestedProjectId}:`, err);
+      socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
+      socket.destroy();
+    }
+  } else {
+    // Legacy mode: direct connection
+    try {
+      const ctx = await legacyGetOrCreateContext!(requestedProjectId);
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ctx.handleConnection(ws);
+      });
+    } catch (err) {
+      console.error(`[workspace-server] WebSocket legacy error for ${requestedProjectId}:`, err);
       socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
       socket.destroy();
-    });
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -496,20 +551,16 @@ server.on('upgrade', (req, socket, head) => {
 // ---------------------------------------------------------------------------
 
 async function startup() {
-  // Start HTTP server FIRST so health checks pass and the ALB registers us.
-  // Project initialization happens async afterwards — it can consume
-  // significant memory (esbuild bundling of .antimatter/*.ts) and time,
-  // and shouldn't block the listener or cause health check failures.
+  if (!CHILD_PROCESS_MODE) {
+    console.log('[workspace-server] Initializing legacy mode...');
+    await initLegacyMode();
+  }
+
   server.listen(PORT, async () => {
     console.log(`[workspace-server] Listening on port ${PORT}`);
-
     await globalEventLogger.emit('workspace.ready', 'workspace', 'info',
-      'Workspace server ready', { port: PORT, uptime: process.uptime() });
+      'Workspace server ready', { port: PORT, mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy', uptime: process.uptime() });
 
-    // Project initialization is lazy — triggered by first HTTP/WebSocket request.
-    // Even with esbuild.transform() (fast), the full ProjectContext init includes
-    // file watchers, S3 sync, git, and workflow manager which can block the event
-    // loop. Lazy init keeps health checks responsive from the start.
     if (PROJECT_ID) {
       console.log(`[workspace-server] Primary project: ${PROJECT_ID} (lazy init on first request)`);
     }
@@ -521,9 +572,17 @@ process.on('SIGTERM', async () => {
   console.log('[workspace-server] SIGTERM received — shutting down');
   globalEventLogger.info('workspace', 'SIGTERM received — shutting down');
 
-  // Shutdown all project contexts
-  for (const ctx of projectContexts.values()) {
-    await ctx.shutdown();
+  if (CHILD_PROCESS_MODE) {
+    for (const child of children.values()) {
+      await child.shutdown();
+    }
+  } else {
+    const contexts = (globalThis as any).__legacyProjectContexts as Map<string, any> | undefined;
+    if (contexts) {
+      for (const ctx of contexts.values()) {
+        await ctx.shutdown();
+      }
+    }
   }
 
   await globalEventLogger.shutdown();

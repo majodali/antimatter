@@ -11,10 +11,8 @@ const outDir = resolve(uiRoot, 'dist-workspace');
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
-console.log('Bundling workspace server...');
-await build({
-  entryPoints: [resolve(uiRoot, 'src/server/workspace-server.ts')],
-  outfile: resolve(outDir, 'workspace-server.js'),
+// Shared esbuild config for both bundles
+const sharedConfig = {
   bundle: true,
   platform: 'node',
   target: 'node20',
@@ -29,9 +27,25 @@ await build({
   sourcemap: false,
   minify: false, // Keep readable for debugging
   logLevel: 'info',
+};
+
+// Bundle 1: Router (parent process)
+console.log('Bundling workspace server (router)...');
+await build({
+  ...sharedConfig,
+  entryPoints: [resolve(uiRoot, 'src/server/workspace-server.ts')],
+  outfile: resolve(outDir, 'workspace-server.js'),
 });
 
-// Generate package.json for external dependencies (installed on EC2 alongside the bundle)
+// Bundle 2: Project Worker (child process)
+console.log('Bundling project worker...');
+await build({
+  ...sharedConfig,
+  entryPoints: [resolve(uiRoot, 'src/server/project-worker.ts')],
+  outfile: resolve(outDir, 'project-worker.js'),
+});
+
+// Generate package.json for external dependencies (installed on EC2 alongside the bundles)
 writeFileSync(resolve(outDir, 'package.json'), JSON.stringify({
   name: 'antimatter-workspace-server',
   private: true,
@@ -41,4 +55,6 @@ writeFileSync(resolve(outDir, 'package.json'), JSON.stringify({
   },
 }, null, 2));
 
-console.log('Workspace server bundle written to dist-workspace/workspace-server.js');
+console.log('Workspace server bundles written to dist-workspace/');
+console.log('  - workspace-server.js (router)');
+console.log('  - project-worker.js (child process)');

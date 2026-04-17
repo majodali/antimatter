@@ -600,9 +600,10 @@ else
   mkdir -p "$MOUNT_POINT/${safeProjectId}"
 fi
 
-# ---- Download workspace server from S3 ----
+# ---- Download workspace server + project worker from S3 ----
 echo "[workspace] Downloading workspace server..."
 aws s3 cp "s3://${safeBucket}/workspace-server/workspace-server.js" /opt/antimatter/workspace-server.js || echo "[workspace] WARNING: workspace-server.js not found in S3"
+aws s3 cp "s3://${safeBucket}/workspace-server/project-worker.js" /opt/antimatter/project-worker.js || echo "[workspace] WARNING: project-worker.js not found in S3"
 
 # ---- Download workspace server package.json for external dependencies ----
 aws s3 cp "s3://${safeBucket}/workspace-server/package.json" /opt/antimatter/package.json || echo "[workspace] WARNING: package.json not found in S3"
@@ -622,7 +623,7 @@ Type=simple
 EnvironmentFile=/opt/antimatter/config.env
 WorkingDirectory=/opt/antimatter
 ExecStartPre=/bin/bash -c 'mkdir -p /workspace/data && (mount /dev/sdf /workspace/data 2>/dev/null || mount /dev/xvdf /workspace/data 2>/dev/null || mount /dev/nvme1n1 /workspace/data 2>/dev/null || true)'
-ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && aws s3 cp "s3://$PROJECTS_BUCKET/workspace-server/workspace-server.js" /opt/antimatter/workspace-server.js 2>/dev/null || echo "[workspace] S3 download failed — using existing binary"'
+ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && aws s3 cp "s3://$PROJECTS_BUCKET/workspace-server/workspace-server.js" /opt/antimatter/workspace-server.js 2>/dev/null && aws s3 cp "s3://$PROJECTS_BUCKET/workspace-server/project-worker.js" /opt/antimatter/project-worker.js 2>/dev/null || echo "[workspace] S3 download failed — using existing binaries"'
 ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && aws s3 cp "s3://$PROJECTS_BUCKET/workspace-server/package.json" /opt/antimatter/package.json 2>/dev/null && cd /opt/antimatter && npm install --production 2>/dev/null || true'
 ExecStart=/usr/bin/node /opt/antimatter/workspace-server.js
 Restart=always

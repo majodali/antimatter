@@ -219,6 +219,7 @@ export default (wf: any) => {
 
       const uploadResult = await wf.exec(
         `aws s3 cp packages/ui/dist-workspace/workspace-server.js s3://${bucket}/workspace-server/workspace-server.js && ` +
+        `aws s3 cp packages/ui/dist-workspace/project-worker.js s3://${bucket}/workspace-server/project-worker.js && ` +
         `aws s3 cp packages/ui/dist-workspace/package.json s3://${bucket}/workspace-server/package.json`,
         { timeout: 60_000 },
       );
