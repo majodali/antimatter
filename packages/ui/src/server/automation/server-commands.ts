@@ -131,6 +131,8 @@ export interface ServerCommandDependencies {
   ptySessionPool?: () => { list(): any[]; getOrCreate(id: string, cwd: string, name?: string): any; get(id: string): any; close(id: string): boolean } | undefined;
   /** Lazy getter — deployed resource store. */
   deployedResourceStore?: () => import('../services/deployed-resource-store.js').DeployedResourceStore | undefined;
+  /** Lazy getter — unified activity log (worker/workflow/pty events). */
+  activityLog?: () => import('../services/activity-log.js').ActivityLog | undefined;
   /** Returns current explorer ignore patterns for file tree filtering. */
   explorerIgnore: () => string[];
 }
@@ -155,7 +157,7 @@ type CommandHandler = (params: Record<string, unknown>) => Promise<unknown>;
 export function createServerCommandExecutor(
   deps: ServerCommandDependencies,
 ): (command: string, params: Record<string, unknown>) => Promise<unknown> {
-  const { workspace, workflowManager, errorStore, testResultsStorage, ptySessionPool, deployedResourceStore, explorerIgnore } = deps;
+  const { workspace, workflowManager, errorStore, testResultsStorage, ptySessionPool, deployedResourceStore, activityLog, explorerIgnore } = deps;
 
   /** Helper: run a git command via workspace environment. */
   async function runGit(args: string, timeout = 30_000): Promise<{
@@ -728,11 +730,40 @@ export function createServerCommandExecutor(
     if (!event.type) {
       throw new AutomationCommandError('event.type is required', 'invalid-params');
     }
-    const result = await wm.emitEvent(event);
-    return { result };
+    // Fire-and-forget: don't await the rule execution. Long-running rules
+    // (like build:full which runs npm ci for 2+ min) would cause CloudFront 504s.
+    // Callers can track progress via workflow.state or activity.list.
+    wm.emitEvent(event).catch((err) => {
+      console.error(`[workflow.emit] Error processing event ${event.type}:`, err);
+    });
+    return { queued: true, type: event.type };
   });
 
   // ---- Meta ----
+
+  // ---- Activity ----
+
+  handlers.set('activity.list', async (params) => {
+    const log = activityLog?.();
+    if (!log) return { events: [] };
+    const opts = {
+      limit: params.limit as number | undefined,
+      since: params.since as string | undefined,
+      source: params.source as any,
+      kind: params.kind as string | undefined,
+      correlationId: params.correlationId as string | undefined,
+      projectId: params.projectId as string | undefined,
+      minLevel: params.minLevel as any,
+    };
+    return { events: log.list(opts) };
+  });
+
+  handlers.set('activity.trace', async (params) => {
+    const log = activityLog?.();
+    if (!log) return { events: [] };
+    const correlationId = requireParam<string>(params, 'correlationId');
+    return { events: log.byCorrelation(correlationId) };
+  });
 
   handlers.set('commands.list', async () => {
     return { commands: COMMAND_CATALOG };

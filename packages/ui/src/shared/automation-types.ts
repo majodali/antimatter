@@ -127,7 +127,11 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   // Workflow / errors
   { command: 'workflow.state', execution: 'server', description: 'Get workflow state' },
   { command: 'workflow.errors', execution: 'server', description: 'Get project errors' },
-  { command: 'workflow.emit', execution: 'server', description: 'Emit workflow event' },
+  { command: 'workflow.emit', execution: 'server', description: 'Emit workflow event (fire-and-forget; poll activity.list for progress)' },
+
+  // Activity / observability
+  { command: 'activity.list', execution: 'server', description: 'List recent activity events (filters: source, kind, correlationId, since, limit)' },
+  { command: 'activity.trace', execution: 'server', description: 'Get all events for a given correlationId (e.g. invocation trace)' },
 
   // Editor (browser-only — requires Zustand stores)
   { command: 'editor.open', execution: 'browser', description: 'Open file in editor' },

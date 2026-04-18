@@ -55,6 +55,8 @@ import { createServerCommandExecutor } from './automation/server-commands.js';
 import { WorkflowManager } from './services/workflow-manager.js';
 import { ErrorStore } from './services/error-store.js';
 import { DeployedResourceStore } from './services/deployed-resource-store.js';
+import { ActivityLog } from './services/activity-log.js';
+import { Kinds } from '../shared/activity-types.js';
 import {
   COMMAND_TIMEOUTS,
   DEFAULT_COMMAND_TIMEOUT,
@@ -392,6 +394,10 @@ interface TerminalSessionInfo {
 export class PtySessionPool {
   private sessions = new Map<string, PtyManager>();
 
+  /** Lifecycle hooks (set externally by ProjectContext to emit activity events). */
+  onSessionSpawn?: (sessionId: string, name: string, virtual: boolean) => void;
+  onSessionClose?: (sessionId: string) => void;
+
   /** Get or create a session. Starts PTY if not virtual. */
   getOrCreate(sessionId: string, cwd: string, name?: string): PtyManager {
     let session = this.sessions.get(sessionId);
@@ -402,6 +408,7 @@ export class PtySessionPool {
       if (sessionId !== 'build') {
         session.start(cwd);
       }
+      this.onSessionSpawn?.(sessionId, name ?? sessionId, sessionId === 'build');
     }
     return session;
   }
@@ -437,6 +444,7 @@ export class PtySessionPool {
     if (!session) return false;
     session.stop();
     this.sessions.delete(sessionId);
+    this.onSessionClose?.(sessionId);
     return true;
   }
 
@@ -487,6 +495,8 @@ export class ProjectContext {
   testResultsStorage!: FileTestResultsStorage;
   deployedResourceStore!: DeployedResourceStore;
   private eventLog?: import('./event-log.js').EventLog;
+  /** Unified activity log for worker/workflow/pty/service events. Created during initialize(). */
+  activityLog?: import('./services/activity-log.js').ActivityLog;
   s3SyncScheduler: S3SyncScheduler | null = null;
 
   /** WebSocket connections scoped to this project (for broadcast isolation). */
@@ -550,11 +560,47 @@ export class ProjectContext {
   async initialize(): Promise<void> {
     if (this.initialized) return;
     console.log(`[project-context] Initializing project: ${this.projectId}`);
+    const initStart = Date.now();
 
     // Ensure project directory exists
     if (!existsSync(this.projectPath)) {
       mkdirSync(this.projectPath, { recursive: true });
     }
+
+    // Activity log — unified observability for worker/workflow/pty/service events.
+    // Initialize FIRST so the rest of init can emit events.
+    this.activityLog = new ActivityLog({
+      logPath: join(this.projectPath, '.antimatter-cache', 'activity.jsonl'),
+      label: `activity:${this.projectId}`,
+    });
+    await this.activityLog.initialize();
+    // Subscribe: broadcast each event to all project WebSocket clients (via IPC when in worker mode)
+    this.activityLog.subscribe((event) => {
+      this.broadcastToClients({ type: 'activity-event', event });
+    });
+    this.activityLog.emit({
+      source: 'worker', kind: Kinds.WorkerInitStart, level: 'info',
+      message: `Worker initializing project: ${this.projectId}`,
+      projectId: this.projectId, correlationId: this.projectId,
+    });
+
+    // Wire PTY session lifecycle → activity log
+    this.ptyManager.onSessionSpawn = (sessionId, name, virtual) => {
+      this.activityLog?.emit({
+        source: 'pty', kind: Kinds.PtySpawn, level: 'info',
+        message: virtual ? `Virtual PTY session: ${name}` : `PTY session started: ${name}`,
+        projectId: this.projectId, correlationId: sessionId,
+        data: { sessionId, name, virtual },
+      });
+    };
+    this.ptyManager.onSessionClose = (sessionId) => {
+      this.activityLog?.emit({
+        source: 'pty', kind: Kinds.PtyClose, level: 'info',
+        message: `PTY session closed: ${sessionId}`,
+        projectId: this.projectId, correlationId: sessionId,
+        data: { sessionId },
+      });
+    };
 
     // Start event logger
     this.eventLogger.startPeriodicFlush(10_000);
@@ -604,6 +650,7 @@ export class ProjectContext {
       errorStore: this.errorStore,
       eventLog: this.eventLog,
       deployedResourceStore: this.deployedResourceStore,
+      activityLog: this.activityLog,
       projectId: this.projectId,
       onExecStart: () => this.config.onExecStart(),
       onExecEnd: () => this.config.onExecEnd(),
@@ -676,6 +723,12 @@ export class ProjectContext {
 
     this.initialized = true;
     console.log(`[project-context] Project ${this.projectId} initialized`);
+    this.activityLog?.emit({
+      source: 'worker', kind: Kinds.WorkerInitEnd, level: 'info',
+      message: `Worker ready: ${this.projectId}`,
+      projectId: this.projectId, correlationId: this.projectId,
+      data: { durationMs: Date.now() - initStart },
+    });
     await this.eventLogger.emit('workspace.ready', 'workspace', 'info',
       `Project context ready: ${this.projectId}`, { projectId: this.projectId });
   }
@@ -955,6 +1008,7 @@ export class ProjectContext {
       testResultsStorage: () => this.testResultsStorage,
       ptySessionPool: () => this.ptyManager,
       deployedResourceStore: () => this.deployedResourceStore,
+      activityLog: () => this.activityLog,
       explorerIgnore: () => this.fileChangeNotifier.getExplorerIgnore(),
     });
     router.use('/api/automation', createAutomationRouter({
@@ -1422,10 +1476,16 @@ export class ProjectContext {
 
   async shutdown(): Promise<void> {
     console.log(`[project-context:${this.projectId}] Shutting down...`);
+    this.activityLog?.emit({
+      source: 'worker', kind: Kinds.WorkerShutdown, level: 'info',
+      message: `Worker shutting down: ${this.projectId}`,
+      projectId: this.projectId, correlationId: this.projectId,
+    });
     this.fileChangeNotifier.stop();
     this.ptyManager.closeAll();
     if (this.eventLog) await this.eventLog.shutdown();
     if (this.s3SyncScheduler) await this.s3SyncScheduler.shutdown();
+    if (this.activityLog) await this.activityLog.shutdown();
     await this.eventLogger.shutdown();
     // Reject all pending browser automation commands
     for (const [requestId, pending] of this.pendingBrowserCommands) {

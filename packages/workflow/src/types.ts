@@ -446,6 +446,24 @@ export interface WorkflowRuntimeConfig {
   readonly projectRoot?: string;
   /** Server-provided utilities exposed as wf.utils in rules. */
   readonly utils?: Record<string, unknown>;
+  /** Called when an invocation begins (before any rules fire). */
+  readonly onInvocationStart?: (ctx: { invocationId: string; triggerEvents: readonly WorkflowEvent[] }) => void;
+  /** Called when an invocation ends (after all cycles complete). */
+  readonly onInvocationEnd?: (ctx: { invocationId: string; durationMs: number; cycles: number }) => void;
+  /** Called before each rule's action runs. */
+  readonly onRuleStart?: (ctx: { invocationId: string; ruleId: string; matchedCount: number }) => void;
+  /** Called after each rule's action completes (or throws). */
+  readonly onRuleEnd?: (ctx: { invocationId: string; ruleId: string; durationMs: number; error?: string }) => void;
+  /** Called for every wf.log() call during rule execution. */
+  readonly onLog?: (ctx: { invocationId: string; ruleId: string | null; level: 'info'|'warn'|'error'; message: string; timestamp: string }) => void;
+  /** Called when wf.exec() starts a command. */
+  readonly onExecStart?: (ctx: { invocationId: string; ruleId: string | null; execId: string; command: string; cwd?: string }) => void;
+  /** Called for every stdout/stderr chunk during wf.exec(). */
+  readonly onExecChunk?: (ctx: { invocationId: string; execId: string; stream: 'stdout'|'stderr'; data: string }) => void;
+  /** Called when wf.exec() completes. */
+  readonly onExecEnd?: (ctx: { invocationId: string; execId: string; durationMs: number; exitCode: number }) => void;
+  /** Called when wf.emit() is invoked during rule execution. */
+  readonly onEmit?: (ctx: { invocationId: string; ruleId: string | null; event: WorkflowEvent }) => void;
 }
 
 /** A log message captured during workflow execution. */

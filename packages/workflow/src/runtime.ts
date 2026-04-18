@@ -63,6 +63,11 @@ export class WorkflowRuntime<S> {
   private rules: RegisteredRule<S>[] = [];
   private readonly executor: WorkflowRuntimeOptions['executor'];
   private readonly maxCycles: number;
+  private readonly config: WorkflowRuntimeConfig;
+
+  // Trace context — set during processEvents, null otherwise.
+  private currentInvocationId: string | null = null;
+  private currentRuleId: string | null = null;
 
   // Declarations — collected during definition phase.
   private readonly _modules = new Map<string, ModuleDeclaration>();
@@ -86,6 +91,7 @@ export class WorkflowRuntime<S> {
     options: WorkflowRuntimeOptions,
   ) {
     this.executor = options.executor;
+    this.config = options.config ?? {};
     this.maxCycles = options.config?.maxCycles ?? 10;
 
     // Build the handle — a single object captured by all action closures.
@@ -115,16 +121,57 @@ export class WorkflowRuntime<S> {
         this.trackDeclaration(id);
       },
       exec: (command, opts) => {
-        return this.executor(command, opts);
+        const invocationId = this.currentInvocationId ?? '';
+        const ruleId = this.currentRuleId;
+        const hasHooks = !!(this.config.onExecStart || this.config.onExecChunk || this.config.onExecEnd);
+        if (!hasHooks) {
+          // No trace hooks: pass through unchanged (preserves existing test semantics).
+          return this.executor(command, opts);
+        }
+        const execId = `exec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        const start = Date.now();
+        this.config.onExecStart?.({ invocationId, ruleId, execId, command, cwd: opts?.cwd });
+        // Wrap onStdout/onStderr to emit chunks
+        const origStdout = opts?.onStdout;
+        const origStderr = opts?.onStderr;
+        const wrappedOpts: ExecOptions = {
+          ...opts,
+          onStdout: (data) => {
+            this.config.onExecChunk?.({ invocationId, execId, stream: 'stdout', data });
+            origStdout?.(data);
+          },
+          onStderr: (data) => {
+            this.config.onExecChunk?.({ invocationId, execId, stream: 'stderr', data });
+            origStderr?.(data);
+          },
+        };
+        return this.executor(command, wrappedOpts).then((result) => {
+          this.config.onExecEnd?.({ invocationId, execId, durationMs: Date.now() - start, exitCode: result.exitCode });
+          return result;
+        });
       },
       emit: (event) => {
         if (!this.emitQueue) {
           throw new Error('emit() can only be called during action execution');
         }
-        this.emitQueue.push({ ...event, timestamp: new Date().toISOString() });
+        const stamped = { ...event, timestamp: new Date().toISOString() };
+        this.emitQueue.push(stamped);
+        this.config.onEmit?.({
+          invocationId: this.currentInvocationId ?? '',
+          ruleId: this.currentRuleId,
+          event: stamped,
+        });
       },
       log: (message, level) => {
-        this.logs.push({ message, level: level ?? 'info', timestamp: new Date().toISOString() });
+        const entry = { message, level: level ?? 'info', timestamp: new Date().toISOString() };
+        this.logs.push(entry);
+        this.config.onLog?.({
+          invocationId: this.currentInvocationId ?? '',
+          ruleId: this.currentRuleId,
+          level: entry.level as 'info' | 'warn' | 'error',
+          message,
+          timestamp: entry.timestamp,
+        });
       },
       reportErrors: (toolId: string, errors: ProjectError[]) => {
         options.config?.onReportErrors?.(toolId, errors);
@@ -242,6 +289,11 @@ export class WorkflowRuntime<S> {
     const allEmittedEvents: WorkflowEvent[] = [];
     this.logs = [];
 
+    // Set up invocation trace context
+    const invocationId = `inv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    this.currentInvocationId = invocationId;
+    this.config.onInvocationStart?.({ invocationId, triggerEvents: events });
+
     let pendingEvents: readonly WorkflowEvent[] = events;
     let cycles = 0;
 
@@ -258,16 +310,24 @@ export class WorkflowRuntime<S> {
         const ruleStart = Date.now();
         let error: string | undefined;
 
+        // Set rule trace context
+        this.currentRuleId = rule.id;
+        this.config.onRuleStart?.({ invocationId, ruleId: rule.id, matchedCount: matched.length });
+
         try {
           await rule.action(matched, state);
         } catch (e) {
           error = e instanceof Error ? e.message : String(e);
         }
 
+        const durationMs = Date.now() - ruleStart;
+        this.config.onRuleEnd?.({ invocationId, ruleId: rule.id, durationMs, error });
+        this.currentRuleId = null;
+
         allRulesExecuted.push({
           ruleId: rule.id,
           matchedEvents: matched.length,
-          durationMs: Date.now() - ruleStart,
+          durationMs,
           error,
         });
       }
@@ -277,6 +337,10 @@ export class WorkflowRuntime<S> {
       pendingEvents = this.emitQueue;
       this.emitQueue = null;
     }
+
+    // Clear trace context and notify end
+    this.currentInvocationId = null;
+    this.config.onInvocationEnd?.({ invocationId, durationMs: Date.now() - startTime, cycles });
 
     return {
       state,
@@ -312,10 +376,18 @@ export class WorkflowRuntime<S> {
     const allRulesExecuted: WorkflowInvocationResult['rulesExecuted'][number][] = [];
     const allEmittedEvents: WorkflowEvent[] = [];
 
+    // Set up invocation trace context
+    const invocationId = `inv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    this.currentInvocationId = invocationId;
+    this.config.onInvocationStart?.({ invocationId, triggerEvents: [] });
+
     // Cycle 1: run the target rule with empty events (predicate skipped).
     this.emitQueue = [];
     const ruleStart = Date.now();
     let error: string | undefined;
+
+    this.currentRuleId = rule.id;
+    this.config.onRuleStart?.({ invocationId, ruleId: rule.id, matchedCount: 0 });
 
     try {
       await rule.action([], state);
@@ -323,10 +395,14 @@ export class WorkflowRuntime<S> {
       error = e instanceof Error ? e.message : String(e);
     }
 
+    const ruleDuration = Date.now() - ruleStart;
+    this.config.onRuleEnd?.({ invocationId, ruleId: rule.id, durationMs: ruleDuration, error });
+    this.currentRuleId = null;
+
     allRulesExecuted.push({
       ruleId: rule.id,
       matchedEvents: 0,
-      durationMs: Date.now() - ruleStart,
+      durationMs: ruleDuration,
       error,
     });
 
@@ -348,16 +424,23 @@ export class WorkflowRuntime<S> {
         const rStart = Date.now();
         let rError: string | undefined;
 
+        this.currentRuleId = r.id;
+        this.config.onRuleStart?.({ invocationId, ruleId: r.id, matchedCount: matched.length });
+
         try {
           await r.action(matched, state);
         } catch (e) {
           rError = e instanceof Error ? e.message : String(e);
         }
 
+        const rDuration = Date.now() - rStart;
+        this.config.onRuleEnd?.({ invocationId, ruleId: r.id, durationMs: rDuration, error: rError });
+        this.currentRuleId = null;
+
         allRulesExecuted.push({
           ruleId: r.id,
           matchedEvents: matched.length,
-          durationMs: Date.now() - rStart,
+          durationMs: rDuration,
           error: rError,
         });
       }
@@ -366,6 +449,9 @@ export class WorkflowRuntime<S> {
       pendingEvents = this.emitQueue;
       this.emitQueue = null;
     }
+
+    this.currentInvocationId = null;
+    this.config.onInvocationEnd?.({ invocationId, durationMs: Date.now() - startTime, cycles });
 
     const triggerEvent: WorkflowEvent = {
       type: 'rule:refresh',

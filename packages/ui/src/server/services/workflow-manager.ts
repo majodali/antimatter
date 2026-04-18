@@ -34,6 +34,7 @@ import {
 import type { WorkspaceEnvironment, ExecuteOptions } from '@antimatter/workspace';
 import type { WatchEvent } from '@antimatter/filesystem';
 import type { ErrorStore } from './error-store.js';
+import { Kinds } from '../../shared/activity-types.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,6 +61,8 @@ export interface WorkflowManagerOptions {
   readonly eventLog?: import('./event-log.js').EventLog;
   /** Deployed resource store for wf.utils.registerResource. */
   readonly deployedResourceStore?: import('./deployed-resource-store.js').DeployedResourceStore;
+  /** Activity log for workflow trace events (invocation/rule/exec/log). */
+  readonly activityLog?: import('./activity-log.js').ActivityLog;
   /** Project ID for per-project scoping (secrets, resources, etc.). */
   readonly projectId?: string;
 }
@@ -98,6 +101,7 @@ export class WorkflowManager {
   private readonly onExecEnd?: () => void;
   private readonly eventLog?: import('./event-log.js').EventLog;
   private readonly deployedResourceStore?: import('./deployed-resource-store.js').DeployedResourceStore;
+  private readonly activityLog?: import('./activity-log.js').ActivityLog;
   private readonly projectId?: string;
 
   /** Tracks which files were loaded in the last definition load. */
@@ -118,6 +122,7 @@ export class WorkflowManager {
     this.onExecEnd = options.onExecEnd;
     this.eventLog = options.eventLog;
     this.deployedResourceStore = options.deployedResourceStore;
+    this.activityLog = options.activityLog;
     this.projectId = options.projectId;
 
     // Subscribe to event log drain — batched events arrive here
@@ -196,10 +201,84 @@ export class WorkflowManager {
   async start(): Promise<void> {
     const projectRoot = (this.env as any).rootPath ?? process.cwd();
     const utils = this.createUtils(projectRoot);
+    const projectId = this.projectId;
+    const activityLog = this.activityLog;
     const runtimeConfig = {
       onReportErrors: this.handleReportErrors.bind(this),
       projectRoot,
       utils,
+      // Workflow trace hooks — emit activity events for every rule/exec/log/emit
+      onInvocationStart: (ctx: any) => {
+        activityLog?.emit({
+          source: 'workflow', kind: Kinds.WorkflowInvocationStart, level: 'info',
+          message: `Invocation start: ${ctx.triggerEvents.map((e: any) => e.type).join(', ') || 'manual'}`,
+          projectId, correlationId: ctx.invocationId,
+          data: { triggerEvents: ctx.triggerEvents },
+        });
+      },
+      onInvocationEnd: (ctx: any) => {
+        activityLog?.emit({
+          source: 'workflow', kind: Kinds.WorkflowInvocationEnd, level: 'info',
+          message: `Invocation end (${ctx.cycles} cycles, ${ctx.durationMs}ms)`,
+          projectId, correlationId: ctx.invocationId,
+          data: { durationMs: ctx.durationMs, cycles: ctx.cycles },
+        });
+      },
+      onRuleStart: (ctx: any) => {
+        activityLog?.emit({
+          source: 'workflow', kind: Kinds.WorkflowRuleStart, level: 'info',
+          message: `Rule start: ${ctx.ruleId}`,
+          projectId, correlationId: ctx.ruleId, parentId: ctx.invocationId,
+          data: { ruleId: ctx.ruleId, matchedCount: ctx.matchedCount },
+        });
+      },
+      onRuleEnd: (ctx: any) => {
+        activityLog?.emit({
+          source: 'workflow', kind: Kinds.WorkflowRuleEnd, level: ctx.error ? 'error' : 'info',
+          message: ctx.error ? `Rule failed: ${ctx.ruleId}: ${ctx.error}` : `Rule end: ${ctx.ruleId} (${ctx.durationMs}ms)`,
+          projectId, correlationId: ctx.ruleId, parentId: ctx.invocationId,
+          data: { ruleId: ctx.ruleId, durationMs: ctx.durationMs, error: ctx.error },
+        });
+      },
+      onLog: (ctx: any) => {
+        activityLog?.emit({
+          source: 'workflow', kind: Kinds.WorkflowLog, level: ctx.level,
+          message: ctx.message,
+          projectId, correlationId: ctx.ruleId ?? undefined, parentId: ctx.invocationId,
+        });
+      },
+      onExecStart: (ctx: any) => {
+        activityLog?.emit({
+          source: 'workflow', kind: Kinds.WorkflowExecStart, level: 'info',
+          message: `$ ${ctx.command}`,
+          projectId, correlationId: ctx.execId, parentId: ctx.ruleId ?? ctx.invocationId,
+          data: { command: ctx.command, cwd: ctx.cwd },
+        });
+      },
+      onExecChunk: (ctx: any) => {
+        activityLog?.emit({
+          source: 'workflow', kind: Kinds.WorkflowExecChunk, level: ctx.stream === 'stderr' ? 'warn' : 'debug',
+          message: ctx.data.length > 200 ? ctx.data.slice(0, 200) + '...' : ctx.data,
+          projectId, parentId: ctx.execId,
+          data: { stream: ctx.stream, data: ctx.data },
+        });
+      },
+      onExecEnd: (ctx: any) => {
+        activityLog?.emit({
+          source: 'workflow', kind: Kinds.WorkflowExecEnd, level: ctx.exitCode === 0 ? 'info' : 'error',
+          message: `exec complete: exit=${ctx.exitCode} (${ctx.durationMs}ms)`,
+          projectId, correlationId: ctx.execId, parentId: ctx.invocationId,
+          data: { durationMs: ctx.durationMs, exitCode: ctx.exitCode },
+        });
+      },
+      onEmit: (ctx: any) => {
+        activityLog?.emit({
+          source: 'workflow', kind: Kinds.WorkflowEmit, level: 'debug',
+          message: `emit: ${ctx.event.type}`,
+          projectId, parentId: ctx.ruleId ?? ctx.invocationId,
+          data: { event: ctx.event },
+        });
+      },
     };
 
     if (this.preloadedDefinition) {

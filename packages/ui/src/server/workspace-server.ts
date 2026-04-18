@@ -41,6 +41,8 @@ import { EventLogger } from './services/event-logger.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { ChildProcessManager } from './child-process-manager.js';
 import type { SerializableConfig } from './ipc-types.js';
+import { ActivityLog } from './services/activity-log.js';
+import { Kinds, type ActivityEvent } from '../shared/activity-types.js';
 
 // Legacy mode imports (only used when CHILD_PROCESS_MODE=0)
 import type { DeployLambdaClient, DeployCloudfrontClient } from './services/deployment-executor.js';
@@ -78,6 +80,32 @@ const globalEventLogger = new EventLogger({
   eventBusName: process.env.EVENT_BUS_NAME || 'antimatter',
 });
 globalEventLogger.startPeriodicFlush(10_000);
+
+// ---------------------------------------------------------------------------
+// Router Activity Log — captures router:*, child:*, service:* events
+// ---------------------------------------------------------------------------
+
+const routerActivityLog = new ActivityLog({
+  logPath: '/opt/antimatter/router-activity.jsonl',
+  label: 'router-activity',
+});
+// Initialize asynchronously; don't block startup
+routerActivityLog.initialize().catch(err => {
+  console.warn('[router-activity] initialize failed:', err);
+});
+
+/** Emit a router activity event. Also broadcasts to all connected WS clients. */
+function emitActivity(input: Parameters<ActivityLog['emit']>[0]): ActivityEvent {
+  const event = routerActivityLog.emit(input);
+  // Broadcast to all WebSocket clients (scoped by projectId when set)
+  const msg = JSON.stringify({ type: 'activity-event', event });
+  for (const [, conn] of wsConnections) {
+    if (!event.projectId || conn.projectId === event.projectId) {
+      if (conn.ws.readyState === WebSocket.OPEN) conn.ws.send(msg);
+    }
+  }
+  return event;
+}
 
 // ---------------------------------------------------------------------------
 // Child Process Management (child-process mode)
@@ -131,6 +159,11 @@ async function getOrCreateChild(projectId: string): Promise<ChildProcessManager>
 
   const promise = (async () => {
     console.log(`[workspace-server] Spawning child for project: ${projectId}`);
+    emitActivity({
+      source: 'child', kind: Kinds.ChildSpawn, level: 'info',
+      message: `Spawning worker for project ${projectId}`,
+      projectId, correlationId: projectId,
+    });
     const child = new ChildProcessManager({
       config: createSerializableConfig(projectId),
       workerPath: getWorkerPath(),
@@ -155,21 +188,41 @@ async function getOrCreateChild(projectId: string): Promise<ChildProcessManager>
       onExecRelease: () => { /* No idle shutdown — no-op */ },
       onReady: () => {
         console.log(`[workspace-server] Child ready: ${projectId}`);
+        emitActivity({
+          source: 'child', kind: Kinds.ChildReady, level: 'info',
+          message: `Worker ready: ${projectId}`,
+          projectId, correlationId: projectId,
+        });
       },
       onError: (message, fatal) => {
         console.error(`[workspace-server] Child error (${projectId}): ${message}`);
+        emitActivity({
+          source: 'child', kind: Kinds.ChildError, level: fatal ? 'error' : 'warn',
+          message: `Worker error${fatal ? ' (fatal)' : ''}: ${message}`,
+          projectId, correlationId: projectId, data: { fatal, message },
+        });
         if (fatal) {
           globalEventLogger.error('workspace', `Project ${projectId} fatal error: ${message}`);
         }
       },
       onExit: (code, signal) => {
         console.log(`[workspace-server] Child exited (${projectId}): code=${code}, signal=${signal}`);
+        emitActivity({
+          source: 'child', kind: Kinds.ChildExit, level: code === 0 ? 'info' : 'warn',
+          message: `Worker exited: code=${code}, signal=${signal ?? 'none'}`,
+          projectId, correlationId: projectId, data: { code, signal },
+        });
         // Auto-respawn
         const child = children.get(projectId);
         if (child && !child.isDead) return; // Already being respawned
         setTimeout(async () => {
           const c = children.get(projectId);
           if (c) {
+            emitActivity({
+              source: 'child', kind: Kinds.ChildRespawn, level: 'warn',
+              message: `Respawning worker: ${projectId}`,
+              projectId, correlationId: projectId,
+            });
             const ok = await c.respawn();
             if (ok) {
               // Re-register existing WebSocket connections with the new child
@@ -178,6 +231,12 @@ async function getOrCreateChild(projectId: string): Promise<ChildProcessManager>
                   c.sendWsConnect(connId);
                 }
               }
+            } else {
+              emitActivity({
+                source: 'child', kind: Kinds.ChildDead, level: 'error',
+                message: `Worker dead (too many crashes): ${projectId}`,
+                projectId, correlationId: projectId,
+              });
             }
           }
         }, 100);
@@ -368,6 +427,34 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '10mb' }));
 
+// ---- Service request logging ----
+// Skip health checks (ALB pings /health every 10s — would flood the log)
+app.use((req, res, next) => {
+  if (req.url === '/health' || req.url === '/status') return next();
+  const requestId = randomUUID();
+  (req as any).__activityId = requestId;
+  const start = Date.now();
+  emitActivity({
+    source: 'service', kind: Kinds.ServiceRequest, level: 'debug',
+    message: `${req.method} ${req.url}`,
+    correlationId: requestId,
+    data: { method: req.method, url: req.url },
+  });
+  res.on('finish', () => {
+    const durationMs = Date.now() - start;
+    const status = res.statusCode;
+    emitActivity({
+      source: 'service',
+      kind: status >= 500 ? Kinds.ServiceError : Kinds.ServiceResponse,
+      level: status >= 500 ? 'error' : status >= 400 ? 'warn' : 'debug',
+      message: `${req.method} ${req.url} → ${status} (${durationMs}ms)`,
+      correlationId: requestId,
+      data: { method: req.method, url: req.url, status, durationMs },
+    });
+  });
+  next();
+});
+
 // ---- Global endpoints ----
 
 app.get('/health', (_req, res) => {
@@ -430,6 +517,19 @@ app.get('/internal/project-contexts', (_req, res) => {
   } else {
     res.json({ contexts: [] });
   }
+});
+
+// ---- Router activity log — queryable via HTTP ----
+
+app.get('/internal/activity', (req, res) => {
+  const limit = parseInt((req.query.limit as string) ?? '500', 10);
+  const since = req.query.since as string | undefined;
+  const source = req.query.source as any;
+  const kind = req.query.kind as string | undefined;
+  const correlationId = req.query.correlationId as string | undefined;
+  const projectId = req.query.projectId as string | undefined;
+  const events = routerActivityLog.list({ limit, since, source, kind, correlationId, projectId });
+  res.json({ events });
 });
 
 // ---- Dynamic project routing ----
@@ -503,6 +603,12 @@ server.on('upgrade', async (req, socket, head) => {
         wsConnections.set(connectionId, { ws, projectId: requestedProjectId });
         totalConnections++;
 
+        emitActivity({
+          source: 'router', kind: Kinds.RouterWsConnect, level: 'info',
+          message: `WebSocket connected: ${requestedProjectId}`,
+          projectId: requestedProjectId, correlationId: connectionId,
+        });
+
         // Tell child about the new connection
         child.sendWsConnect(connectionId);
 
@@ -517,10 +623,16 @@ server.on('upgrade', async (req, socket, head) => {
         }, 20_000);
 
         const cleanup = () => {
+          if (!wsConnections.has(connectionId)) return; // Already cleaned up
           clearInterval(heartbeat);
           wsConnections.delete(connectionId);
           totalConnections = Math.max(0, totalConnections - 1);
           child.sendWsDisconnect(connectionId);
+          emitActivity({
+            source: 'router', kind: Kinds.RouterWsDisconnect, level: 'info',
+            message: `WebSocket disconnected: ${requestedProjectId}`,
+            projectId: requestedProjectId, correlationId: connectionId,
+          });
         };
 
         ws.on('close', cleanup);
@@ -558,6 +670,11 @@ async function startup() {
 
   server.listen(PORT, async () => {
     console.log(`[workspace-server] Listening on port ${PORT}`);
+    emitActivity({
+      source: 'router', kind: Kinds.RouterStart, level: 'info',
+      message: `Router listening on port ${PORT}`,
+      data: { port: PORT, mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy' },
+    });
     await globalEventLogger.emit('workspace.ready', 'workspace', 'info',
       'Workspace server ready', { port: PORT, mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy', uptime: process.uptime() });
 
@@ -571,6 +688,10 @@ async function startup() {
 process.on('SIGTERM', async () => {
   console.log('[workspace-server] SIGTERM received — shutting down');
   globalEventLogger.info('workspace', 'SIGTERM received — shutting down');
+  emitActivity({
+    source: 'router', kind: Kinds.RouterShutdown, level: 'info',
+    message: 'Router shutting down (SIGTERM)',
+  });
 
   if (CHILD_PROCESS_MODE) {
     for (const child of children.values()) {

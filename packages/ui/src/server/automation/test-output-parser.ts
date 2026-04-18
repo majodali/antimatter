@@ -22,11 +22,11 @@ export function detectTestRunner(packageJsonContent: string): 'node' | 'vitest' 
       ...pkg.dependencies,
       ...pkg.devDependencies,
     };
+    const scripts = pkg.scripts ?? {};
 
     // Check for node:test (our primary runner)
-    const scripts = pkg.scripts ?? {};
     for (const cmd of Object.values(scripts) as string[]) {
-      if (cmd.includes('node --import tsx --test') || cmd.includes('node:test')) return 'node';
+      if (cmd.includes('node --import tsx --test') || cmd.includes('node:test') || cmd.includes('node --test')) return 'node';
     }
     // Check scripts for runner hints
     for (const cmd of Object.values(scripts) as string[]) {
@@ -36,6 +36,13 @@ export function detectTestRunner(packageJsonContent: string): 'node' | 'vitest' 
 
     if (allDeps['vitest']) return 'vitest';
     if (allDeps['jest']) return 'jest';
+
+    // npm workspaces monorepo — test script delegates to children.
+    // Assume node:test since that's our convention; detect workspaces via `workspaces` array.
+    if (Array.isArray(pkg.workspaces) && scripts.test?.includes('--workspaces')) {
+      return 'node';
+    }
+
     return null;
   } catch {
     return null;
