@@ -33,15 +33,18 @@ export function createWorkflowRouter(
     }
   });
 
-  // POST /emit — manually emit a custom event
+  // POST /emit — fire-and-forget workflow event
   router.post('/emit', async (req, res) => {
     try {
       const { event } = req.body as { event?: { type: string; [key: string]: unknown } };
       if (!event?.type) {
         return res.status(400).json({ error: 'event.type is required' });
       }
-      const result = await workflowManager.emitEvent(event);
-      res.json({ result });
+      // Fire-and-forget (long rules would time out CloudFront)
+      workflowManager.emitEvent(event).catch(err => {
+        console.error(`[workflow.emit] Error processing event ${event.type}:`, err);
+      });
+      res.json({ queued: true, type: event.type });
     } catch (error) {
       res.status(500).json({
         error: 'Failed to emit workflow event',

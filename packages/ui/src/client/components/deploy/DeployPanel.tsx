@@ -10,10 +10,12 @@ import { cn } from '@/lib/utils';
 import type { EnvironmentActionDeclaration } from '@/lib/api';
 import type { WidgetState } from '@antimatter/workflow';
 
-type DeployView = 'deploy' | 'secrets';
+type OpsView = 'ops' | 'secrets';
 
 export function DeployPanel() {
-  const [view, setView] = useState<DeployView>('deploy');
+  // Panel is now labelled "Operations" but the component name stays the same
+  // to avoid a large rename churn. Widget section accepts 'ops' or 'deploy'.
+  const [view, setView] = useState<OpsView>('ops');
   const declarations = useApplicationStore((s) => s.getDeclarations());
   const workflowState = useApplicationStore((s) => s.getWorkflowState()) as any;
   const loaded = useApplicationStore((s) => s.loaded);
@@ -23,7 +25,10 @@ export function DeployPanel() {
   // No useEffect needed — state arrives via WebSocket on connect
 
   const environments = declarations.environments ?? [];
-  const deployWidgets = (declarations.widgets ?? []).filter((w) => w.section === 'deploy');
+  // Accept both 'ops' (new) and 'deploy' (legacy) section values.
+  const deployWidgets = (declarations.widgets ?? []).filter(
+    (w) => w.section === 'ops' || w.section === 'deploy',
+  );
   const uiState: Record<string, WidgetState | undefined> = workflowState?._ui ?? {};
 
   const handleWidgetEvent = (event: { type: string; [key: string]: unknown }) => {
@@ -48,13 +53,13 @@ export function DeployPanel() {
             <button
               className={cn(
                 'px-2 py-0.5 rounded text-xs font-medium transition-colors',
-                view === 'deploy'
+                view === 'ops'
                   ? 'bg-background text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground',
               )}
-              onClick={() => setView('deploy')}
+              onClick={() => setView('ops')}
             >
-              Deploy
+              Operations
             </button>
             <button
               className={cn(
@@ -70,7 +75,7 @@ export function DeployPanel() {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {view === 'deploy' && (
+          {view === 'ops' && (
             <Button
               variant="ghost"
               size="icon"

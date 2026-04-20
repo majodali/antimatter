@@ -59,7 +59,7 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon"
-          title="Deploy"
+          title="Operations"
           data-testid="sidebar-deploy-btn"
           className={cn(
             activeView === 'deploy' && 'bg-accent text-accent-foreground'

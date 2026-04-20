@@ -164,12 +164,19 @@ export class ActivityLog {
       if (opts?.source && e.source !== opts.source) continue;
       if (opts?.kind && !e.kind.startsWith(opts.kind)) continue;
       if (opts?.projectId && e.projectId !== opts.projectId) continue;
+      if (opts?.environment !== undefined && e.environment !== opts.environment) continue;
       if (opts?.minLevel && !levelMeets(e.level, opts.minLevel)) continue;
+      if (opts?.operationId && e.operationId !== opts.operationId) continue;
       if (opts?.correlationId && e.correlationId !== opts.correlationId && e.parentId !== opts.correlationId) continue;
       out.push(e);
       if (out.length >= limit) break;
     }
     return out;
+  }
+
+  /** Get all events for an operation ID (end-to-end timeline). */
+  byOperation(operationId: string): ActivityEvent[] {
+    return this.entries.filter(e => e.operationId === operationId);
   }
 
   /** Get all events whose correlationId or parentId matches, in chronological order. */

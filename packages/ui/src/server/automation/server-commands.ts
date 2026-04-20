@@ -675,13 +675,33 @@ export function createServerCommandExecutor(
     const name = requireParam<string>(params, 'name');
     const resourceType = requireParam<string>(params, 'resourceType');
     const resource = await store.register({
+      id: params.id as string | undefined,
       name,
       resourceType,
+      environment: params.environment as string | undefined,
       description: params.description as string | undefined,
       metadata: params.metadata as Record<string, unknown> | undefined,
+      instance: params.instance as any,
+      pool: params.pool as any,
+      status: params.status as any,
+      statusMessage: params.statusMessage as string | undefined,
       actions: params.actions as any[] | undefined,
+      memberActions: params.memberActions as any[] | undefined,
     });
     return resource;
+  });
+
+  handlers.set('deployed-resources.setStatus', async (params) => {
+    const store = deployedResourceStore?.();
+    if (!store) throw new AutomationCommandError('Deployed resource store not ready', 'execution-error');
+    const resourceId = requireParam<string>(params, 'resourceId');
+    const updated = await store.setStatus(resourceId, {
+      status: params.status as any,
+      statusMessage: params.statusMessage as string | undefined,
+      lastChecked: params.lastChecked as string | undefined,
+    });
+    if (!updated) throw new AutomationCommandError(`Resource '${resourceId}' not found`, 'not-found');
+    return updated;
   });
 
   handlers.set('deployed-resources.deregister', async (params) => {
@@ -698,8 +718,15 @@ export function createServerCommandExecutor(
     if (!store) throw new AutomationCommandError('Deployed resource store not ready', 'execution-error');
     const resourceId = requireParam<string>(params, 'resourceId');
     const updated = await store.update(resourceId, {
+      name: params.name as string | undefined,
+      environment: params.environment as string | undefined,
       metadata: params.metadata as Record<string, unknown> | undefined,
+      instance: params.instance as any,
+      pool: params.pool as any,
+      status: params.status as any,
+      statusMessage: params.statusMessage as string | undefined,
       actions: params.actions as any[] | undefined,
+      memberActions: params.memberActions as any[] | undefined,
     });
     if (!updated) throw new AutomationCommandError(`Resource '${resourceId}' not found`, 'not-found');
     return updated;
@@ -709,7 +736,8 @@ export function createServerCommandExecutor(
     const store = deployedResourceStore?.();
     if (!store) return { resources: [] };
     const resourceType = params.resourceType as string | undefined;
-    return { resources: store.list(resourceType) };
+    const environment = params.environment as string | undefined;
+    return { resources: store.filter({ resourceType, environment }) };
   });
 
   handlers.set('deployed-resources.get', async (params) => {
@@ -752,7 +780,9 @@ export function createServerCommandExecutor(
       source: params.source as any,
       kind: params.kind as string | undefined,
       correlationId: params.correlationId as string | undefined,
+      operationId: params.operationId as string | undefined,
       projectId: params.projectId as string | undefined,
+      environment: params.environment as string | undefined,
       minLevel: params.minLevel as any,
     };
     return { events: log.list(opts) };
@@ -763,6 +793,76 @@ export function createServerCommandExecutor(
     if (!log) return { events: [] };
     const correlationId = requireParam<string>(params, 'correlationId');
     return { events: log.byCorrelation(correlationId) };
+  });
+
+  handlers.set('activity.operation', async (params) => {
+    const log = activityLog?.();
+    if (!log) return { events: [] };
+    const operationId = requireParam<string>(params, 'operationId');
+    return { events: log.byOperation(operationId) };
+  });
+
+  // ---- Actions / Operations discovery + invocation ----
+
+  handlers.set('actions.list', async () => {
+    const store = deployedResourceStore?.();
+    if (!store) return { resources: [], triggers: [] };
+    const resources = store.filter();
+    const triggers: Array<{
+      triggerId: string;
+      label: string;
+      resourceId: string;
+      resourceName: string;
+      resourceType: string;
+      environment?: string;
+      scope: 'resource' | 'member';
+      destructive?: boolean;
+      requiresConfirmation?: boolean;
+    }> = [];
+    for (const r of resources) {
+      for (const a of (r.actions ?? [])) {
+        triggers.push({
+          triggerId: a.triggerId, label: a.label,
+          resourceId: r.id, resourceName: r.name, resourceType: r.resourceType,
+          environment: r.environment, scope: 'resource',
+          destructive: a.destructive, requiresConfirmation: a.requiresConfirmation,
+        });
+      }
+      for (const a of (r.memberActions ?? [])) {
+        triggers.push({
+          triggerId: a.triggerId, label: a.label,
+          resourceId: r.id, resourceName: r.name, resourceType: r.resourceType,
+          environment: r.environment, scope: 'member',
+          destructive: a.destructive, requiresConfirmation: a.requiresConfirmation,
+        });
+      }
+    }
+    return { resources, triggers };
+  });
+
+  handlers.set('actions.invoke', async (params) => {
+    const wm = workflowManager();
+    if (!wm) throw new AutomationCommandError('Workflow manager not initialized', 'unsupported');
+    const triggerId = requireParam<string>(params, 'triggerId');
+    const resourceId = params.resourceId as string | undefined;
+    const memberId = params.memberId as string | undefined;
+    const environment = params.environment as string | undefined;
+    const extraParams = (params.params as Record<string, unknown> | undefined) ?? {};
+    // Generate new operationId for this invocation
+    const operationId = `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const event = {
+      type: triggerId,
+      operationId,
+      resourceId,
+      memberId,
+      environment,
+      ...extraParams,
+    };
+    // Fire-and-forget — caller polls activity.operation(operationId) to track
+    wm.emitEvent(event).catch((err) => {
+      console.error(`[actions.invoke] Error processing ${triggerId}:`, err);
+    });
+    return { queued: true, triggerId, operationId };
   });
 
   handlers.set('commands.list', async () => {

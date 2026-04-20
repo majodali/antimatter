@@ -107,6 +107,29 @@ function emitActivity(input: Parameters<ActivityLog['emit']>[0]): ActivityEvent 
   return event;
 }
 
+/** Designated "ops project" whose workflow engine receives platform events. */
+const OPS_PROJECT_ID = process.env.OPS_PROJECT_ID || 'antimatter';
+
+/** Buffer of ingress events awaiting the ops project to become ready. */
+const pendingOpsEvents: Record<string, unknown>[] = [];
+
+/**
+ * Emit a platform lifecycle event into the ops project's workflow engine.
+ * If the ops project isn't ready yet, the event is buffered.
+ */
+function emitToOpsProject(event: Record<string, unknown>): void {
+  const child = children.get(OPS_PROJECT_ID);
+  if (child?.isReady) {
+    // Drain any pending first
+    while (pendingOpsEvents.length > 0) {
+      child.sendIngressEvent(pendingOpsEvents.shift()!);
+    }
+    child.sendIngressEvent(event);
+  } else {
+    pendingOpsEvents.push(event);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Child Process Management (child-process mode)
 // ---------------------------------------------------------------------------
@@ -164,6 +187,12 @@ async function getOrCreateChild(projectId: string): Promise<ChildProcessManager>
       message: `Spawning worker for project ${projectId}`,
       projectId, correlationId: projectId,
     });
+    // Notify ops project so it can register/update the worker resource
+    emitToOpsProject({
+      type: 'worker:spawning',
+      projectId,
+      spawnedAt: new Date().toISOString(),
+    });
     const child = new ChildProcessManager({
       config: createSerializableConfig(projectId),
       workerPath: getWorkerPath(),
@@ -193,6 +222,11 @@ async function getOrCreateChild(projectId: string): Promise<ChildProcessManager>
           message: `Worker ready: ${projectId}`,
           projectId, correlationId: projectId,
         });
+        emitToOpsProject({
+          type: 'worker:ready',
+          projectId,
+          readyAt: new Date().toISOString(),
+        });
       },
       onError: (message, fatal) => {
         console.error(`[workspace-server] Child error (${projectId}): ${message}`);
@@ -211,6 +245,13 @@ async function getOrCreateChild(projectId: string): Promise<ChildProcessManager>
           source: 'child', kind: Kinds.ChildExit, level: code === 0 ? 'info' : 'warn',
           message: `Worker exited: code=${code}, signal=${signal ?? 'none'}`,
           projectId, correlationId: projectId, data: { code, signal },
+        });
+        emitToOpsProject({
+          type: 'worker:exited',
+          projectId,
+          code,
+          signal,
+          exitedAt: new Date().toISOString(),
         });
         // Auto-respawn
         const child = children.get(projectId);

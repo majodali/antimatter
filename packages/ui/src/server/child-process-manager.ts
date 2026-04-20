@@ -169,6 +169,11 @@ export class ChildProcessManager {
     this.send({ type: 'ws-disconnect', connectionId });
   }
 
+  /** Push an application event into the worker's workflow engine (ingress). */
+  sendIngressEvent(event: Record<string, unknown>): void {
+    this.send({ type: 'ingress-event', event });
+  }
+
   async shutdown(): Promise<void> {
     if (!this.child) return;
     this.send({ type: 'shutdown' });

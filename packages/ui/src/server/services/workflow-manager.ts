@@ -212,7 +212,8 @@ export class WorkflowManager {
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowInvocationStart, level: 'info',
           message: `Invocation start: ${ctx.triggerEvents.map((e: any) => e.type).join(', ') || 'manual'}`,
-          projectId, correlationId: ctx.invocationId,
+          projectId, operationId: ctx.operationId, correlationId: ctx.invocationId,
+          environment: ctx.environment ?? undefined,
           data: { triggerEvents: ctx.triggerEvents },
         });
       },
@@ -220,7 +221,7 @@ export class WorkflowManager {
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowInvocationEnd, level: 'info',
           message: `Invocation end (${ctx.cycles} cycles, ${ctx.durationMs}ms)`,
-          projectId, correlationId: ctx.invocationId,
+          projectId, operationId: ctx.operationId, correlationId: ctx.invocationId,
           data: { durationMs: ctx.durationMs, cycles: ctx.cycles },
         });
       },
@@ -228,7 +229,7 @@ export class WorkflowManager {
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowRuleStart, level: 'info',
           message: `Rule start: ${ctx.ruleId}`,
-          projectId, correlationId: ctx.ruleId, parentId: ctx.invocationId,
+          projectId, operationId: ctx.operationId, correlationId: ctx.ruleId, parentId: ctx.invocationId,
           data: { ruleId: ctx.ruleId, matchedCount: ctx.matchedCount },
         });
       },
@@ -236,7 +237,7 @@ export class WorkflowManager {
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowRuleEnd, level: ctx.error ? 'error' : 'info',
           message: ctx.error ? `Rule failed: ${ctx.ruleId}: ${ctx.error}` : `Rule end: ${ctx.ruleId} (${ctx.durationMs}ms)`,
-          projectId, correlationId: ctx.ruleId, parentId: ctx.invocationId,
+          projectId, operationId: ctx.operationId, correlationId: ctx.ruleId, parentId: ctx.invocationId,
           data: { ruleId: ctx.ruleId, durationMs: ctx.durationMs, error: ctx.error },
         });
       },
@@ -244,14 +245,14 @@ export class WorkflowManager {
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowLog, level: ctx.level,
           message: ctx.message,
-          projectId, correlationId: ctx.ruleId ?? undefined, parentId: ctx.invocationId,
+          projectId, operationId: ctx.operationId, correlationId: ctx.ruleId ?? undefined, parentId: ctx.invocationId,
         });
       },
       onExecStart: (ctx: any) => {
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowExecStart, level: 'info',
           message: `$ ${ctx.command}`,
-          projectId, correlationId: ctx.execId, parentId: ctx.ruleId ?? ctx.invocationId,
+          projectId, operationId: ctx.operationId, correlationId: ctx.execId, parentId: ctx.ruleId ?? ctx.invocationId,
           data: { command: ctx.command, cwd: ctx.cwd },
         });
       },
@@ -259,7 +260,7 @@ export class WorkflowManager {
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowExecChunk, level: ctx.stream === 'stderr' ? 'warn' : 'debug',
           message: ctx.data.length > 200 ? ctx.data.slice(0, 200) + '...' : ctx.data,
-          projectId, parentId: ctx.execId,
+          projectId, operationId: ctx.operationId, parentId: ctx.execId,
           data: { stream: ctx.stream, data: ctx.data },
         });
       },
@@ -267,7 +268,7 @@ export class WorkflowManager {
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowExecEnd, level: ctx.exitCode === 0 ? 'info' : 'error',
           message: `exec complete: exit=${ctx.exitCode} (${ctx.durationMs}ms)`,
-          projectId, correlationId: ctx.execId, parentId: ctx.invocationId,
+          projectId, operationId: ctx.operationId, correlationId: ctx.execId, parentId: ctx.invocationId,
           data: { durationMs: ctx.durationMs, exitCode: ctx.exitCode },
         });
       },
@@ -275,7 +276,7 @@ export class WorkflowManager {
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowEmit, level: 'debug',
           message: `emit: ${ctx.event.type}`,
-          projectId, parentId: ctx.ruleId ?? ctx.invocationId,
+          projectId, operationId: ctx.operationId, parentId: ctx.ruleId ?? ctx.invocationId,
           data: { event: ctx.event },
         });
       },

@@ -180,6 +180,13 @@ function handleWsDisconnect(connectionId: string): void {
   sendToParent({ type: 'connection-change', delta: -1 });
 }
 
+function handleIngressEvent(event: Record<string, unknown>): void {
+  if (!projectContext?.workflowManager) return;
+  projectContext.workflowManager.emitEvent(event as any).catch((err: unknown) => {
+    log('error', `Error processing ingress event ${event.type}: ${err instanceof Error ? err.message : String(err)}`);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
@@ -213,6 +220,9 @@ process.on('message', async (msg: ParentMessage) => {
         break;
       case 'ws-disconnect':
         handleWsDisconnect(msg.connectionId);
+        break;
+      case 'ingress-event':
+        handleIngressEvent(msg.event);
         break;
       case 'shutdown':
         await shutdown();

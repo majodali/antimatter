@@ -20,17 +20,42 @@ import type { ProjectScoped, ServiceEventBase, OperationMeta } from '../protocol
 // Resource types
 // ---------------------------------------------------------------------------
 
+export type ResourceStatus = 'healthy' | 'degraded' | 'down' | 'unknown';
+
+export interface ResourcePoolMember {
+  readonly id: string;
+  readonly status?: ResourceStatus;
+  readonly role?: string;
+  readonly metadata?: Record<string, unknown>;
+}
+
 export interface DeployedResource {
   readonly id: string;
   readonly projectId: string;
   readonly name: string;
   readonly resourceType: string;
+  /**
+   * Environment the resource belongs to (e.g. 'production', 'staging').
+   * Undefined or '' = default (shared across environments).
+   */
+  readonly environment?: string;
   readonly description?: string;
   readonly metadata: Record<string, unknown>;
+  readonly instance?: { readonly region?: string; readonly [key: string]: unknown };
+  readonly pool?: {
+    readonly minSize?: number;
+    readonly maxSize?: number;
+    readonly members: readonly ResourcePoolMember[];
+  };
+  readonly status?: ResourceStatus;
+  readonly statusMessage?: string;
+  readonly lastChecked?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
-  /** Actions defined for this resource, invoked via builds.triggers.invoke. */
+  /** Actions that target the resource as a whole. */
   readonly actions?: readonly DeployedResourceAction[];
+  /** Actions that target individual pool members. */
+  readonly memberActions?: readonly DeployedResourceAction[];
 }
 
 export interface DeployedResourceAction {
@@ -38,7 +63,11 @@ export interface DeployedResourceAction {
   readonly label: string;
   readonly description?: string;
   readonly icon?: string;
-  readonly enabled: boolean;
+  readonly enabled?: boolean;
+  /** Marks an action as destructive — UI shows confirmation. */
+  readonly destructive?: boolean;
+  /** Action requires explicit user confirmation before running. */
+  readonly requiresConfirmation?: boolean;
 }
 
 // ---------------------------------------------------------------------------

@@ -130,8 +130,14 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'workflow.emit', execution: 'server', description: 'Emit workflow event (fire-and-forget; poll activity.list for progress)' },
 
   // Activity / observability
-  { command: 'activity.list', execution: 'server', description: 'List recent activity events (filters: source, kind, correlationId, since, limit)' },
-  { command: 'activity.trace', execution: 'server', description: 'Get all events for a given correlationId (e.g. invocation trace)' },
+  { command: 'activity.list', execution: 'server', description: 'List recent activity events (filters: source, kind, correlationId, operationId, environment, since, limit)' },
+  { command: 'activity.trace', execution: 'server', description: 'Get all events for a given correlationId (e.g. rule invocation)' },
+  { command: 'activity.operation', execution: 'server', description: 'Get all events for an end-to-end operationId (spans processes)' },
+  { command: 'deployed-resources.setStatus', execution: 'server', description: 'Update status of a deployed resource (status, statusMessage, lastChecked)' },
+
+  // Operations (actions discovery + invocation)
+  { command: 'actions.list', execution: 'server', description: 'List all registered resources and their actions (discovery for ops)' },
+  { command: 'actions.invoke', execution: 'server', description: 'Invoke a resource action by triggerId (fire-and-forget, returns operationId)' },
 
   // Editor (browser-only — requires Zustand stores)
   { command: 'editor.open', execution: 'browser', description: 'Open file in editor' },

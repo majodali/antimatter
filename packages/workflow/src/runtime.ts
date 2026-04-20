@@ -68,6 +68,8 @@ export class WorkflowRuntime<S> {
   // Trace context — set during processEvents, null otherwise.
   private currentInvocationId: string | null = null;
   private currentRuleId: string | null = null;
+  private currentOperationId: string | null = null;
+  private currentEnvironment: string | null = null;
 
   // Declarations — collected during definition phase.
   private readonly _modules = new Map<string, ModuleDeclaration>();
@@ -122,6 +124,7 @@ export class WorkflowRuntime<S> {
       },
       exec: (command, opts) => {
         const invocationId = this.currentInvocationId ?? '';
+        const operationId = this.currentOperationId ?? invocationId;
         const ruleId = this.currentRuleId;
         const hasHooks = !!(this.config.onExecStart || this.config.onExecChunk || this.config.onExecEnd);
         if (!hasHooks) {
@@ -130,23 +133,23 @@ export class WorkflowRuntime<S> {
         }
         const execId = `exec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         const start = Date.now();
-        this.config.onExecStart?.({ invocationId, ruleId, execId, command, cwd: opts?.cwd });
+        this.config.onExecStart?.({ invocationId, operationId, ruleId, execId, command, cwd: opts?.cwd });
         // Wrap onStdout/onStderr to emit chunks
         const origStdout = opts?.onStdout;
         const origStderr = opts?.onStderr;
         const wrappedOpts: ExecOptions = {
           ...opts,
           onStdout: (data) => {
-            this.config.onExecChunk?.({ invocationId, execId, stream: 'stdout', data });
+            this.config.onExecChunk?.({ invocationId, operationId, execId, stream: 'stdout', data });
             origStdout?.(data);
           },
           onStderr: (data) => {
-            this.config.onExecChunk?.({ invocationId, execId, stream: 'stderr', data });
+            this.config.onExecChunk?.({ invocationId, operationId, execId, stream: 'stderr', data });
             origStderr?.(data);
           },
         };
         return this.executor(command, wrappedOpts).then((result) => {
-          this.config.onExecEnd?.({ invocationId, execId, durationMs: Date.now() - start, exitCode: result.exitCode });
+          this.config.onExecEnd?.({ invocationId, operationId, execId, durationMs: Date.now() - start, exitCode: result.exitCode });
           return result;
         });
       },
@@ -154,10 +157,13 @@ export class WorkflowRuntime<S> {
         if (!this.emitQueue) {
           throw new Error('emit() can only be called during action execution');
         }
-        const stamped = { ...event, timestamp: new Date().toISOString() };
+        const operationId = this.currentOperationId ?? this.currentInvocationId ?? '';
+        // Propagate operationId into emitted events so downstream invocations inherit.
+        const stamped = { ...event, timestamp: new Date().toISOString(), operationId };
         this.emitQueue.push(stamped);
         this.config.onEmit?.({
           invocationId: this.currentInvocationId ?? '',
+          operationId,
           ruleId: this.currentRuleId,
           event: stamped,
         });
@@ -167,6 +173,7 @@ export class WorkflowRuntime<S> {
         this.logs.push(entry);
         this.config.onLog?.({
           invocationId: this.currentInvocationId ?? '',
+          operationId: this.currentOperationId ?? this.currentInvocationId ?? '',
           ruleId: this.currentRuleId,
           level: entry.level as 'info' | 'warn' | 'error',
           message,
@@ -289,10 +296,17 @@ export class WorkflowRuntime<S> {
     const allEmittedEvents: WorkflowEvent[] = [];
     this.logs = [];
 
-    // Set up invocation trace context
+    // Set up invocation trace context.
+    // operationId: preserve across the invocation. Take it from the first
+    // triggering event if present, else generate one equal to invocationId.
     const invocationId = `inv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const triggerOpId = (events[0] as any)?.operationId as string | undefined;
+    const operationId = triggerOpId ?? invocationId;
+    const environment = (events[0] as any)?.environment as string | undefined ?? null;
     this.currentInvocationId = invocationId;
-    this.config.onInvocationStart?.({ invocationId, triggerEvents: events });
+    this.currentOperationId = operationId;
+    this.currentEnvironment = environment;
+    this.config.onInvocationStart?.({ invocationId, operationId, environment, triggerEvents: events });
 
     let pendingEvents: readonly WorkflowEvent[] = events;
     let cycles = 0;
@@ -312,7 +326,7 @@ export class WorkflowRuntime<S> {
 
         // Set rule trace context
         this.currentRuleId = rule.id;
-        this.config.onRuleStart?.({ invocationId, ruleId: rule.id, matchedCount: matched.length });
+        this.config.onRuleStart?.({ invocationId, operationId, ruleId: rule.id, matchedCount: matched.length });
 
         try {
           await rule.action(matched, state);
@@ -321,7 +335,7 @@ export class WorkflowRuntime<S> {
         }
 
         const durationMs = Date.now() - ruleStart;
-        this.config.onRuleEnd?.({ invocationId, ruleId: rule.id, durationMs, error });
+        this.config.onRuleEnd?.({ invocationId, operationId, ruleId: rule.id, durationMs, error });
         this.currentRuleId = null;
 
         allRulesExecuted.push({
@@ -340,7 +354,9 @@ export class WorkflowRuntime<S> {
 
     // Clear trace context and notify end
     this.currentInvocationId = null;
-    this.config.onInvocationEnd?.({ invocationId, durationMs: Date.now() - startTime, cycles });
+    this.currentOperationId = null;
+    this.currentEnvironment = null;
+    this.config.onInvocationEnd?.({ invocationId, operationId, durationMs: Date.now() - startTime, cycles });
 
     return {
       state,
@@ -378,8 +394,10 @@ export class WorkflowRuntime<S> {
 
     // Set up invocation trace context
     const invocationId = `inv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const operationId = invocationId; // runRule is a manual trigger; new operationId
     this.currentInvocationId = invocationId;
-    this.config.onInvocationStart?.({ invocationId, triggerEvents: [] });
+    this.currentOperationId = operationId;
+    this.config.onInvocationStart?.({ invocationId, operationId, environment: null, triggerEvents: [] });
 
     // Cycle 1: run the target rule with empty events (predicate skipped).
     this.emitQueue = [];
@@ -387,7 +405,7 @@ export class WorkflowRuntime<S> {
     let error: string | undefined;
 
     this.currentRuleId = rule.id;
-    this.config.onRuleStart?.({ invocationId, ruleId: rule.id, matchedCount: 0 });
+    this.config.onRuleStart?.({ invocationId, operationId, ruleId: rule.id, matchedCount: 0 });
 
     try {
       await rule.action([], state);
@@ -396,7 +414,7 @@ export class WorkflowRuntime<S> {
     }
 
     const ruleDuration = Date.now() - ruleStart;
-    this.config.onRuleEnd?.({ invocationId, ruleId: rule.id, durationMs: ruleDuration, error });
+    this.config.onRuleEnd?.({ invocationId, operationId, ruleId: rule.id, durationMs: ruleDuration, error });
     this.currentRuleId = null;
 
     allRulesExecuted.push({
@@ -425,7 +443,7 @@ export class WorkflowRuntime<S> {
         let rError: string | undefined;
 
         this.currentRuleId = r.id;
-        this.config.onRuleStart?.({ invocationId, ruleId: r.id, matchedCount: matched.length });
+        this.config.onRuleStart?.({ invocationId, operationId, ruleId: r.id, matchedCount: matched.length });
 
         try {
           await r.action(matched, state);
@@ -434,7 +452,7 @@ export class WorkflowRuntime<S> {
         }
 
         const rDuration = Date.now() - rStart;
-        this.config.onRuleEnd?.({ invocationId, ruleId: r.id, durationMs: rDuration, error: rError });
+        this.config.onRuleEnd?.({ invocationId, operationId, ruleId: r.id, durationMs: rDuration, error: rError });
         this.currentRuleId = null;
 
         allRulesExecuted.push({
@@ -451,7 +469,8 @@ export class WorkflowRuntime<S> {
     }
 
     this.currentInvocationId = null;
-    this.config.onInvocationEnd?.({ invocationId, durationMs: Date.now() - startTime, cycles });
+    this.currentOperationId = null;
+    this.config.onInvocationEnd?.({ invocationId, operationId, durationMs: Date.now() - startTime, cycles });
 
     const triggerEvent: WorkflowEvent = {
       type: 'rule:refresh',

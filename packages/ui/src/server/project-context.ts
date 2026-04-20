@@ -998,6 +998,25 @@ export class ProjectContext {
         args[1].status(503).json({ error: 'Project not yet initialized' });
       }
     });
+
+    // Application event ingress: POST /environments/{env}/events
+    // Apps emit domain events to this endpoint. The environment in the path
+    // is attached to the event so rules can route/filter by it.
+    router.post('/environments/:environment/events', (req, res) => {
+      const { environment } = req.params;
+      const body = req.body as { type?: string; [key: string]: unknown };
+      if (!body?.type) {
+        return res.status(400).json({ error: 'event type is required' });
+      }
+      if (!this.workflowManager) {
+        return res.status(503).json({ error: 'Project not yet initialized' });
+      }
+      const event = { ...body, environment };
+      this.workflowManager.emitEvent(event).catch((err: unknown) => {
+        console.error(`[ingress-event] Error processing event ${body.type}:`, err);
+      });
+      res.json({ queued: true, type: body.type, environment });
+    });
     router.use('/api/test-results', createTestResultsRouter(this.testResultsStorage));
 
     // Automation API — unified command endpoint for external agents

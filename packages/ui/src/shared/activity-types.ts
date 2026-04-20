@@ -37,8 +37,21 @@ export interface ActivityEvent {
   readonly level: ActivityLevel;
   readonly message: string;
   readonly projectId?: string;
+  /**
+   * Operation ID — stable across an entire operation, crosses process
+   * boundaries. Enables end-to-end tracing from UI click → rule → HTTP call
+   * → Lambda → SSM → worker action, all grouped under one ID.
+   */
+  readonly operationId?: string;
+  /**
+   * Correlation ID — this level's primary identifier (invocationId, execId,
+   * sessionId, requestId, etc.). Narrower scope than operationId.
+   */
   readonly correlationId?: string;
+  /** Secondary correlation: parent scope (e.g. ruleId for an exec event). */
   readonly parentId?: string;
+  /** Environment the event applies to (for resource/ops actions). */
+  readonly environment?: string;
   readonly data?: Record<string, unknown>;
 }
 
@@ -57,8 +70,12 @@ export interface ActivityListOptions {
   kind?: string;
   /** Filter by correlation — includes events whose correlationId OR parentId matches. */
   correlationId?: string;
+  /** Filter by end-to-end operation ID (spans multiple invocations/processes). */
+  operationId?: string;
   /** Filter by projectId. */
   projectId?: string;
+  /** Filter by environment. */
+  environment?: string;
   /** Filter by minimum level (error > warn > info > debug). */
   minLevel?: ActivityLevel;
 }

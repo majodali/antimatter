@@ -33,6 +33,7 @@ export type ParentMessage =
   | { type: 'ws-connect'; connectionId: string }
   | { type: 'ws-message'; connectionId: string; data: string }
   | { type: 'ws-disconnect'; connectionId: string }
+  | { type: 'ingress-event'; event: Record<string, unknown> }
   | { type: 'shutdown' };
 
 // ---------------------------------------------------------------------------
