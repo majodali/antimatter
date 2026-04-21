@@ -22,6 +22,7 @@
     "@antimatter/tool-integration": "*",
     "@antimatter/workflow": "*",
     "@antimatter/workspace": "*",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1034.0",
     "@aws-sdk/client-sqs": "^3.1029.0",
     "@codegenie/serverless-express": "^4.17.1",
     "@monaco-editor/react": "^4.6.0",

@@ -35,6 +35,8 @@ import type { WorkspaceEnvironment, ExecuteOptions } from '@antimatter/workspace
 import type { WatchEvent } from '@antimatter/filesystem';
 import type { ErrorStore } from './error-store.js';
 import { Kinds } from '../../shared/activity-types.js';
+import { createAwsUtils } from './workflow-utils/aws.js';
+import { createHttpUtils } from './workflow-utils/http.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1288,7 +1290,33 @@ export class WorkflowManager {
    */
   private createUtils(projectRoot: string): Record<string, unknown> {
     const projectId = this.projectId ?? projectRoot.split('/').pop() ?? 'default';
+
+    // Trace context getter — accesses the runtime's current state.
+    // Runtime may not exist yet at createUtils time, so we check at call time.
+    const getTraceContext = () => ({
+      invocationId: this.runtime?.getCurrentInvocationId?.() ?? null,
+      ruleId: this.runtime?.getCurrentRuleId?.() ?? null,
+      operationId: this.runtime?.getCurrentOperationId?.() ?? null,
+      environment: this.runtime?.getCurrentEnvironment?.() ?? null,
+    });
+
+    // AWS utilities (high-level, traced) + escape hatch via aws.sdk.*
+    const aws = createAwsUtils({
+      projectId,
+      region: process.env.AWS_REGION ?? 'us-west-2',
+      activityLog: this.activityLog,
+      getTraceContext,
+    });
+    // Traced HTTP client (auto-propagates operationId)
+    const http = createHttpUtils({
+      projectId,
+      activityLog: this.activityLog,
+      getTraceContext,
+    });
+
     return {
+      aws,
+      http,
       /**
        * Upload a file to S3.
        * @param bucket - S3 bucket name

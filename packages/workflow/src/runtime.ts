@@ -71,6 +71,15 @@ export class WorkflowRuntime<S> {
   private currentOperationId: string | null = null;
   private currentEnvironment: string | null = null;
 
+  /** Get the current invocation ID (null outside of rule execution). */
+  getCurrentInvocationId(): string | null { return this.currentInvocationId; }
+  /** Get the current rule ID (null outside of a rule action). */
+  getCurrentRuleId(): string | null { return this.currentRuleId; }
+  /** Get the current end-to-end operation ID. */
+  getCurrentOperationId(): string | null { return this.currentOperationId; }
+  /** Get the current target environment for the operation. */
+  getCurrentEnvironment(): string | null { return this.currentEnvironment; }
+
   // Declarations — collected during definition phase.
   private readonly _modules = new Map<string, ModuleDeclaration>();
   private readonly _targets = new Map<string, TargetDeclaration>();

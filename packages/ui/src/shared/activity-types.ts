@@ -131,6 +131,8 @@ export const Kinds = {
   WorkflowExecStart: 'workflow:exec:start',
   WorkflowExecChunk: 'workflow:exec:chunk',
   WorkflowExecEnd: 'workflow:exec:end',
+  WorkflowUtilStart: 'workflow:util:start',
+  WorkflowUtilEnd: 'workflow:util:end',
   WorkflowEmit: 'workflow:emit',
 
   // PTY
