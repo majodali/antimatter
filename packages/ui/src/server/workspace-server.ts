@@ -23,6 +23,8 @@ import { URL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readdirSync, unlinkSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import {
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -284,6 +286,27 @@ async function getOrCreateChild(projectId: string): Promise<ChildProcessManager>
       },
       onLog: (level, message) => {
         console.log(`[child:${projectId}] [${level}] ${message}`);
+      },
+      onUnresponsive: () => {
+        emitActivity({
+          source: 'child', kind: Kinds.ChildUnresponsive, level: 'warn',
+          message: `Worker unresponsive (heartbeat missed): ${projectId}`,
+          projectId, correlationId: projectId,
+        });
+      },
+      onForceRestart: () => {
+        emitActivity({
+          source: 'child', kind: Kinds.ChildForceRestart, level: 'warn',
+          message: `Force-restarting unresponsive worker: ${projectId}`,
+          projectId, correlationId: projectId,
+        });
+      },
+      onDeadCooldown: () => {
+        emitActivity({
+          source: 'child', kind: Kinds.ChildDeadCooldown, level: 'info',
+          message: `Dead-state cooldown elapsed — respawn re-enabled: ${projectId}`,
+          projectId, correlationId: projectId,
+        });
       },
     });
 
@@ -703,7 +726,42 @@ server.on('upgrade', async (req, socket, head) => {
 // Startup
 // ---------------------------------------------------------------------------
 
+/**
+ * Clean up orphaned workers + sockets from a previous Router instance.
+ * Called at startup to prevent "address in use" / stale socket issues.
+ */
+function reapOrphans(): { sockets: string[]; pids: number[] } {
+  const reaped = { sockets: [] as string[], pids: [] as number[] };
+  // 1. Stale UNIX sockets
+  try {
+    for (const file of readdirSync('/tmp')) {
+      if (file.startsWith('am-') && file.endsWith('.sock')) {
+        const path = `/tmp/${file}`;
+        try { unlinkSync(path); reaped.sockets.push(path); } catch { /* ignore */ }
+      }
+    }
+  } catch { /* /tmp missing, skip */ }
+
+  // 2. Orphaned worker processes. On Linux, pgrep finds them by name.
+  try {
+    const out = execSync('pgrep -f project-worker.js', { encoding: 'utf-8' });
+    const pids = out.trim().split('\n').filter(Boolean).map(p => parseInt(p, 10))
+      .filter(p => p && p !== process.pid);
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGKILL'); reaped.pids.push(pid); } catch { /* ignore */ }
+    }
+  } catch { /* pgrep found nothing or not available */ }
+
+  return reaped;
+}
+
 async function startup() {
+  // Reap orphans before anything else — prevents stuck state from previous runs
+  const reaped = reapOrphans();
+  if (reaped.sockets.length > 0 || reaped.pids.length > 0) {
+    console.log(`[workspace-server] Reaped orphans: ${reaped.sockets.length} sockets, ${reaped.pids.length} processes`);
+  }
+
   if (!CHILD_PROCESS_MODE) {
     console.log('[workspace-server] Initializing legacy mode...');
     await initLegacyMode();
@@ -716,6 +774,13 @@ async function startup() {
       message: `Router listening on port ${PORT}`,
       data: { port: PORT, mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy' },
     });
+    if (reaped.sockets.length > 0 || reaped.pids.length > 0) {
+      emitActivity({
+        source: 'router', kind: Kinds.RouterReapOrphans, level: 'warn',
+        message: `Reaped orphans at startup: ${reaped.sockets.length} sockets, ${reaped.pids.length} processes`,
+        data: reaped,
+      });
+    }
     await globalEventLogger.emit('workspace.ready', 'workspace', 'info',
       'Workspace server ready', { port: PORT, mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy', uptime: process.uptime() });
 

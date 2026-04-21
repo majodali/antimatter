@@ -108,6 +108,12 @@ export const Kinds = {
   ChildRespawn: 'child:respawn',
   ChildDead: 'child:dead',
   ChildShutdown: 'child:shutdown',
+  ChildUnresponsive: 'child:unresponsive',      // watchdog: heartbeat missed
+  ChildForceRestart: 'child:force-restart',     // watchdog: restart due to unresponsiveness
+  ChildDeadCooldown: 'child:dead-cooldown',     // dead state expired, allowing respawn
+
+  // Router self-healing
+  RouterReapOrphans: 'router:reap-orphans',     // cleanup at startup
 
   // Worker (in Worker's view)
   WorkerStart: 'worker:start',

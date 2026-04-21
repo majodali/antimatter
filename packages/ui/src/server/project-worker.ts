@@ -206,7 +206,20 @@ async function shutdown(): Promise<void> {
 // IPC message handler
 // ---------------------------------------------------------------------------
 
+// Heartbeat — track last parent contact. If no ping/message for HEARTBEAT_TIMEOUT,
+// exit. Router will respawn.
+let lastParentContact = Date.now();
+const HEARTBEAT_TIMEOUT_MS = 2 * 60 * 1000; // 120s
+
+setInterval(() => {
+  if (Date.now() - lastParentContact > HEARTBEAT_TIMEOUT_MS) {
+    log('error', `No parent contact in ${HEARTBEAT_TIMEOUT_MS / 1000}s — exiting for respawn`);
+    process.exit(2);
+  }
+}, 30_000);
+
 process.on('message', async (msg: ParentMessage) => {
+  lastParentContact = Date.now();
   try {
     switch (msg.type) {
       case 'initialize':
@@ -223,6 +236,9 @@ process.on('message', async (msg: ParentMessage) => {
         break;
       case 'ingress-event':
         handleIngressEvent(msg.event);
+        break;
+      case 'heartbeat-ping':
+        sendToParent({ type: 'heartbeat-pong' });
         break;
       case 'shutdown':
         await shutdown();

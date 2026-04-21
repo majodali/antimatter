@@ -34,6 +34,7 @@ export type ParentMessage =
   | { type: 'ws-message'; connectionId: string; data: string }
   | { type: 'ws-disconnect'; connectionId: string }
   | { type: 'ingress-event'; event: Record<string, unknown> }
+  | { type: 'heartbeat-ping' }
   | { type: 'shutdown' };
 
 // ---------------------------------------------------------------------------
@@ -48,4 +49,5 @@ export type ChildMessage =
   | { type: 'exec-hold' }
   | { type: 'exec-release' }
   | { type: 'error'; message: string; fatal?: boolean }
-  | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string };
+  | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
+  | { type: 'heartbeat-pong' };

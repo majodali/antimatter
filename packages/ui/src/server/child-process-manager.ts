@@ -23,7 +23,24 @@ export interface ChildProcessManagerOptions {
   onError: (message: string, fatal?: boolean) => void;
   onExit: (code: number | null, signal: string | null) => void;
   onLog: (level: 'info' | 'warn' | 'error', message: string) => void;
+  /** Called when watchdog detects an unresponsive worker (before force-restart). */
+  onUnresponsive?: () => void;
+  /** Called when a force-restart is initiated due to unresponsiveness. */
+  onForceRestart?: () => void;
+  /** Called when a dead-state cooldown elapses and respawn is re-enabled. */
+  onDeadCooldown?: () => void;
 }
+
+/** Crashes within this window count toward the crash budget. */
+const CRASH_WINDOW_MS = 60_000;
+/** After this many consecutive crashes, stop respawning. */
+const CRASH_BUDGET = 5;
+/** Time in dead state before crash count resets. */
+const DEAD_COOLDOWN_MS = 15 * 60_000;
+/** Watchdog ping interval. */
+const WATCHDOG_INTERVAL_MS = 20_000;
+/** Consecutive missed pings before force-restart. */
+const WATCHDOG_MISSED_THRESHOLD = 3;
 
 export class ChildProcessManager {
   readonly projectId: string;
@@ -35,6 +52,14 @@ export class ChildProcessManager {
   private crashCount = 0;
   private lastCrashTime = 0;
   private readonly options: ChildProcessManagerOptions;
+
+  // Watchdog state
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private missedPings = 0;
+  private pendingPong = false;
+
+  // Dead cooldown state
+  private cooldownTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: ChildProcessManagerOptions) {
     this.projectId = options.config.projectId;
@@ -76,18 +101,26 @@ export class ChildProcessManager {
     // Set up exit handler for crash recovery
     this.child.on('exit', (code, signal) => {
       console.log(`[child:${this.projectId}] Process exited: code=${code}, signal=${signal}`);
-      const wasReady = this.state === 'ready';
+      this.stopWatchdog();
       this.state = 'dead';
       this.child = null;
 
       // Track crashes for backoff
       const now = Date.now();
-      if (now - this.lastCrashTime < 60_000) {
+      if (now - this.lastCrashTime < CRASH_WINDOW_MS) {
         this.crashCount++;
       } else {
         this.crashCount = 1;
       }
       this.lastCrashTime = now;
+
+      // Schedule dead-state cooldown: if no crashes for DEAD_COOLDOWN_MS, reset count
+      this.scheduleDeadCooldown();
+
+      // Clean up socket file so next spawn can bind
+      try {
+        if (existsSync(this.socketPath)) unlinkSync(this.socketPath);
+      } catch { /* ignore */ }
 
       // Reject pending ready promise if initializing
       if (this.readyReject) {
@@ -136,7 +169,7 @@ export class ChildProcessManager {
    * Returns true if respawn was initiated, false if too many crashes.
    */
   async respawn(): Promise<boolean> {
-    if (this.crashCount >= 5) {
+    if (this.crashCount >= CRASH_BUDGET) {
       console.error(`[child:${this.projectId}] Too many crashes (${this.crashCount}), not restarting`);
       this.options.onError(`Project ${this.projectId} crashed too many times, manual intervention needed`, true);
       return false;
@@ -153,6 +186,55 @@ export class ChildProcessManager {
       console.error(`[child:${this.projectId}] Respawn failed:`, err);
       return false;
     }
+  }
+
+  // ---- Self-healing ----
+
+  /** Start the watchdog (heartbeat + socket ping). */
+  private startWatchdog(): void {
+    this.stopWatchdog();
+    this.missedPings = 0;
+    this.pendingPong = false;
+    this.watchdogTimer = setInterval(() => this.watchdogTick(), WATCHDOG_INTERVAL_MS);
+  }
+
+  private stopWatchdog(): void {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+  }
+
+  /** One watchdog tick: ping if pending pong, count missed, force-restart if threshold. */
+  private watchdogTick(): void {
+    if (this.state !== 'ready' || !this.child?.connected) return;
+
+    if (this.pendingPong) {
+      this.missedPings++;
+      console.warn(`[child:${this.projectId}] Watchdog: missed pong (${this.missedPings}/${WATCHDOG_MISSED_THRESHOLD})`);
+      if (this.missedPings >= WATCHDOG_MISSED_THRESHOLD) {
+        this.options.onUnresponsive?.();
+        this.options.onForceRestart?.();
+        console.error(`[child:${this.projectId}] Worker unresponsive — force-restarting`);
+        this.kill(); // triggers exit handler → respawn path
+        return;
+      }
+    }
+    this.pendingPong = true;
+    try { this.send({ type: 'heartbeat-ping' }); } catch { /* connection closing */ }
+  }
+
+  /** Schedule the dead-cooldown timer. If the child stays dead for DEAD_COOLDOWN_MS with no new
+   *  crashes, reset crashCount so future respawns aren't gated. */
+  private scheduleDeadCooldown(): void {
+    if (this.cooldownTimer) clearTimeout(this.cooldownTimer);
+    this.cooldownTimer = setTimeout(() => {
+      if (this.crashCount > 0) {
+        console.log(`[child:${this.projectId}] Dead cooldown elapsed — resetting crash count`);
+        this.crashCount = 0;
+        this.options.onDeadCooldown?.();
+      }
+    }, DEAD_COOLDOWN_MS);
   }
 
   // ---- IPC send methods ----
@@ -193,6 +275,7 @@ export class ChildProcessManager {
   }
 
   kill(): void {
+    this.stopWatchdog();
     if (this.child) {
       try { this.child.kill('SIGKILL'); } catch { /* ignore */ }
       this.child = null;
@@ -219,6 +302,12 @@ export class ChildProcessManager {
         this.readyResolve = null;
         this.readyReject = null;
         this.options.onReady();
+        this.startWatchdog();
+        break;
+
+      case 'heartbeat-pong':
+        this.pendingPong = false;
+        this.missedPings = 0;
         break;
 
       case 'ws-send':
