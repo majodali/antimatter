@@ -17,6 +17,7 @@ import {
   InvokeCommand,
   UpdateFunctionCodeCommand,
   GetFunctionConfigurationCommand,
+  ListFunctionsCommand,
 } from '@aws-sdk/client-lambda';
 import {
   CloudFrontClient,
@@ -214,6 +215,30 @@ function lambdaUtils(ctx: AwsUtilsContext) {
           FunctionName: params.functionName,
         }));
         return result as unknown as Record<string, unknown>;
+      });
+    },
+
+    /** List Lambda functions, optionally filtering by name prefix. */
+    list: async (params?: { namePrefix?: string; environment?: string }): Promise<Array<{ functionName: string; functionArn: string; runtime?: string; lastModified?: string }>> => {
+      return traced(ctx, `aws.lambda.list(${params?.namePrefix ?? ''})`, params ?? {}, params?.environment, async () => {
+        const client = new LambdaClient({ region: ctx.region });
+        const out: Array<{ functionName: string; functionArn: string; runtime?: string; lastModified?: string }> = [];
+        let marker: string | undefined;
+        do {
+          const result = await client.send(new ListFunctionsCommand({ Marker: marker }));
+          for (const fn of (result.Functions ?? [])) {
+            if (!fn.FunctionName) continue;
+            if (params?.namePrefix && !fn.FunctionName.startsWith(params.namePrefix)) continue;
+            out.push({
+              functionName: fn.FunctionName,
+              functionArn: fn.FunctionArn ?? '',
+              runtime: fn.Runtime,
+              lastModified: fn.LastModified,
+            });
+          }
+          marker = result.NextMarker;
+        } while (marker);
+        return out;
       });
     },
   };

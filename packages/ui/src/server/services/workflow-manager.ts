@@ -1651,6 +1651,41 @@ export class WorkflowManager {
           actions: actions?.map(a => ({ ...a, enabled: a.enabled ?? true })),
         });
       },
+
+      /**
+       * wf.utils.resource.* — full CRUD namespace for deployed resources.
+       * Use these in ops rules to register/update/deregister resources dynamically.
+       */
+      resource: {
+        /** Register (or upsert by id) a deployed resource. Returns the resource. */
+        register: async (input: Parameters<import('./deployed-resource-store.js').DeployedResourceStore['register']>[0]) => {
+          if (!this.deployedResourceStore) return null;
+          return this.deployedResourceStore.register(input);
+        },
+        /** Update fields on an existing resource (merge). Returns the updated resource or null. */
+        update: async (id: string, patch: Parameters<import('./deployed-resource-store.js').DeployedResourceStore['update']>[1]) => {
+          if (!this.deployedResourceStore) return null;
+          return this.deployedResourceStore.update(id, patch);
+        },
+        /** Convenience: set health status, statusMessage, lastChecked. */
+        setStatus: async (id: string, patch: Parameters<import('./deployed-resource-store.js').DeployedResourceStore['setStatus']>[1]) => {
+          if (!this.deployedResourceStore) return null;
+          return this.deployedResourceStore.setStatus(id, patch);
+        },
+        /** Remove a resource. Returns true if removed, false if not found or builtIn. */
+        deregister: async (id: string): Promise<boolean> => {
+          if (!this.deployedResourceStore) return false;
+          return this.deployedResourceStore.deregister(id);
+        },
+        /** Get a single resource by id (or undefined). */
+        get: (id: string) => {
+          return this.deployedResourceStore?.get(id);
+        },
+        /** List all resources, optionally filtered by resourceType. */
+        list: (resourceType?: string) => {
+          return this.deployedResourceStore?.list(resourceType) ?? [];
+        },
+      },
     };
   }
 }
