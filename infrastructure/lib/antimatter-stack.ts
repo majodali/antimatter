@@ -491,6 +491,7 @@ export class AntimatterStack extends cdk.Stack {
         'ec2:RunInstances',
         'ec2:StartInstances',
         'ec2:StopInstances',
+        'ec2:RebootInstances',
         'ec2:TerminateInstances',
         'ec2:DescribeInstances',
         'ec2:DescribeInstanceStatus',
@@ -502,6 +503,16 @@ export class AntimatterStack extends cdk.Stack {
         'ec2:CreateTags',
         'ec2:DescribeTags',
         'ec2:DescribeSubnets',
+      ],
+      resources: ['*'],
+    }));
+
+    // Grant API Lambda SSM SendCommand permission for admin host operations.
+    apiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: [
+        'ssm:SendCommand',
+        'ssm:GetCommandInvocation',
+        'ssm:ListCommandInvocations',
       ],
       resources: ['*'],
     }));

@@ -21,6 +21,8 @@ import { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { WorkspaceEc2ServiceConfig } from './services/workspace-ec2-service.js';
 import { EnvironmentRegistryService } from './services/environment-registry-service.js';
 import { createInfraEnvironmentRouter } from './routes/infra-environments.js';
+import { createAdminRouter } from './routes/admin.js';
+import { EC2Client } from '@aws-sdk/client-ec2';
 
 const app = express();
 
@@ -174,6 +176,21 @@ apiRouter.use('/infra-environments', createInfraEnvironmentRouter(envRegistry));
 
 // Secrets management — SSM Parameter Store
 apiRouter.use('/secrets', createSecretsRouter(ssmClient, clearSecretCache));
+
+// Admin (POE — stepmother) operations: host restart, instance lifecycle,
+// project worker restart. Runs in Lambda so it can act from *outside* the
+// workspace EC2 instance.
+{
+  const ec2Client = new EC2Client({});
+  const adminEventLogger = createEventLogger('admin');
+  apiRouter.use('/admin', createAdminRouter({
+    ec2Client,
+    ssmClient,
+    eventLogger: adminEventLogger,
+    albDns: process.env.WORKSPACE_ALB_DNS ?? '',
+    projectsBucket,
+  }));
+}
 
 // Project-scoped file routes — writes to S3 and, when the workspace is running,
 // forwards mutations to the workspace server so file watchers and workflow rules trigger.
