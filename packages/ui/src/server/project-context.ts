@@ -636,6 +636,16 @@ export class ProjectContext {
     this.eventLog = new EventLog({ logPath: eventLogPath });
     await this.eventLog.initialize();
 
+    // Deployed resource store — must be created BEFORE WorkflowManager so that
+    // wf.utils.resource.* in workflow rules has a real store to talk to.
+    this.testResultsStorage = new FileTestResultsStorage(this.env);
+    this.deployedResourceStore = new DeployedResourceStore(this.env, () => {
+      this.broadcastToClients({
+        type: 'application-state',
+        state: { deployedResources: this.deployedResourceStore.list() },
+      });
+    });
+
     // Workflow manager — broadcast callback also captures build terminal output
     this.workflowManager = new WorkflowManager({
       env: this.env,
@@ -654,15 +664,6 @@ export class ProjectContext {
       projectId: this.projectId,
       onExecStart: () => this.config.onExecStart(),
       onExecEnd: () => this.config.onExecEnd(),
-    });
-
-    // Test results storage (file-backed, auto-synced to S3)
-    this.testResultsStorage = new FileTestResultsStorage(this.env);
-    this.deployedResourceStore = new DeployedResourceStore(this.env, () => {
-      this.broadcastToClients({
-        type: 'application-state',
-        state: { deployedResources: this.deployedResourceStore.list() },
-      });
     });
 
     await this.errorStore.initialize();

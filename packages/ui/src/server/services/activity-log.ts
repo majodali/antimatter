@@ -46,6 +46,8 @@ export class ActivityLog {
 
   private compactTimer: ReturnType<typeof setInterval> | null = null;
   private initialized = false;
+  /** Force the next autoCompact tick to truncate even if the file is small. */
+  private pendingTruncate = false;
 
   constructor(options: ActivityLogOptions) {
     this.logPath = options.logPath;
@@ -64,31 +66,47 @@ export class ActivityLog {
       mkdirSync(dir, { recursive: true });
     }
 
-    // Load existing entries from JSONL
+    // Load existing entries from JSONL — with a safety cap so a runaway
+    // file (e.g. from a missed compaction cycle) doesn't OOM the worker.
     if (existsSync(this.logPath)) {
       try {
-        const content = readFileSync(this.logPath, 'utf-8');
-        const lines = content.split('\n').filter(l => l.trim());
-        for (const line of lines) {
-          try {
-            const entry = JSON.parse(line) as ActivityEvent;
-            this.entries.push(entry);
-            if (entry.seq >= this.nextSeq) {
-              this.nextSeq = entry.seq + 1;
+        const stat = statSync(this.logPath);
+        // If the file is wildly over the compaction cap (>5x), skip loading
+        // and truncate on first compaction tick. The in-memory ring starts empty.
+        if (stat.size > MAX_JSONL_SIZE * 5) {
+          console.warn(
+            `[${this.label}] JSONL is ${(stat.size / 1024 / 1024).toFixed(0)}MB (>5x cap); ` +
+              `skipping load, will truncate on compaction.`,
+          );
+          this.entries = [];
+          this.nextSeq = 1;
+          // Schedule an immediate truncation so next appends don't grow further.
+          this.pendingTruncate = true;
+        } else {
+          const content = readFileSync(this.logPath, 'utf-8');
+          const lines = content.split('\n').filter(l => l.trim());
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line) as ActivityEvent;
+              this.entries.push(entry);
+              if (entry.seq >= this.nextSeq) {
+                this.nextSeq = entry.seq + 1;
+              }
+            } catch {
+              // Skip malformed lines
             }
-          } catch {
-            // Skip malformed lines
           }
+          // Trim to max ring buffer size
+          if (this.entries.length > MAX_ENTRIES) {
+            this.entries = this.entries.slice(-MAX_ENTRIES);
+          }
+          console.log(`[${this.label}] Loaded ${this.entries.length} entries, nextSeq=${this.nextSeq}`);
         }
-        // Trim to max ring buffer size
-        if (this.entries.length > MAX_ENTRIES) {
-          this.entries = this.entries.slice(-MAX_ENTRIES);
-        }
-        console.log(`[${this.label}] Loaded ${this.entries.length} entries, nextSeq=${this.nextSeq}`);
       } catch (err) {
         console.warn(`[${this.label}] Failed to load JSONL, starting fresh:`, err);
         this.entries = [];
         this.nextSeq = 1;
+        this.pendingTruncate = true;
       }
     }
 
@@ -202,12 +220,18 @@ export class ActivityLog {
   private async autoCompact(): Promise<void> {
     if (!existsSync(this.logPath)) return;
     const stat = statSync(this.logPath);
-    if (stat.size < MAX_JSONL_SIZE) return;
+    if (!this.pendingTruncate && stat.size < MAX_JSONL_SIZE) return;
 
     // Compact: rewrite file with only the last COMPACT_RETAIN in-memory entries.
     const retained = this.entries.slice(-COMPACT_RETAIN);
-    const content = retained.map(e => JSON.stringify(e)).join('\n') + '\n';
+    const content = retained.length > 0
+      ? retained.map(e => JSON.stringify(e)).join('\n') + '\n'
+      : '';
     writeFileSync(this.logPath, content, 'utf-8');
-    console.log(`[${this.label}] Compacted JSONL: ${retained.length} entries retained`);
+    const before = (stat.size / 1024 / 1024).toFixed(1);
+    console.log(
+      `[${this.label}] Compacted JSONL: ${retained.length} entries retained (was ${before}MB)`,
+    );
+    this.pendingTruncate = false;
   }
 }

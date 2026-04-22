@@ -186,7 +186,7 @@ export default (wf: any) => {
   // -------------------------------------------------------------------------
 
   wf.rule('Register worker on spawn',
-    (e: any) => e.type === 'worker:spawned',
+    (e: any) => e.type === 'worker:spawning' || e.type === 'worker:ready',
     async (events: any[]) => {
       for (const e of events) {
         await wf.utils.resource.register({
@@ -196,17 +196,16 @@ export default (wf: any) => {
           environment: ENV,
           instance: {
             projectId: e.projectId,
-            hostedOn: e.instanceId,
-            pid: e.pid,
-            spawnedAt: e.spawnedAt,
+            spawnedAt: e.spawnedAt ?? e.readyAt,
+            readyAt: e.readyAt,
           },
-          status: 'healthy',
+          status: e.type === 'worker:ready' ? 'healthy' : 'starting',
           actions: [
             { triggerId: 'worker:restart', label: 'Restart', icon: 'refresh' },
             { triggerId: 'worker:shutdown', label: 'Shutdown', icon: 'power', destructive: true },
           ],
         });
-        wf.log(`Registered worker resource: ${e.projectId}`);
+        wf.log(`${e.type === 'worker:ready' ? 'Marked ready' : 'Registered'} worker resource: ${e.projectId}`);
       }
     });
 
