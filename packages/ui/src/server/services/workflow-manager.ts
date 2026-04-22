@@ -211,12 +211,25 @@ export class WorkflowManager {
       utils,
       // Workflow trace hooks — emit activity events for every rule/exec/log/emit
       onInvocationStart: (ctx: any) => {
+        // Summarize trigger events — a single invocation can have thousands
+        // of file:change events, which would blow up the log entry size.
+        const events = ctx.triggerEvents as Array<{ type?: string }>;
+        const typeCounts: Record<string, number> = {};
+        for (const e of events) typeCounts[e.type ?? 'unknown'] = (typeCounts[e.type ?? 'unknown'] ?? 0) + 1;
+        const summary = Object.entries(typeCounts)
+          .map(([t, n]) => (n > 1 ? `${t} x${n}` : t))
+          .join(', ');
         activityLog?.emit({
           source: 'workflow', kind: Kinds.WorkflowInvocationStart, level: 'info',
-          message: `Invocation start: ${ctx.triggerEvents.map((e: any) => e.type).join(', ') || 'manual'}`,
+          message: `Invocation start: ${summary || 'manual'}`,
           projectId, operationId: ctx.operationId, correlationId: ctx.invocationId,
           environment: ctx.environment ?? undefined,
-          data: { triggerEvents: ctx.triggerEvents },
+          data: {
+            eventCount: events.length,
+            typeCounts,
+            // First 5 distinct-type events for context; don't retain the full firehose.
+            sample: events.slice(0, 5),
+          },
         });
       },
       onInvocationEnd: (ctx: any) => {
