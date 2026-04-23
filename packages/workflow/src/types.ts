@@ -234,6 +234,25 @@ export interface RuleDeclaration {
   readonly sourceFile?: string;
 }
 
+/**
+ * A scheduled task declaration — metadata exposed to the IDE.
+ *
+ * Schedules run their action at a recurring interval. Internally each
+ * schedule is registered as a synthetic rule whose predicate matches
+ * `{ type: 'schedule:fire', scheduleId }` events injected by the
+ * workflow manager's scheduler ticker.
+ */
+export interface ScheduleDeclaration {
+  readonly id: string;
+  readonly name: string;
+  /** Human-readable interval spec as provided by the script, e.g. "10m", "1h", "1d". */
+  readonly intervalSpec: string;
+  /** Parsed interval in milliseconds. */
+  readonly intervalMs: number;
+  /** The source file that declared this schedule. */
+  readonly sourceFile?: string;
+}
+
 // ----------------------------------------------------------------------------
 // Widgets — UI elements declared by build scripts
 // ----------------------------------------------------------------------------
@@ -295,6 +314,7 @@ export interface WorkflowDeclarations {
   readonly environments: readonly EnvironmentDeclaration[];
   readonly rules: readonly RuleDeclaration[];
   readonly widgets: readonly WidgetDeclaration[];
+  readonly schedules: readonly ScheduleDeclaration[];
 }
 
 // ----------------------------------------------------------------------------
@@ -342,6 +362,32 @@ export interface Workflow<S> {
 
   /** Declare a UI widget (button, toggle, or status indicator). */
   widget(id: string, opts: Omit<WidgetDeclaration, 'id'>): void;
+
+  /**
+   * Declare a scheduled task. The action runs at approximately the
+   * specified interval, subject to the workflow manager's tick granularity
+   * (typically 30s). `lastRunAt` is persisted, so a schedule will not
+   * re-fire within its interval across worker restarts; if the worker was
+   * offline longer than the interval, it fires once on boot (no back-fill).
+   *
+   * `interval` accepts an integer number of milliseconds OR a duration
+   * string: `'30s' | '5m' | '1h' | '6h' | '1d'`. Throws on invalid input.
+   *
+   * The action receives a synthetic `schedule:fire` event as its only
+   * matched event (with `scheduleId` and `scheduledAt` fields).
+   *
+   * @example
+   *   wf.every('ops:health-check', '10m', async () => {
+   *     const cfg = await wf.utils.aws.lambda.getConfig(...);
+   *     wf.log(`Lambda state: ${cfg.State}`);
+   *   });
+   */
+  every(
+    name: string,
+    interval: string | number,
+    action: WorkflowAction<S, WorkflowEvent>,
+    options?: { readonly id?: string },
+  ): void;
 
   // --- Execution utilities (called from within actions) ---
 
@@ -525,6 +571,8 @@ export interface PersistedWorkflowState<S = unknown> {
   readonly fileManifest?: Readonly<Record<string, string>>;
   /** Accumulated rule execution results — persisted across invocations. */
   readonly ruleResults?: Readonly<Record<string, PersistedRuleResult>>;
+  /** Last-fire timestamp per scheduled task, keyed by schedule id. */
+  readonly scheduleState?: Readonly<Record<string, { readonly lastRunAt: string }>>;
   /** Sequence number of the last event processed from the EventLog. */
   readonly lastProcessedSeq?: number;
 }

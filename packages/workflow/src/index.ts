@@ -6,6 +6,7 @@
 export { defineWorkflow, ErrorTypes } from './types.js';
 export { WorkflowRuntime } from './runtime.js';
 export { parseTscErrors, parseEsbuildErrors, parseToolOutput } from './parsers.js';
+export { parseInterval, MIN_SCHEDULE_INTERVAL_MS, SCHEDULE_FIRE_EVENT_TYPE } from './schedule.js';
 
 export type {
   // Events
@@ -34,6 +35,7 @@ export type {
   EnvironmentDeclaration,
   EnvironmentAction,
   RuleDeclaration,
+  ScheduleDeclaration,
   LambdaTargetConfig,
   S3TargetConfig,
   WorkflowDeclarations,

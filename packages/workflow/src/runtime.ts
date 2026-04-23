@@ -22,7 +22,9 @@ import type {
   WorkflowLogEntry,
   WorkflowRuntimeConfig,
   ProjectError,
+  ScheduleDeclaration,
 } from './types.js';
+import { parseInterval, SCHEDULE_FIRE_EVENT_TYPE } from './schedule.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -85,6 +87,7 @@ export class WorkflowRuntime<S> {
   private readonly _targets = new Map<string, TargetDeclaration>();
   private readonly _environments = new Map<string, EnvironmentDeclaration>();
   private readonly _widgets = new Map<string, WidgetDeclaration>();
+  private readonly _schedules = new Map<string, RegisteredSchedule>();
 
   // Source file tracking — which file declared each element.
   private _currentSourceFile: string | null = null;
@@ -130,6 +133,33 @@ export class WorkflowRuntime<S> {
       widget: (id, opts) => {
         this._widgets.set(id, { id, ...opts });
         this.trackDeclaration(id);
+      },
+      every: (name, interval, action, opts) => {
+        const id = opts?.id ?? slugify(name);
+        if (this._schedules.has(id)) {
+          throw new Error(`Duplicate schedule id: ${id} (from name "${name}")`);
+        }
+        const intervalSpec = typeof interval === 'string' ? interval : `${interval}ms`;
+        const intervalMs = parseInterval(interval);
+        const sourceFile = this._currentSourceFile ?? undefined;
+        this._schedules.set(id, {
+          id, name, intervalSpec, intervalMs, sourceFile,
+          action: action as WorkflowAction<S, any>,
+        });
+        // Register a synthetic rule so schedule execution reuses the existing
+        // invocation/rule trace plumbing. The predicate matches the scheduler's
+        // injected `schedule:fire` event for this specific id.
+        const ruleId = `schedule:${id}`;
+        this.rules.push({
+          id: ruleId,
+          name: `Schedule: ${name}`,
+          predicate: (e) => e.type === SCHEDULE_FIRE_EVENT_TYPE && (e as any).scheduleId === id,
+          action: action as WorkflowAction<S, any>,
+          manual: false,
+          sourceFile,
+        });
+        this.trackDeclaration(id);
+        this.trackDeclaration(ruleId);
       },
       exec: (command, opts) => {
         const invocationId = this.currentInvocationId ?? '';
@@ -215,7 +245,21 @@ export class WorkflowRuntime<S> {
       environments: Array.from(this._environments.values()),
       rules: this.rules.map(r => ({ id: r.id, name: r.name, manual: r.manual, sourceFile: r.sourceFile })),
       widgets: Array.from(this._widgets.values()),
+      schedules: Array.from(this._schedules.values()).map(s => ({
+        id: s.id, name: s.name,
+        intervalSpec: s.intervalSpec, intervalMs: s.intervalMs,
+        sourceFile: s.sourceFile,
+      })),
     };
+  }
+
+  /** The registered schedules — used by WorkflowManager to drive the ticker. */
+  get schedules(): readonly ScheduleDeclaration[] {
+    return Array.from(this._schedules.values()).map(s => ({
+      id: s.id, name: s.name,
+      intervalSpec: s.intervalSpec, intervalMs: s.intervalMs,
+      sourceFile: s.sourceFile,
+    }));
   }
 
   /** The file→elementId tracking map (for persistence). */
@@ -250,7 +294,7 @@ export class WorkflowRuntime<S> {
   }
 
   /**
-   * Remove all declarations (rules, modules, targets, environments)
+   * Remove all declarations (rules, modules, targets, environments, schedules)
    * that were registered from a specific source file.
    */
   removeDeclarationsFromFile(filePath: string): void {
@@ -264,6 +308,7 @@ export class WorkflowRuntime<S> {
       this._targets.delete(id);
       this._environments.delete(id);
       this._widgets.delete(id);
+      this._schedules.delete(id);
     }
     this._fileDeclarations.delete(filePath);
   }
@@ -511,5 +556,14 @@ interface RegisteredRule<S> {
   readonly predicate: (event: WorkflowEvent) => boolean;
   readonly action: WorkflowAction<S, any>;
   readonly manual: boolean;
+  readonly sourceFile?: string;
+}
+
+interface RegisteredSchedule {
+  readonly id: string;
+  readonly name: string;
+  readonly intervalSpec: string;
+  readonly intervalMs: number;
+  readonly action: WorkflowAction<any, any>;
   readonly sourceFile?: string;
 }

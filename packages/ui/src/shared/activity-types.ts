@@ -134,6 +134,8 @@ export const Kinds = {
   WorkflowUtilStart: 'workflow:util:start',
   WorkflowUtilEnd: 'workflow:util:end',
   WorkflowEmit: 'workflow:emit',
+  WorkflowScheduleFire: 'workflow:schedule:fire',
+  WorkflowScheduleSkip: 'workflow:schedule:skip',
 
   // PTY
   PtySpawn: 'pty:spawn',

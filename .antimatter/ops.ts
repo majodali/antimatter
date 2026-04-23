@@ -377,4 +377,39 @@ export default (wf: any) => {
       if (response.ok) wf.log(`Instance reboot queued: ${JSON.stringify(response.json ?? response.body)}`);
       else wf.log(`Reboot failed: ${response.body}`, 'error');
     });
+
+  // -------------------------------------------------------------------------
+  // Scheduled tasks — recurring ops checks
+  // -------------------------------------------------------------------------
+
+  /** Health-check the API Lambda every 10 minutes and refresh its status. */
+  wf.every('ops:health-check', '10m', async () => {
+    const resource = await wf.utils.resource.get('api-lambda-production');
+    if (!resource?.instance?.functionName) {
+      wf.log('Health check: api-lambda-production not registered yet — skipping', 'warn');
+      return;
+    }
+    try {
+      const cfg = await wf.utils.aws.lambda.getConfig({
+        functionName: resource.instance.functionName,
+        environment: ENV,
+      });
+      const state = String(cfg.State ?? 'unknown');
+      const lastUpdate = String(cfg.LastUpdateStatus ?? 'unknown');
+      const status = state === 'Active' && lastUpdate === 'Successful' ? 'healthy' : 'degraded';
+      await wf.utils.resource.setStatus('api-lambda-production', {
+        status,
+        statusMessage: `State=${state} LastUpdate=${lastUpdate}`,
+        lastChecked: new Date().toISOString(),
+      });
+      wf.log(`Health check: api-lambda state=${state}, lastUpdate=${lastUpdate}`);
+    } catch (err: any) {
+      await wf.utils.resource.setStatus('api-lambda-production', {
+        status: 'down',
+        statusMessage: err?.message ?? 'getConfig failed',
+        lastChecked: new Date().toISOString(),
+      });
+      wf.log(`Health check failed: ${err?.message ?? err}`, 'error');
+    }
+  });
 };

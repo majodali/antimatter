@@ -20,6 +20,7 @@ import {
   WorkflowRuntime,
   ErrorTypes,
   parseEsbuildErrors,
+  SCHEDULE_FIRE_EVENT_TYPE,
   type ApplicationState,
   type WorkflowDefinition,
   type WorkflowDeclarations,
@@ -30,6 +31,7 @@ import {
   type ExecOptions,
   type ExecResult,
   type ProjectError,
+  type ScheduleDeclaration,
 } from '@antimatter/workflow';
 import type { WorkspaceEnvironment, ExecuteOptions } from '@antimatter/workspace';
 import type { WatchEvent } from '@antimatter/filesystem';
@@ -112,6 +114,16 @@ export class WorkflowManager {
   private loadedDefinitions = new Map<string, WorkflowDefinition<any>>();
   /** Automation files that changed since last reload (for incremental reload). */
   private changedAutomationFiles = new Set<string>();
+
+  // ---- Scheduler (Slice 5: wf.every) -------------------------------------
+  /** Last-fire timestamp per scheduled task, mirrored to persisted state. */
+  private scheduleState: Record<string, { lastRunAt: string }> = {};
+  /** Active ticker that polls schedules every TICK_MS. null when stopped. */
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
+  /** Schedules currently mid-fire — prevents overlapping invocations. */
+  private firingSchedules = new Set<string>();
+  /** Ticker cadence. Smaller than the minimum interval so <1-tick drift is OK. */
+  private static readonly TICK_MS = 30_000;
 
   constructor(options: WorkflowManagerOptions) {
     this.env = options.env;
@@ -356,6 +368,11 @@ export class WorkflowManager {
         this.runtime.restoreFileDeclarations(loadedState.fileDeclarations);
       }
 
+      // Restore schedule last-fire timestamps
+      if (loadedState.scheduleState) {
+        this.scheduleState = { ...loadedState.scheduleState };
+      }
+
       console.log('[workflow-manager] Restored persisted state');
 
       // Startup diff: compare workspace files against manifest
@@ -387,6 +404,131 @@ export class WorkflowManager {
         }
       }
     }
+
+    // Start the scheduler ticker now that state is loaded and runtime is ready.
+    // The immediate tick covers catch-up: any schedule whose interval has elapsed
+    // (including ones never fired — no persisted lastRunAt) fires exactly once.
+    this.startScheduler();
+  }
+
+  /** Stop the scheduler ticker. Safe to call repeatedly. */
+  stop(): void {
+    this.stopScheduler();
+  }
+
+  // ---- Scheduler ----------------------------------------------------------
+
+  private startScheduler(): void {
+    this.stopScheduler();
+    // Fire a catch-up tick immediately (don't wait 30s for the first interval).
+    this.onTick().catch(err => {
+      console.error('[workflow-manager] Scheduler catch-up tick failed:', err);
+    });
+    this.tickTimer = setInterval(() => {
+      this.onTick().catch(err => {
+        console.error('[workflow-manager] Scheduler tick failed:', err);
+      });
+    }, WorkflowManager.TICK_MS);
+    // Don't keep the worker alive solely for ticking.
+    this.tickTimer.unref?.();
+  }
+
+  private stopScheduler(): void {
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
+    this.firingSchedules.clear();
+  }
+
+  /**
+   * One scheduler tick. Iterates over registered schedules and fires any
+   * whose interval has elapsed since `lastRunAt`. Catch-up is a single fire
+   * (no back-fill for N missed intervals) — we value cheap recovery over
+   * exact-timing fidelity.
+   *
+   * We update `scheduleState[id].lastRunAt` BEFORE awaiting processEvents so
+   * concurrent or overlapping ticks don't double-fire the same schedule.
+   * Concurrency is further guarded by {@link firingSchedules}.
+   */
+  private async onTick(): Promise<void> {
+    if (!this.runtime) return;
+    const schedules: readonly ScheduleDeclaration[] = this.runtime.schedules;
+    if (schedules.length === 0) return;
+
+    const now = Date.now();
+    // Drop schedule state entries that no longer have a matching declaration
+    // (happens after automation files are edited). Keeps the state tidy.
+    const declaredIds = new Set(schedules.map(s => s.id));
+    let pruned = false;
+    for (const id of Object.keys(this.scheduleState)) {
+      if (!declaredIds.has(id)) {
+        delete this.scheduleState[id];
+        pruned = true;
+      }
+    }
+
+    let fired = false;
+    for (const s of schedules) {
+      if (this.firingSchedules.has(s.id)) continue;
+      const lastStr = this.scheduleState[s.id]?.lastRunAt;
+      const lastMs = lastStr ? Date.parse(lastStr) : 0;
+      if (!Number.isFinite(lastMs) || now - lastMs >= s.intervalMs) {
+        this.firingSchedules.add(s.id);
+        // Record the fire-timestamp pre-emptively so we don't double-fire if
+        // the synchronous tick logic runs again while this await is pending.
+        this.scheduleState[s.id] = { lastRunAt: new Date(now).toISOString() };
+        try {
+          await this.fireSchedule(s, lastStr);
+          fired = true;
+        } finally {
+          this.firingSchedules.delete(s.id);
+        }
+      }
+    }
+
+    // Persist scheduleState even when nothing fired if we pruned stale keys.
+    // Otherwise persistAndBroadcast will pick it up after the invocation runs.
+    if (!fired && pruned) {
+      await this.saveSchedulerState();
+    }
+  }
+
+  /**
+   * Fire a single schedule: emit a fire-activity event, then inject the
+   * synthetic `schedule:fire` event into the normal event pipeline so the
+   * existing invocation/rule tracing fires exactly like a manual emit.
+   */
+  private async fireSchedule(s: ScheduleDeclaration, lastRunAt: string | undefined): Promise<void> {
+    const operationId = `schedop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const scheduledAt = new Date().toISOString();
+    this.activityLog?.emit({
+      source: 'workflow', kind: Kinds.WorkflowScheduleFire, level: 'info',
+      message: `Schedule fire: ${s.name} (every ${s.intervalSpec})`,
+      projectId: this.projectId, operationId, correlationId: `schedule:${s.id}`,
+      data: {
+        scheduleId: s.id,
+        scheduleName: s.name,
+        intervalMs: s.intervalMs,
+        intervalSpec: s.intervalSpec,
+        lastRunAt: lastRunAt ?? null,
+      },
+    });
+    await this.processEvents([{
+      type: SCHEDULE_FIRE_EVENT_TYPE,
+      timestamp: scheduledAt,
+      scheduleId: s.id,
+      scheduledAt,
+      lastRunAt: lastRunAt ?? null,
+      operationId,
+    } as WorkflowEvent]);
+  }
+
+  /** Persist scheduleState without re-running a full save (e.g. after pruning). */
+  private async saveSchedulerState(): Promise<void> {
+    if (!this.persisted) return;
+    this.persisted = { ...this.persisted, scheduleState: { ...this.scheduleState } };
+    await this.saveState();
   }
 
   /** Pause event processing (for batch operations like git checkout). */
@@ -658,6 +800,7 @@ export class WorkflowManager {
       updatedAt: new Date().toISOString(),
       fileDeclarations,
       ruleResults: existingResults,
+      scheduleState: { ...this.scheduleState },
       lastProcessedSeq: this.persisted?.lastProcessedSeq,
     };
     await this.saveState();
