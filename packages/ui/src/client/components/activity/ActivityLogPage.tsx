@@ -1,43 +1,60 @@
-import { useState, useMemo } from 'react';
+/**
+ * ActivityLogPage — full-stream explorer at /logs.
+ *
+ * Phase A: minimum viable swap from the old `category`/`level` client
+ * filters to `source`/`level` filters over the real server events. The
+ * richer explorer (kind tree, correlation-id paste, time range, trace
+ * tree) can land in a later phase; for now this page is mainly useful
+ * for agent or rare-investigation reading.
+ */
+import { useEffect, useMemo, useState } from 'react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { ActivityEventRow } from './ActivityEventRow';
-import { useActivityStore, type EventCategory, type EventLevel } from '@/stores/activityStore';
+import { useActivityStore } from '@/stores/activityStore';
+import { useProjectStore } from '@/stores/projectStore';
+import type { ActivityLevel, ActivitySource } from '../../../shared/activity-types';
 
-const ALL_CATEGORIES: EventCategory[] = ['build', 'chat', 'file', 'editor', 'project', 'network', 'system'];
-const ALL_LEVELS: EventLevel[] = ['info', 'warn', 'error'];
+const ALL_SOURCES: ActivitySource[] = [
+  'router', 'child', 'worker', 'workflow', 'pty', 'service', 'instance', 'client',
+];
+const ALL_LEVELS: ActivityLevel[] = ['debug', 'info', 'warn', 'error'];
 
 export function ActivityLogPage() {
   const events = useActivityStore((s) => s.events);
   const clear = useActivityStore((s) => s.clear);
-  const [selectedCategories, setSelectedCategories] = useState<Set<EventCategory>>(new Set(ALL_CATEGORIES));
-  const [selectedLevels, setSelectedLevels] = useState<Set<EventLevel>>(new Set(ALL_LEVELS));
+  const loadBackfill = useActivityStore((s) => s.loadBackfill);
+  const projectId = useProjectStore((s) => s.currentProjectId);
+
+  const [selectedSources, setSelectedSources] = useState<Set<ActivitySource>>(new Set(ALL_SOURCES));
+  const [selectedLevels, setSelectedLevels] = useState<Set<ActivityLevel>>(new Set(ALL_LEVELS));
+
+  useEffect(() => {
+    if (projectId) void loadBackfill(projectId, 1000);
+  }, [projectId, loadBackfill]);
 
   const filtered = useMemo(
-    () => events.filter((e) => selectedCategories.has(e.category) && selectedLevels.has(e.level)),
-    [events, selectedCategories, selectedLevels],
+    () => events.filter((e) => selectedSources.has(e.source) && selectedLevels.has(e.level)),
+    [events, selectedSources, selectedLevels],
   );
 
   const counts = useMemo(() => {
-    const byLevel = { info: 0, warn: 0, error: 0 };
+    const byLevel = { debug: 0, info: 0, warn: 0, error: 0 };
     for (const e of events) byLevel[e.level]++;
     return byLevel;
   }, [events]);
 
-  function toggleCategory(cat: EventCategory) {
-    setSelectedCategories((prev) => {
+  function toggleSource(src: ActivitySource) {
+    setSelectedSources((prev) => {
       const next = new Set(prev);
-      if (next.has(cat)) next.delete(cat);
-      else next.add(cat);
+      if (next.has(src)) next.delete(src); else next.add(src);
       return next;
     });
   }
-
-  function toggleLevel(level: EventLevel) {
+  function toggleLevel(level: ActivityLevel) {
     setSelectedLevels((prev) => {
       const next = new Set(prev);
-      if (next.has(level)) next.delete(level);
-      else next.add(level);
+      if (next.has(level)) next.delete(level); else next.add(level);
       return next;
     });
   }
@@ -53,39 +70,35 @@ export function ActivityLogPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={clear}>
-              Clear All
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => window.history.back()}>
-              Back
-            </Button>
+            <Button variant="outline" size="sm" onClick={clear}>Clear local view</Button>
+            <Button variant="outline" size="sm" onClick={() => window.history.back()}>Back</Button>
           </div>
         </div>
 
-        {/* Filter bar */}
         <div className="flex flex-wrap gap-4 mb-4 p-3 bg-card rounded-lg border border-border">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Category:</span>
-            {ALL_CATEGORIES.map((cat) => (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-medium text-muted-foreground">Source:</span>
+            {ALL_SOURCES.map((src) => (
               <button
-                key={cat}
+                key={src}
                 className={`px-2 py-0.5 rounded text-xs border transition-colors ${
-                  selectedCategories.has(cat)
+                  selectedSources.has(src)
                     ? 'bg-primary text-primary-foreground border-primary'
                     : 'bg-transparent text-muted-foreground border-border hover:border-primary/50'
                 }`}
-                onClick={() => toggleCategory(cat)}
+                onClick={() => toggleSource(src)}
               >
-                {cat}
+                {src}
               </button>
             ))}
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground">Level:</span>
             {ALL_LEVELS.map((level) => {
-              const colors: Record<EventLevel, string> = {
-                info: 'border-blue-500 bg-blue-500',
-                warn: 'border-yellow-500 bg-yellow-500',
+              const colors: Record<ActivityLevel, string> = {
+                debug: 'border-gray-500 bg-gray-500',
+                info:  'border-blue-500 bg-blue-500',
+                warn:  'border-yellow-500 bg-yellow-500',
                 error: 'border-red-500 bg-red-500',
               };
               return (
@@ -105,7 +118,6 @@ export function ActivityLogPage() {
           </div>
         </div>
 
-        {/* Event list */}
         <div className="bg-card rounded-lg border border-border overflow-hidden">
           <ScrollArea className="max-h-[70vh]">
             {filtered.length === 0 ? (
@@ -114,7 +126,7 @@ export function ActivityLogPage() {
               </div>
             ) : (
               filtered.map((event) => (
-                <ActivityEventRow key={event.id} event={event} />
+                <ActivityEventRow key={`${event.projectId ?? ''}#${event.seq}`} event={event} />
               ))
             )}
           </ScrollArea>

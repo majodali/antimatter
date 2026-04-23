@@ -17,7 +17,6 @@ import { useTerminalStore } from '@/stores/terminalStore';
 import { useBuildStore } from '@/stores/buildStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { refreshWorkspace } from '@/lib/api';
-import { eventLog } from '@/lib/eventLog';
 import { cn } from '@/lib/utils';
 
 /**
@@ -105,9 +104,7 @@ export function TerminalPanel() {
     setIsRefreshing(true);
     try {
       await refreshWorkspace(connectedProjectId);
-      eventLog.info('workspace', 'Workspace server refresh requested — restarting...', undefined, { toast: true });
     } catch (err) {
-      eventLog.error('workspace', 'Failed to refresh workspace server', String(err), { toast: true });
     } finally {
       // Keep spinning briefly — the server will restart and WebSocket will reconnect
       setTimeout(() => setIsRefreshing(false), 3000);

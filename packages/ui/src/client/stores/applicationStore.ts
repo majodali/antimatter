@@ -19,8 +19,6 @@ import type {
   WorkflowInvocationResult,
 } from '@antimatter/workflow';
 import { emitWorkflowEvent, runWorkflowRule } from '@/lib/api';
-import { eventLog } from '@/lib/eventLog';
-
 export type { ProjectError };
 
 // ---------------------------------------------------------------------------
@@ -203,7 +201,6 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
       const result = await emitWorkflowEvent(event, projectId);
       return result;
     } catch (err) {
-      eventLog.error('workspace', `Failed to emit workflow event: ${event.type}`, String(err), { toast: true });
       throw err;
     }
   },
@@ -226,7 +223,6 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
         newRunning.delete(ruleId);
         return { optimisticRunning: newRunning };
       });
-      eventLog.error('workspace', `Failed to run rule: ${ruleId}`, String(err), { toast: true });
       throw err;
     }
   },

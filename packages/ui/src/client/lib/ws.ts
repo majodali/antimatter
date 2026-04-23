@@ -1,6 +1,4 @@
-import { eventLog } from './eventLog';
-
-export type WsEventType = 'build-update' | 'file-change' | 'agent-message' | 'connected';
+﻿export type WsEventType = 'build-update' | 'file-change' | 'agent-message' | 'connected';
 
 type WsMessageType = WsEventType | 'ping' | 'pong';
 
@@ -49,7 +47,6 @@ function handleMessage(event: MessageEvent) {
 function scheduleReconnect() {
   if (reconnectTimer) return;
   if (reconnectAttempts >= MAX_RETRIES) {
-    eventLog.warn('network', `WebSocket gave up after ${MAX_RETRIES} retries`);
     return;
   }
   reconnectTimer = setTimeout(() => {
@@ -64,7 +61,6 @@ export function connectWebSocket(): WebSocket | null {
   if (!isLocalhost()) {
     // Only warn once
     if (reconnectAttempts === 0) {
-      eventLog.info('network', 'WebSocket disabled in production (not localhost)');
     }
     reconnectAttempts = MAX_RETRIES; // prevent further attempts
     return null;
@@ -80,19 +76,16 @@ export function connectWebSocket(): WebSocket | null {
   socket.addEventListener('open', () => {
     reconnectDelay = 1000;
     reconnectAttempts = 0;
-    eventLog.info('network', 'WebSocket connected');
   });
 
   socket.addEventListener('message', handleMessage);
 
   socket.addEventListener('close', () => {
     socket = null;
-    eventLog.info('network', 'WebSocket disconnected');
     scheduleReconnect();
   });
 
   socket.addEventListener('error', () => {
-    eventLog.error('network', 'WebSocket error');
     socket?.close();
   });
 

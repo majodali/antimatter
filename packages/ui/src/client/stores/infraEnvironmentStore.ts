@@ -1,8 +1,6 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import type { InfraEnvironment } from '@antimatter/project-model';
 import { fetchInfraEnvironments, terminateInfraEnvironment } from '@/lib/api';
-import { eventLog } from '@/lib/eventLog';
-
 interface InfraEnvironmentState {
   environments: InfraEnvironment[];
   isLoading: boolean;
@@ -21,7 +19,6 @@ export const useInfraEnvironmentStore = create<InfraEnvironmentState>((set, get)
       const environments = await fetchInfraEnvironments();
       set({ environments, isLoading: false });
     } catch (err) {
-      eventLog.error('environments', 'Failed to load environments', String(err));
       set({ isLoading: false });
     }
   },
@@ -38,9 +35,7 @@ export const useInfraEnvironmentStore = create<InfraEnvironmentState>((set, get)
 
     try {
       await terminateInfraEnvironment(envId);
-      eventLog.info('environments', `Termination initiated for ${envId}`);
     } catch (err) {
-      eventLog.error('environments', `Failed to terminate ${envId}`, String(err));
       // Reload to get actual state
       get().loadEnvironments();
     }

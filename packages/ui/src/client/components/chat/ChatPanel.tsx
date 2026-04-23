@@ -8,8 +8,6 @@ import { useChatStore } from '@/stores/chatStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { sendChatMessage, clearChatHistory } from '@/lib/api';
 import { workspaceConnection } from '@/lib/workspace-connection';
-import { eventLog } from '@/lib/eventLog';
-
 export function ChatPanel() {
   const {
     messages,
@@ -72,21 +70,18 @@ export function ChatPanel() {
           // Tool results handled server-side
           break;
         case 'agents.chats.handoff':
-          eventLog.info('chat', `Agent handoff: ${msg.fromRole} → ${msg.toRole}`);
           useChatStore.getState().addMessage({
             role: 'system',
             content: `Agent handoff: ${msg.fromRole} → ${msg.toRole}`,
           });
           break;
         case 'agents.chats.error':
-          eventLog.error('chat', 'Agent error', msg.error);
           useChatStore.getState().appendToMessage(msgId, `\n\n**Error:** ${msg.error}`);
           useChatStore.getState().finalizeStreaming();
           useChatStore.getState().setTyping(false);
           streamingMsgIdRef.current = null;
           break;
         case 'agents.chats.done':
-          eventLog.info('chat', 'Response complete');
           if (msg.agentRole) {
             useChatStore.getState().setMessageAgentRole(msgId, msg.agentRole);
           }
@@ -112,9 +107,6 @@ export function ChatPanel() {
   const handleSend = async (message: string) => {
     addMessage({ role: 'user', content: message });
     setTyping(true);
-
-    eventLog.info('chat', `Message sent: "${message.slice(0, 80)}${message.length > 80 ? '...' : ''}"`);
-
     // Create streaming message placeholder — events arrive via WebSocket
     const msgId = addStreamingMessage();
     streamingMsgIdRef.current = msgId;
@@ -124,7 +116,6 @@ export function ChatPanel() {
       // Server accepted — events will arrive via WebSocket agent:chat subscription
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : 'Failed to send message';
-      eventLog.error('chat', 'Chat request failed', errMsg);
       addMessage({ role: 'system', content: `Error: ${errMsg}` });
       finalizeStreaming();
       setTyping(false);

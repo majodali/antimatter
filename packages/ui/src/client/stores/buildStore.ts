@@ -1,8 +1,8 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { BuildResult, BuildRule, Diagnostic } from '@antimatter/project-model';
 import { fetchBuildConfig, saveBuildConfig as saveBuildConfigApi } from '@/lib/api';
-import { eventLog } from '@/lib/eventLog';
+import { toast } from '@/lib/toast';
 import { createProjectStorage, serializeMap, deserializeMap } from '@/lib/storePersist';
 
 interface BuildState {
@@ -101,7 +101,7 @@ export const useBuildStore = create<BuildState>()(
             rules: new Map(config.rules.map((r) => [r.id, r])),
           });
         } catch (err) {
-          eventLog.error('build', 'Failed to load build config', String(err), { toast: true });
+          toast.error('Failed to load build config', String(err));
         }
       },
 
@@ -114,9 +114,9 @@ export const useBuildStore = create<BuildState>()(
             },
             projectId,
           );
-          eventLog.toast.success('Build configuration saved');
+          toast.success('Build configuration saved');
         } catch (err) {
-          eventLog.error('build', 'Failed to save build config', String(err), { toast: true });
+          toast.error('Failed to save build config', String(err));
         }
       },
 

@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { WorkspacePath } from '@antimatter/filesystem';
 import { saveFile as apiSaveFile, fetchFileContent, fileExists } from '@/lib/api';
-import { eventLog } from '@/lib/eventLog';
 import { createProjectStorage, serializeMap, deserializeMap } from '@/lib/storePersist';
 import type { FileChange } from './fileStore';
 
@@ -137,9 +136,6 @@ export const useEditorStore = create<EditorStore>()(
             });
             return { openFiles: newOpenFiles, saveState: { status: 'saved' } };
           });
-
-          eventLog.info('editor', `Saved: ${path}`);
-
           savedClearTimer = setTimeout(() => {
             savedClearTimer = null;
             set({ saveState: { status: 'idle' } });
@@ -152,7 +148,6 @@ export const useEditorStore = create<EditorStore>()(
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
-          eventLog.error('editor', `Save failed: ${path}`, message);
           set({ saveState: { status: 'error', error: message } });
           errorClearTimer = setTimeout(() => {
             errorClearTimer = null;
@@ -177,7 +172,6 @@ export const useEditorStore = create<EditorStore>()(
           if (change.type === 'delete') {
             // File deleted externally → close tab
             get().closeFile(filePath);
-            eventLog.info('editor', `File closed (deleted externally): ${filePath}`);
           } else if (change.type === 'modify' || change.type === 'create') {
             if (!openFile.isDirty) {
               // Not dirty → silently reload from server
@@ -208,7 +202,6 @@ export const useEditorStore = create<EditorStore>()(
                 }
                 return { openFiles: newOpenFiles };
               });
-              eventLog.warn('editor', `External change conflict: ${filePath}`);
             }
           }
         }
@@ -266,7 +259,6 @@ export const useEditorStore = create<EditorStore>()(
             }
             return { openFiles: newOpenFiles, activeFile: newActiveFile };
           });
-          eventLog.info('editor', `Closed ${toClose.length} tab(s) for deleted files: ${toClose.join(', ')}`);
         }
       },
     }),

@@ -4,8 +4,6 @@ import type { WorkspacePath } from '@antimatter/filesystem';
 import { createProjectStorage, serializeSet, deserializeSet } from '@/lib/storePersist';
 import { fetchFileTree, deleteFile as apiDeleteFile } from '@/lib/api';
 import { useProjectStore } from './projectStore';
-import { eventLog } from '@/lib/eventLog';
-
 export interface FileChange {
   type: 'create' | 'modify' | 'delete';
   path: string;
@@ -176,8 +174,6 @@ export const useFileStore = create<FileStore>()(
         try {
           // Delete all files in parallel
           await Promise.all(paths.map((p) => apiDeleteFile(p, projectId)));
-          eventLog.info('file', `Deleted ${paths.length} file(s): ${paths.join(', ')}`);
-
           // Clear selection of deleted files and refresh tree
           set((s) => {
             const newSelected = new Set(s.selectedFiles);
@@ -193,7 +189,6 @@ export const useFileStore = create<FileStore>()(
           set({ files: tree });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          eventLog.error('file', `Failed to delete files: ${msg}`);
         }
       },
 

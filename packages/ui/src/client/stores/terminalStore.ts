@@ -13,7 +13,6 @@
 
 import { create } from 'zustand';
 import { workspaceConnection, type WsConnectionState } from '@/lib/workspace-connection';
-import { eventLog } from '@/lib/eventLog';
 import { useBuildStore } from './buildStore';
 import { useFileStore } from './fileStore';
 import { useEditorStore } from './editorStore';
@@ -303,7 +302,6 @@ function registerMessageSubscriptions(
         const s = get();
         if (s.connectionState === 'reconnecting') {
           set({ showReconnectOverlay: true });
-          eventLog.error('workspace', 'WebSocket reconnect taking >5s', '');
         }
         graceTimer = null;
       }, RECONNECT_GRACE_MS);
@@ -378,7 +376,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => {
         const msg = err instanceof Error ? err.message : String(err);
         writeln(`\x1b[31mFailed to start workspace: ${msg}\x1b[0m`);
         set({ connectionState: 'error', errorMessage: msg, statusMessage: null });
-        eventLog.error('workspace', 'Failed to start workspace', msg, { toast: true });
       }
     },
 

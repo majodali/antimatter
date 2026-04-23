@@ -14,7 +14,6 @@ import type { WorkspacePath } from '@antimatter/filesystem';
 import type { BuildResult, BuildRule } from '@antimatter/project-model';
 import type { InfraEnvironment, InfraEnvironmentOutputs } from '@antimatter/project-model';
 import type { ServiceResponse } from '@antimatter/service-interface';
-import { eventLog } from './eventLog';
 import { getAccessToken } from './auth';
 import { client } from './service-client';
 import {
@@ -71,14 +70,12 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const contentType = res.headers.get('content-type') ?? '';
   if (!contentType.includes('json')) {
     const method = init?.method ?? 'GET';
-    eventLog.error('network', `API ${method} ${url} returned non-JSON (${contentType || 'no content-type'})`);
     throw new Error(`Server returned an unexpected response. You may need to restart your workspace.`);
   }
 
   if (!res.ok) {
     const body: ApiError = await res.json().catch(() => ({ error: res.statusText }));
     const msg = body.message ?? body.error;
-    eventLog.error('network', `API ${init?.method ?? 'GET'} ${url} failed: ${msg}`);
     throw new Error(msg);
   }
   return res.json() as Promise<T>;
@@ -105,7 +102,6 @@ async function authHeaders(extra?: Record<string, string>): Promise<Record<strin
 function unwrapOrThrow<T>(response: ServiceResponse<T>, context: string): T {
   if (!response.ok) {
     const msg = response.error?.message ?? `${context} failed`;
-    eventLog.error('network', `${context}: ${msg}`);
     throw new Error(msg);
   }
   return response.data as T;

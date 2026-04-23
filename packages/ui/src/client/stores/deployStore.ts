@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import type {
   DeploymentModule,
   PackagingStrategy,
@@ -6,7 +6,7 @@ import type {
   DeploymentResult,
 } from '@antimatter/project-model';
 import { fetchDeployConfig, saveDeployConfig as saveDeployConfigApi } from '@/lib/api';
-import { eventLog } from '@/lib/eventLog';
+import { toast } from '@/lib/toast';
 
 interface DeployState {
   // Configuration
@@ -107,7 +107,7 @@ export const useDeployStore = create<DeployState>((set, get) => ({
         targets: new Map((config.targets ?? []).map((t: DeploymentTarget) => [t.id, t])),
       });
     } catch (err) {
-      eventLog.error('deploy', 'Failed to load deploy config', String(err), { toast: true });
+      toast.error('Failed to load deploy config', String(err));
     }
   },
 
@@ -122,9 +122,9 @@ export const useDeployStore = create<DeployState>((set, get) => ({
         },
         projectId,
       );
-      eventLog.toast.success('Deploy configuration saved');
+      toast.success('Deploy configuration saved');
     } catch (err) {
-      eventLog.error('deploy', 'Failed to save deploy config', String(err), { toast: true });
+      toast.error('Failed to save deploy config', String(err));
     }
   },
 

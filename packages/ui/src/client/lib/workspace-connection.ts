@@ -18,7 +18,7 @@ import {
   setActiveWorkspace,
   clearActiveWorkspace,
 } from './api.js';
-import { eventLog } from './eventLog.js';
+import { toast } from './toast.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -324,11 +324,9 @@ class WorkspaceConnection {
       // fall back to Lambda/S3 rather than hitting a dead workspace.
       if (this.projectId) clearActiveWorkspace(this.projectId);
       this.setState('DISCONNECTED');
-      eventLog.error(
-        'workspace',
+      toast.error(
         'Connection lost after multiple retries',
         `Gave up after ${MAX_RECONNECT_ATTEMPTS} reconnection attempts.`,
-        { toast: true },
       );
       this.reconnectAttempt = 0;
       return;

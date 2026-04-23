@@ -1,7 +1,7 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import type { SecretStatus } from '@/lib/api';
 import { fetchSecrets, setSecret as apiSetSecret, deleteSecret as apiDeleteSecret } from '@/lib/api';
-import { eventLog } from '@/lib/eventLog';
+import { toast } from '@/lib/toast';
 
 interface SecretsState {
   secrets: SecretStatus[];
@@ -22,7 +22,7 @@ export const useSecretsStore = create<SecretsState>((set, get) => ({
       const secrets = await fetchSecrets();
       set({ secrets, isLoading: false });
     } catch (err) {
-      eventLog.error('secrets', 'Failed to load secrets', String(err), { toast: true });
+      toast.error('Failed to load secrets', String(err));
       set({ isLoading: false });
     }
   },
@@ -36,9 +36,9 @@ export const useSecretsStore = create<SecretsState>((set, get) => ({
           s.name === name ? { ...s, hasValue: true } : s,
         ),
       }));
-      eventLog.info('secrets', `Secret "${name}" updated`, undefined, { toast: true });
+      toast.info(`Secret "${name}" updated`, undefined);
     } catch (err) {
-      eventLog.error('secrets', `Failed to set secret "${name}"`, String(err), { toast: true });
+      toast.error(`Failed to set secret "${name}"`, String(err));
       // Reload to get actual state
       get().loadSecrets();
     }
@@ -53,9 +53,9 @@ export const useSecretsStore = create<SecretsState>((set, get) => ({
           s.name === name ? { ...s, hasValue: false } : s,
         ),
       }));
-      eventLog.info('secrets', `Secret "${name}" cleared`, undefined, { toast: true });
+      toast.info(`Secret "${name}" cleared`, undefined);
     } catch (err) {
-      eventLog.error('secrets', `Failed to delete secret "${name}"`, String(err), { toast: true });
+      toast.error(`Failed to delete secret "${name}"`, String(err));
       get().loadSecrets();
     }
   },

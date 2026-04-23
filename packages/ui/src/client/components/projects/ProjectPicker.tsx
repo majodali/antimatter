@@ -1,10 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, GitBranch, Loader2, Plus, Trash2, Upload } from 'lucide-react';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { useProjectStore } from '@/stores/projectStore';
-import { eventLog } from '@/lib/eventLog';
-
 export function ProjectPicker() {
   const {
     projects,
@@ -43,7 +41,6 @@ export function ProjectPicker() {
       selectProject(project.id);
       setNewName('');
     } catch (err) {
-      eventLog.error('project', 'Failed to create project', String(err));
     } finally {
       setCreating(false);
     }
@@ -95,7 +92,6 @@ export function ProjectPicker() {
     try {
       await remove(id);
     } catch (err) {
-      eventLog.error('project', 'Failed to delete project', String(err));
     }
   };
 

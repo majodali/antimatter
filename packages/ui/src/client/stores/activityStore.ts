@@ -1,127 +1,152 @@
+/**
+ * Activity store — the client-side mirror of the worker's ActivityLog.
+ *
+ * Phase A of the Activity Panel redesign: the store now holds the same
+ * `ActivityEvent` shape the server emits, with correlation fields
+ * (operationId, correlationId, parentId, environment) intact. The
+ * previous `category`-based client-side taxonomy and the 60+ `emit()`
+ * call sites have been removed — client-originated UI events no longer
+ * appear in the activity log. Toasts are the replacement for short-lived
+ * user feedback (`lib/toast.ts`).
+ *
+ * Data path:
+ *  1. `loadBackfill(projectId)` fetches the last N events via the worker's
+ *     `activity.list` automation command when the panel mounts.
+ *  2. `subscribeToStream()` wires `workspace-connection`'s
+ *     `{type: 'activity-event', event}` broadcast into the store so new
+ *     events stream in live.
+ *
+ * State is NOT persisted to localStorage: events are server-authoritative,
+ * so a fresh backfill on reload is cheaper than a stale cache.
+ */
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { createProjectStorage } from '@/lib/storePersist';
-import { fetchSystemEvents } from '@/lib/api';
-import type { SystemEvent } from '@/lib/api';
+import type { ActivityEvent } from '../../shared/activity-types';
+import { workspaceConnection } from '@/lib/workspace-connection';
 
-export type EventCategory =
-  | 'build'
-  | 'chat'
-  | 'file'
-  | 'editor'
-  | 'project'
-  | 'network'
-  | 'system'
-  | 'workspace'
-  | 'deploy'
-  | 'secrets'
-  | 'agent';
-
-export type EventLevel = 'info' | 'warn' | 'error';
-
-export interface ActivityEvent {
-  id: string;
-  timestamp: string;
-  category: EventCategory;
-  level: EventLevel;
-  message: string;
-  detail?: string;
-  /** Source of the event: 'client' for local UI events, 'lambda'/'workspace' for server events */
-  source?: 'client' | 'lambda' | 'workspace';
-}
-
-const MAX_EVENTS = 500;
-
-let idCounter = 0;
-function nextId(): string {
-  return `ev-${Date.now().toString(36)}-${(idCounter++).toString(36)}`;
-}
+/** Max events held in memory. Bigger than the old 500 — we're streaming now. */
+const MAX_EVENTS = 2000;
 
 interface ActivityState {
+  /** Events in ascending seq order. */
   events: ActivityEvent[];
-  serverEvents: ActivityEvent[];
-  isLoadingServerEvents: boolean;
-  emit: (category: EventCategory, level: EventLevel, message: string, detail?: string) => void;
+  /** Per-projectId seen-seq set for dedupe across backfill + WS race. */
+  seenSeqByProject: Map<string, Set<number>>;
+  /** True while a backfill is in-flight. */
+  isLoadingBackfill: boolean;
+  /** Last error from a backfill attempt. */
+  lastError: string | null;
+
+  /** Append one event. Drops duplicate seq for the same projectId. */
+  append: (event: ActivityEvent) => void;
+  /** Append a batch (e.g. from REST backfill). */
+  appendBatch: (events: readonly ActivityEvent[]) => void;
+  /** Clear everything. */
   clear: () => void;
-  loadServerEvents: (projectId?: string) => Promise<void>;
-  /** Get all events (client + server) merged and sorted by timestamp */
-  getAllEvents: () => ActivityEvent[];
+  /** Fetch recent events from the worker for the given project. */
+  loadBackfill: (projectId: string, limit?: number) => Promise<void>;
 }
 
-/** Convert a server SystemEvent to an ActivityEvent */
-function toActivityEvent(e: SystemEvent): ActivityEvent {
-  return {
-    id: e.id,
-    timestamp: e.timestamp,
-    category: e.category as EventCategory,
-    level: e.level,
-    message: e.message,
-    detail: e.detail ? JSON.stringify(e.detail) : undefined,
-    source: e.source,
-  };
+function eventKey(e: ActivityEvent): string {
+  return `${e.projectId ?? ''}#${e.seq}`;
 }
 
-export const useActivityStore = create<ActivityState>()(
-  persist(
-    (set, get) => ({
-      events: [],
-      serverEvents: [],
-      isLoadingServerEvents: false,
+export const useActivityStore = create<ActivityState>()((set, get) => ({
+  events: [],
+  seenSeqByProject: new Map(),
+  isLoadingBackfill: false,
+  lastError: null,
 
-      emit: (category, level, message, detail) => {
-        const event: ActivityEvent = {
-          id: nextId(),
-          timestamp: new Date().toISOString(),
-          category,
-          level,
-          message,
-          detail,
-          source: 'client',
-        };
-        set((state) => {
-          const events = [...state.events, event];
-          // Ring buffer: drop oldest when exceeding max
-          if (events.length > MAX_EVENTS) {
-            return { events: events.slice(events.length - MAX_EVENTS) };
-          }
-          return { events };
-        });
-      },
+  append: (event) => {
+    set((state) => {
+      const pid = event.projectId ?? '';
+      const seen = state.seenSeqByProject.get(pid) ?? new Set<number>();
+      if (seen.has(event.seq)) return state;
+      seen.add(event.seq);
+      const nextSeen = new Map(state.seenSeqByProject);
+      nextSeen.set(pid, seen);
+      // Preserve seq order; new events almost always have the highest seq,
+      // but WS can sometimes interleave with backfill, so do a small sort.
+      const events = [...state.events, event].sort((a, b) => {
+        if (a.loggedAt === b.loggedAt) return a.seq - b.seq;
+        return a.loggedAt.localeCompare(b.loggedAt);
+      });
+      const trimmed = events.length > MAX_EVENTS ? events.slice(events.length - MAX_EVENTS) : events;
+      return { events: trimmed, seenSeqByProject: nextSeen };
+    });
+  },
 
-      clear: () => set({ events: [], serverEvents: [] }),
-
-      loadServerEvents: async (projectId?: string) => {
-        set({ isLoadingServerEvents: true });
-        try {
-          const events = await fetchSystemEvents(projectId, 1, 200);
-          set({ serverEvents: events.map(toActivityEvent), isLoadingServerEvents: false });
-        } catch {
-          // Server events may not be available yet (no workspace, no events logged)
-          set({ isLoadingServerEvents: false });
+  appendBatch: (batch) => {
+    set((state) => {
+      const nextSeen = new Map(state.seenSeqByProject);
+      const merged: ActivityEvent[] = [...state.events];
+      for (const event of batch) {
+        const pid = event.projectId ?? '';
+        let seen = nextSeen.get(pid);
+        if (!seen) {
+          seen = new Set<number>();
+          nextSeen.set(pid, seen);
         }
-      },
+        if (seen.has(event.seq)) continue;
+        seen.add(event.seq);
+        merged.push(event);
+      }
+      merged.sort((a, b) => {
+        if (a.loggedAt === b.loggedAt) return a.seq - b.seq;
+        return a.loggedAt.localeCompare(b.loggedAt);
+      });
+      const trimmed = merged.length > MAX_EVENTS ? merged.slice(merged.length - MAX_EVENTS) : merged;
+      return { events: trimmed, seenSeqByProject: nextSeen };
+    });
+  },
 
-      getAllEvents: () => {
-        const { events, serverEvents } = get();
-        // Merge client and server events, deduplicate by id, sort by timestamp
-        const merged = new Map<string, ActivityEvent>();
-        for (const e of serverEvents) {
-          merged.set(e.id, e);
-        }
-        for (const e of events) {
-          merged.set(e.id, e);
-        }
-        return Array.from(merged.values()).sort(
-          (a, b) => a.timestamp.localeCompare(b.timestamp),
-        );
-      },
-    }),
-    {
-      name: 'antimatter-activity',
-      storage: createProjectStorage('activity'),
-      partialize: (state) => ({
-        events: state.events,
-      }),
+  clear: () => set({ events: [], seenSeqByProject: new Map(), lastError: null }),
+
+  loadBackfill: async (projectId, limit = 500) => {
+    if (!projectId) return;
+    set({ isLoadingBackfill: true, lastError: null });
+    try {
+      const res = await fetch(
+        `/workspace/${encodeURIComponent(projectId)}/api/automation/execute`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: 'activity.list', params: { limit } }),
+        },
+      );
+      if (!res.ok) {
+        set({ isLoadingBackfill: false, lastError: `backfill failed: ${res.status}` });
+        return;
+      }
+      const json = await res.json();
+      const events = (json?.data?.events ?? []) as ActivityEvent[];
+      get().appendBatch(events);
+      set({ isLoadingBackfill: false });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      set({ isLoadingBackfill: false, lastError: msg });
+    }
+  },
+}));
+
+// ---------------------------------------------------------------------------
+// WebSocket stream wiring
+//
+// Subscribe to `{type: 'activity-event', event}` broadcasts from the worker's
+// ActivityLog.subscribe callback. Idempotent — calling subscribeToStream more
+// than once is a no-op so React strict-mode double-mounts are safe.
+// ---------------------------------------------------------------------------
+
+let wsSubscribed = false;
+
+export function subscribeToActivityStream(): void {
+  if (wsSubscribed) return;
+  wsSubscribed = true;
+  workspaceConnection.onMessage(
+    (msg) => {
+      const event = msg?.event as ActivityEvent | undefined;
+      if (!event || typeof event.seq !== 'number') return;
+      useActivityStore.getState().append(event);
     },
-  ),
-);
+    { type: 'activity-event' },
+  );
+}

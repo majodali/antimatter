@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+﻿import { useEffect, useRef, useState, useCallback } from 'react';
 import { RefreshCw, FolderPlus, FilePlus, MoreVertical, File, Folder, Trash2, X, Eye, EyeOff } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
@@ -9,7 +9,6 @@ import { useProjectStore } from '@/stores/projectStore';
 import { useApplicationStore } from '@/stores/applicationStore';
 import { fetchFileTree, fetchFileContent, saveFile, createFolder, deleteFile as apiDeleteFile } from '@/lib/api';
 import { detectLanguage } from '@/lib/languageDetection';
-import { eventLog } from '@/lib/eventLog';
 import type { WorkspacePath } from '@antimatter/filesystem';
 
 export function FileExplorer() {
@@ -70,11 +69,9 @@ export function FileExplorer() {
     try {
       const tree = await fetchFileTree('/', currentProjectId ?? undefined);
       setFiles(tree);
-      eventLog.info('file', `File tree loaded (${tree.length} items)`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load files';
       setError(msg);
-      eventLog.error('file', 'Failed to load file tree', msg);
     } finally {
       setIsLoading(false);
     }
@@ -97,7 +94,6 @@ export function FileExplorer() {
     try {
       if (creatingType === 'file') {
         await saveFile(name, '', pid);
-        eventLog.info('file', `File created: ${name}`);
         await loadFiles();
 
         // Auto-expand parent folders for nested paths
@@ -122,7 +118,6 @@ export function FileExplorer() {
         openFile(name as WorkspacePath, '', langMap[ext] ?? 'plaintext');
       } else {
         await createFolder(name, pid);
-        eventLog.info('file', `Folder created: ${name}`);
         await loadFiles();
 
         // Auto-expand parent folders
@@ -139,7 +134,6 @@ export function FileExplorer() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Failed to create ${creatingType}: ${msg}`);
-      eventLog.error('file', `Failed to create ${creatingType}: ${name}`, msg);
     } finally {
       isSubmittingRef.current = false;
       cancelCreation();
@@ -150,7 +144,7 @@ export function FileExplorer() {
   const handleOpenFile = useCallback(async (path: WorkspacePath) => {
     const editorState = useEditorStore.getState();
     if (editorState.openFiles.has(path)) {
-      // Already open → just activate
+      // Already open â†’ just activate
       editorState.setActiveFile(path);
       return;
     }
@@ -159,10 +153,8 @@ export function FileExplorer() {
       const content = await fetchFileContent(path, currentProjectId ?? undefined);
       const language = detectLanguage(path);
       editorState.openFile(path, content, language);
-      eventLog.info('editor', `Opened: ${path}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load file';
-      eventLog.error('editor', `Failed to load file: ${path}`, msg);
     }
   }, [currentProjectId]);
 
@@ -181,8 +173,6 @@ export function FileExplorer() {
       await saveFile(newPath, content, pid);
       // Delete old path
       await apiDeleteFile(oldPath, pid);
-      eventLog.info('file', `Renamed: ${oldPath} → ${newPath}`);
-
       // Close old tab and open new one
       const editorState = useEditorStore.getState();
       if (editorState.openFiles.has(oldPath)) {
@@ -194,7 +184,6 @@ export function FileExplorer() {
       await loadFiles();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      eventLog.error('file', `Failed to rename ${oldPath}: ${msg}`);
     }
     cancelRename();
   }, [currentProjectId]);
@@ -224,12 +213,9 @@ export function FileExplorer() {
           editorState.openFile(destPath, content, language);
         }
       }
-
-      eventLog.info('file', `Moved ${paths.length} file(s) to ${targetDir}`);
       await loadFiles();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      eventLog.error('file', `Failed to move files: ${msg}`);
     }
   }, [currentProjectId]);
 
@@ -283,53 +269,50 @@ export function FileExplorer() {
       if (clipState.mode === 'cut') {
         clearClipboard();
       }
-
-      eventLog.info('file', `Pasted ${clipState.paths.size} file(s) (${clipState.mode})`);
       await loadFiles();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      eventLog.error('file', `Failed to paste files: ${msg}`);
     }
   }, [currentProjectId, selectedFile, files]);
 
   // Keyboard handler for the explorer panel
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    // Delete key → request delete of selected files
+    // Delete key â†’ request delete of selected files
     if (e.key === 'Delete' && selectedFiles.size > 0 && !renamingFile) {
       e.preventDefault();
       requestDeleteSelected();
       return;
     }
 
-    // Ctrl+C → copy selected files
+    // Ctrl+C â†’ copy selected files
     if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selectedFiles.size > 0) {
       e.preventDefault();
       setClipboard('copy');
       return;
     }
 
-    // Ctrl+X → cut selected files
+    // Ctrl+X â†’ cut selected files
     if ((e.ctrlKey || e.metaKey) && e.key === 'x' && selectedFiles.size > 0) {
       e.preventDefault();
       setClipboard('cut');
       return;
     }
 
-    // Ctrl+V → paste
+    // Ctrl+V â†’ paste
     if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboard) {
       e.preventDefault();
       handlePaste();
       return;
     }
 
-    // F2 → rename selected file
+    // F2 â†’ rename selected file
     if (e.key === 'F2' && selectedFile && selectedFiles.size === 1) {
       e.preventDefault();
       startRename(selectedFile);
       return;
     }
 
-    // Escape → clear selection or cancel delete
+    // Escape â†’ clear selection or cancel delete
     if (e.key === 'Escape') {
       if (pendingDelete) {
         cancelDelete();
