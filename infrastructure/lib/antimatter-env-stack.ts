@@ -23,15 +23,25 @@ import * as path from 'path';
 export interface AntimatterEnvStackProps extends cdk.StackProps {
   /** Unique environment identifier — used in all resource names (e.g. 'e1', 'feat-auth', 'v2') */
   readonly envId: string;
-  /** Shared VPC from the production stack */
-  readonly vpc: ec2.IVpc;
 }
 
 export class AntimatterEnvStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: AntimatterEnvStackProps) {
     super(scope, id, props);
 
-    const { envId, vpc } = props;
+    const { envId } = props;
+
+    // Look up the shared VPC by ID (configured in cdk.json → context.sharedVpcId).
+    // `fromLookup` resolves at synth time and caches into cdk.context.json — it
+    // does NOT emit a CloudFormation cross-stack Import. That's deliberate: we
+    // want env-stack deploys to be provably unable to touch AntimatterStack.
+    const sharedVpcId = this.node.tryGetContext('sharedVpcId');
+    if (!sharedVpcId) {
+      throw new Error(
+        'AntimatterEnvStack requires `sharedVpcId` context. Set it in cdk.json (or pass --context sharedVpcId=vpc-...).',
+      );
+    }
+    const vpc = ec2.Vpc.fromLookup(this, 'SharedVpc', { vpcId: sharedVpcId });
 
     // ==========================================
     // Frontend - S3 + CloudFront

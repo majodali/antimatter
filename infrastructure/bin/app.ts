@@ -11,10 +11,11 @@ const env = {
   region: process.env.CDK_DEFAULT_REGION || 'us-east-1',
 };
 
-// Production stack is always synthesized so per-env stacks can cross-stack
-// reference its VPC. Synth != deploy: `cdk deploy AntimatterStack` targets
-// prod explicitly, `cdk deploy AntimatterEnv-test` touches only the env.
-const prodStack = new AntimatterStack(app, 'AntimatterStack', {
+// Prod stack is always instantiated. Env-stack deploys do not carry
+// prod changes, because env stacks reference the shared VPC via
+// `ec2.Vpc.fromLookup` (cached in cdk.context.json) rather than a CFN
+// cross-stack Import. The two stacks share no CloudFormation references.
+new AntimatterStack(app, 'AntimatterStack', {
   env,
   description: 'Antimatter IDE - AI-powered development environment',
 });
@@ -37,7 +38,6 @@ for (const envId of envIds) {
     env,
     envId,
     description: `Antimatter IDE - Environment ${envId}`,
-    vpc: prodStack.vpc,
   });
 }
 
