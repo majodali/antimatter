@@ -1,23 +1,26 @@
 /**
- * ActivityPanel — Phase A scaffolding with stick-to-bottom live-tail behaviour.
+ * ActivityPanel — outcome-level live tail.
  *
- * Renders the raw event stream (source + kind + message). The panel auto-
- * scrolls to the newest event only when the user is already at the bottom;
- * if they've scrolled up to inspect a specific row, new events accumulate
- * quietly below and a "Jump to latest" pill appears so they can resume
- * tailing on demand.
+ * Phase B: the panel renders one row per rule invocation / schedule fire
+ * (see `lib/outcomeProjection.ts`), not per raw event. File-change
+ * storms that match no rule silently disappear; rule failures surface
+ * the error message right on the row; logs/execs/utils are available
+ * under an expand.
  *
- * Intended to be replaced in Phase B with an outcome-oriented view that
- * collapses rule:start/rule:end pairs into a single row per invocation,
- * plus the Phase C schedules strip on top.
+ * Stick-to-bottom live tail: auto-scrolls only when the user is already
+ * at the bottom. Scroll up → a floating "N new" pill appears to resume.
+ *
+ * Phase C adds the schedules strip above the list.
+ * Phase D adds double-click-to-source navigation on rows.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ScrollText, Trash2, RefreshCw, ArrowDown } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
-import { ActivityEventRow } from './ActivityEventRow';
+import { OutcomeRow } from './OutcomeRow';
 import { useActivityStore } from '@/stores/activityStore';
 import { useProjectStore } from '@/stores/projectStore';
+import { projectOutcomes } from '@/lib/outcomeProjection';
 
 /** Distance (px) from bottom within which we consider the viewport "pinned". */
 const STICK_THRESHOLD_PX = 32;
@@ -33,14 +36,16 @@ export function ActivityPanel() {
   const [isPinned, setIsPinned] = useState(true);
   const [unseenCount, setUnseenCount] = useState(0);
 
-  // Backfill recent events when the panel mounts or the project changes.
-  // Live events stream in via subscribeToActivityStream() (wired in main.tsx).
+  // Fold raw events → outcomes. Pure and fast; memo keyed on events reference
+  // (store replaces `events` on append, so ref equality is sufficient).
+  const outcomes = useMemo(() => projectOutcomes(events), [events]);
+
+  // Backfill when the panel mounts or the project changes.
   useEffect(() => {
     if (projectId) void loadBackfill(projectId);
   }, [projectId, loadBackfill]);
 
-  // Track whether the user is at/near the bottom. This drives the auto-follow
-  // decision — we only scroll into view when they're already pinned.
+  // Track whether the user is at/near the bottom.
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
@@ -55,10 +60,7 @@ export function ActivityPanel() {
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
-  // When new events arrive, either stick to bottom (if pinned) or surface an
-  // "N new" counter so the user knows there's something fresh to look at.
-  //
-  // useLayoutEffect so the scroll happens before paint — avoids a visible jump.
+  // Auto-follow when pinned; otherwise bump the unseen counter.
   useLayoutEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
@@ -67,10 +69,8 @@ export function ActivityPanel() {
     } else {
       setUnseenCount((n) => Math.min(n + 1, 999));
     }
-    // Only depend on events.length: we want to react to appends, not scroll-
-    // driven re-renders (which would double-increment unseenCount).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events.length]);
+  }, [outcomes.length]);
 
   const jumpToLatest = () => {
     const el = viewportRef.current;
@@ -80,13 +80,29 @@ export function ActivityPanel() {
     setUnseenCount(0);
   };
 
+  // Summary counts for the header (errors get called out).
+  const errorCount = useMemo(
+    () => outcomes.reduce((n, o) => (o.status === 'error' ? n + 1 : n), 0),
+    [outcomes],
+  );
+  const runningCount = useMemo(
+    () => outcomes.reduce((n, o) => (o.status === 'running' ? n + 1 : n), 0),
+    [outcomes],
+  );
+
   return (
     <div className="h-full flex flex-col bg-card relative">
       <div className="px-3 py-2 border-b border-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ScrollText className="h-4 w-4 text-primary" />
           <h3 className="text-sm font-medium">Activity</h3>
-          <span className="text-xs text-muted-foreground">{events.length}</span>
+          <span className="text-xs text-muted-foreground">{outcomes.length}</span>
+          {errorCount > 0 && (
+            <span className="text-xs text-red-500 font-medium">{errorCount} failed</span>
+          )}
+          {runningCount > 0 && (
+            <span className="text-xs text-muted-foreground">{runningCount} running</span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -112,22 +128,25 @@ export function ActivityPanel() {
       </div>
 
       <ScrollArea className="flex-1" viewportRef={viewportRef}>
-        {events.length === 0 ? (
+        {outcomes.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-4">
             <ScrollText className="h-12 w-12 text-muted-foreground mb-3 opacity-50" />
-            <p className="text-sm text-muted-foreground">No activity yet</p>
+            <p className="text-sm text-muted-foreground">
+              {events.length > 0 ? 'No rule outcomes yet' : 'No activity yet'}
+            </p>
+            {events.length > 0 && (
+              <p className="text-[10px] text-muted-foreground mt-1">
+                {events.length} raw events — see <span className="font-mono">/logs</span> for the full stream
+              </p>
+            )}
           </div>
         ) : (
           <div>
-            {events.map((event) => (
-              <ActivityEventRow key={`${event.projectId ?? ''}#${event.seq}`} event={event} />
-            ))}
+            {outcomes.map((o) => <OutcomeRow key={o.key} outcome={o} />)}
           </div>
         )}
       </ScrollArea>
 
-      {/* Floating "jump to latest" pill — only visible when the user has
-          scrolled up from the bottom and new events have arrived. */}
       {!isPinned && unseenCount > 0 && (
         <button
           type="button"
