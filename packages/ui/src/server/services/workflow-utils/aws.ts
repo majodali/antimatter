@@ -54,8 +54,24 @@ import {
   StartInstancesCommand,
   StopInstancesCommand,
 } from '@aws-sdk/client-ec2';
+import { defaultProvider } from '@aws-sdk/credential-provider-node';
+import type { AwsCredentialIdentityProvider } from '@smithy/types';
 import type { ActivityLog } from '../activity-log.js';
 import { Kinds } from '../../../shared/activity-types.js';
+
+// Shared, memoized credential provider. Every SDK client in this module uses
+// this instead of constructing its own chain. Without sharing, each per-call
+// `new XClient({...})` creates a fresh `defaultProvider()` chain and walks
+// IMDS from scratch — which is enough to intermittently fail on the worker's
+// first scheduler tick (seen as "Could not load credentials from any
+// providers"). With a shared memoized provider, the first successful IMDS
+// resolution is cached for the life of the worker process and reused.
+const sharedCredentials: AwsCredentialIdentityProvider = defaultProvider();
+
+/** Common client options — region + shared credential provider. */
+function clientDefaults(region: string) {
+  return { region, credentials: sharedCredentials };
+}
 
 // ---------------------------------------------------------------------------
 // Context + tracing
@@ -137,28 +153,29 @@ async function traced<T>(
 // ---------------------------------------------------------------------------
 
 function clientFactory(ctx: AwsUtilsContext) {
+  const defaults = clientDefaults(ctx.region);
   return {
     /** Return a raw LambdaClient (untraced). */
     lambda: (opts?: ConstructorParameters<typeof LambdaClient>[0]) =>
-      new LambdaClient({ region: ctx.region, ...(opts ?? {}) }),
+      new LambdaClient({ ...defaults, ...(opts ?? {}) }),
     /** Return a raw CloudFrontClient (untraced). */
     cloudfront: (opts?: ConstructorParameters<typeof CloudFrontClient>[0]) =>
-      new CloudFrontClient({ region: ctx.region, ...(opts ?? {}) }),
+      new CloudFrontClient({ ...defaults, ...(opts ?? {}) }),
     /** Return a raw CloudWatchLogsClient (untraced). */
     cloudwatchLogs: (opts?: ConstructorParameters<typeof CloudWatchLogsClient>[0]) =>
-      new CloudWatchLogsClient({ region: ctx.region, ...(opts ?? {}) }),
+      new CloudWatchLogsClient({ ...defaults, ...(opts ?? {}) }),
     /** Return a raw CloudFormationClient (untraced). */
     cfn: (opts?: ConstructorParameters<typeof CloudFormationClient>[0]) =>
-      new CloudFormationClient({ region: ctx.region, ...(opts ?? {}) }),
+      new CloudFormationClient({ ...defaults, ...(opts ?? {}) }),
     /** Return a raw S3Client (untraced). */
     s3: (opts?: ConstructorParameters<typeof S3Client>[0]) =>
-      new S3Client({ region: ctx.region, ...(opts ?? {}) }),
+      new S3Client({ ...defaults, ...(opts ?? {}) }),
     /** Return a raw SSMClient (untraced). */
     ssm: (opts?: ConstructorParameters<typeof SSMClient>[0]) =>
-      new SSMClient({ region: ctx.region, ...(opts ?? {}) }),
+      new SSMClient({ ...defaults, ...(opts ?? {}) }),
     /** Return a raw EC2Client (untraced). */
     ec2: (opts?: ConstructorParameters<typeof EC2Client>[0]) =>
-      new EC2Client({ region: ctx.region, ...(opts ?? {}) }),
+      new EC2Client({ ...defaults, ...(opts ?? {}) }),
   };
 }
 
@@ -177,7 +194,7 @@ function lambdaUtils(ctx: AwsUtilsContext) {
       environment?: string;
     }): Promise<unknown> => {
       return traced(ctx, `aws.lambda.invoke(${params.functionName})`, params, params.environment, async () => {
-        const client = new LambdaClient({ region: ctx.region });
+        const client = new LambdaClient(clientDefaults(ctx.region));
         const result = await client.send(new InvokeCommand({
           FunctionName: params.functionName,
           InvocationType: params.invocationType ?? 'RequestResponse',
@@ -198,7 +215,7 @@ function lambdaUtils(ctx: AwsUtilsContext) {
       environment?: string;
     }): Promise<{ lastUpdateStatus?: string; codeSha256?: string }> => {
       return traced(ctx, `aws.lambda.updateCode(${params.functionName})`, { functionName: params.functionName, bytes: params.zipFile.length }, params.environment, async () => {
-        const client = new LambdaClient({ region: ctx.region });
+        const client = new LambdaClient(clientDefaults(ctx.region));
         const result = await client.send(new UpdateFunctionCodeCommand({
           FunctionName: params.functionName,
           ZipFile: params.zipFile,
@@ -210,7 +227,7 @@ function lambdaUtils(ctx: AwsUtilsContext) {
     /** Get a Lambda function's current configuration. */
     getConfig: async (params: { functionName: string; environment?: string }): Promise<Record<string, unknown>> => {
       return traced(ctx, `aws.lambda.getConfig(${params.functionName})`, params, params.environment, async () => {
-        const client = new LambdaClient({ region: ctx.region });
+        const client = new LambdaClient(clientDefaults(ctx.region));
         const result = await client.send(new GetFunctionConfigurationCommand({
           FunctionName: params.functionName,
         }));
@@ -221,7 +238,7 @@ function lambdaUtils(ctx: AwsUtilsContext) {
     /** List Lambda functions, optionally filtering by name prefix. */
     list: async (params?: { namePrefix?: string; environment?: string }): Promise<Array<{ functionName: string; functionArn: string; runtime?: string; lastModified?: string }>> => {
       return traced(ctx, `aws.lambda.list(${params?.namePrefix ?? ''})`, params ?? {}, params?.environment, async () => {
-        const client = new LambdaClient({ region: ctx.region });
+        const client = new LambdaClient(clientDefaults(ctx.region));
         const out: Array<{ functionName: string; functionArn: string; runtime?: string; lastModified?: string }> = [];
         let marker: string | undefined;
         do {
@@ -258,7 +275,7 @@ function cloudfrontUtils(ctx: AwsUtilsContext) {
     }): Promise<{ id?: string; status?: string }> => {
       const paths = params.paths ?? ['/*'];
       return traced(ctx, `aws.cloudfront.invalidate(${params.distributionId})`, { paths }, params.environment, async () => {
-        const client = new CloudFrontClient({ region: ctx.region });
+        const client = new CloudFrontClient(clientDefaults(ctx.region));
         const result = await client.send(new CreateInvalidationCommand({
           DistributionId: params.distributionId,
           InvalidationBatch: {
@@ -277,7 +294,7 @@ function cloudfrontUtils(ctx: AwsUtilsContext) {
       environment?: string;
     }): Promise<{ status?: string }> => {
       return traced(ctx, `aws.cloudfront.getInvalidation(${params.invalidationId})`, params, params.environment, async () => {
-        const client = new CloudFrontClient({ region: ctx.region });
+        const client = new CloudFrontClient(clientDefaults(ctx.region));
         const result = await client.send(new GetInvalidationCommand({
           DistributionId: params.distributionId,
           Id: params.invalidationId,
@@ -311,7 +328,7 @@ function cloudwatchUtils(ctx: AwsUtilsContext) {
       const since = params.since ?? '-10m';
       const startTimeMs = parseTimeOffset(since);
       return traced(ctx, `aws.cloudwatch.tailLogs(${params.logGroup})`, { since, limit, filter: params.filterPattern }, params.environment, async () => {
-        const client = new CloudWatchLogsClient({ region: ctx.region });
+        const client = new CloudWatchLogsClient(clientDefaults(ctx.region));
         const result = await client.send(new FilterLogEventsCommand({
           logGroupName: params.logGroup,
           logStreamNamePrefix: params.logStreamPrefix,
@@ -335,7 +352,7 @@ function cloudwatchUtils(ctx: AwsUtilsContext) {
       environment?: string;
     }): Promise<Array<{ name: string; lastEventTime?: string }>> => {
       return traced(ctx, `aws.cloudwatch.listStreams(${params.logGroup})`, params, params.environment, async () => {
-        const client = new CloudWatchLogsClient({ region: ctx.region });
+        const client = new CloudWatchLogsClient(clientDefaults(ctx.region));
         const result = await client.send(new DescribeLogStreamsCommand({
           logGroupName: params.logGroup,
           logStreamNamePrefix: params.prefix,
@@ -379,7 +396,7 @@ function cfnUtils(ctx: AwsUtilsContext) {
     /** Read a stack's outputs as { OutputKey: OutputValue }. */
     getOutputs: async (params: { stackName: string; environment?: string }): Promise<Record<string, string>> => {
       return traced(ctx, `aws.cfn.getOutputs(${params.stackName})`, params, params.environment, async () => {
-        const client = new CloudFormationClient({ region: ctx.region });
+        const client = new CloudFormationClient(clientDefaults(ctx.region));
         const result = await client.send(new DescribeStacksCommand({
           StackName: params.stackName,
         }));
@@ -395,7 +412,7 @@ function cfnUtils(ctx: AwsUtilsContext) {
     /** Get recent stack events. */
     getEvents: async (params: { stackName: string; limit?: number; environment?: string }): Promise<Array<{ timestamp: string; resourceStatus?: string; logicalResourceId?: string; resourceType?: string; reason?: string }>> => {
       return traced(ctx, `aws.cfn.getEvents(${params.stackName})`, params, params.environment, async () => {
-        const client = new CloudFormationClient({ region: ctx.region });
+        const client = new CloudFormationClient(clientDefaults(ctx.region));
         const result = await client.send(new DescribeStackEventsCommand({
           StackName: params.stackName,
         }));
@@ -412,7 +429,7 @@ function cfnUtils(ctx: AwsUtilsContext) {
     /** Get a stack's current status. */
     getStatus: async (params: { stackName: string; environment?: string }): Promise<{ stackStatus?: string; lastUpdatedTime?: string }> => {
       return traced(ctx, `aws.cfn.getStatus(${params.stackName})`, params, params.environment, async () => {
-        const client = new CloudFormationClient({ region: ctx.region });
+        const client = new CloudFormationClient(clientDefaults(ctx.region));
         const result = await client.send(new DescribeStacksCommand({
           StackName: params.stackName,
         }));
@@ -442,7 +459,7 @@ function s3Utils(ctx: AwsUtilsContext) {
       environment?: string;
     }): Promise<void> => {
       await traced(ctx, `aws.s3.putObject(${params.bucket}/${params.key})`, { bucket: params.bucket, key: params.key, bytes: params.body.length }, params.environment, async () => {
-        const client = new S3Client({ region: ctx.region });
+        const client = new S3Client(clientDefaults(ctx.region));
         await client.send(new PutObjectCommand({
           Bucket: params.bucket,
           Key: params.key,
@@ -456,7 +473,7 @@ function s3Utils(ctx: AwsUtilsContext) {
     /** Read an object as a string. */
     getObject: async (params: { bucket: string; key: string; environment?: string }): Promise<string> => {
       return traced(ctx, `aws.s3.getObject(${params.bucket}/${params.key})`, params, params.environment, async () => {
-        const client = new S3Client({ region: ctx.region });
+        const client = new S3Client(clientDefaults(ctx.region));
         const result = await client.send(new GetObjectCommand({
           Bucket: params.bucket,
           Key: params.key,
@@ -478,7 +495,7 @@ function s3Utils(ctx: AwsUtilsContext) {
       environment?: string;
     }): Promise<Array<{ key: string; size?: number; lastModified?: string }>> => {
       return traced(ctx, `aws.s3.listObjects(${params.bucket}/${params.prefix ?? ''})`, params, params.environment, async () => {
-        const client = new S3Client({ region: ctx.region });
+        const client = new S3Client(clientDefaults(ctx.region));
         const result = await client.send(new ListObjectsV2Command({
           Bucket: params.bucket,
           Prefix: params.prefix,
@@ -495,7 +512,7 @@ function s3Utils(ctx: AwsUtilsContext) {
     /** Delete an object. */
     deleteObject: async (params: { bucket: string; key: string; environment?: string }): Promise<void> => {
       await traced(ctx, `aws.s3.deleteObject(${params.bucket}/${params.key})`, params, params.environment, async () => {
-        const client = new S3Client({ region: ctx.region });
+        const client = new S3Client(clientDefaults(ctx.region));
         await client.send(new DeleteObjectCommand({
           Bucket: params.bucket,
           Key: params.key,
@@ -517,7 +534,7 @@ function ssmUtils(ctx: AwsUtilsContext) {
       const env = params.environment ?? ctx.getTraceContext().environment ?? 'default';
       const path = `/antimatter/env/${ctx.projectId}/${env || 'default'}/${params.name}`;
       return traced(ctx, `aws.ssm.getSecret(${path})`, { name: params.name, environment: env }, params.environment, async () => {
-        const client = new SSMClient({ region: ctx.region });
+        const client = new SSMClient(clientDefaults(ctx.region));
         try {
           const result = await client.send(new GetParameterCommand({
             Name: path,
@@ -536,7 +553,7 @@ function ssmUtils(ctx: AwsUtilsContext) {
       const env = params.environment ?? ctx.getTraceContext().environment ?? 'default';
       const path = `/antimatter/env/${ctx.projectId}/${env || 'default'}/${params.name}`;
       await traced(ctx, `aws.ssm.setSecret(${path})`, { name: params.name, environment: env }, params.environment, async () => {
-        const client = new SSMClient({ region: ctx.region });
+        const client = new SSMClient(clientDefaults(ctx.region));
         await client.send(new PutParameterCommand({
           Name: path,
           Value: params.value,
@@ -552,7 +569,7 @@ function ssmUtils(ctx: AwsUtilsContext) {
       const env = params.environment ?? ctx.getTraceContext().environment ?? 'default';
       const path = `/antimatter/env/${ctx.projectId}/${env || 'default'}/${params.name}`;
       await traced(ctx, `aws.ssm.deleteSecret(${path})`, { name: params.name, environment: env }, params.environment, async () => {
-        const client = new SSMClient({ region: ctx.region });
+        const client = new SSMClient(clientDefaults(ctx.region));
         try {
           await client.send(new DeleteParameterCommand({ Name: path }));
         } catch (err: any) {
@@ -572,7 +589,7 @@ function ec2Utils(ctx: AwsUtilsContext) {
     /** Describe instances by IDs. */
     describe: async (params: { instanceIds: string[]; environment?: string }): Promise<Array<{ instanceId: string; state?: string; privateIp?: string; publicIp?: string; tags?: Record<string, string> }>> => {
       return traced(ctx, `aws.ec2.describe(${params.instanceIds.length} instances)`, params, params.environment, async () => {
-        const client = new EC2Client({ region: ctx.region });
+        const client = new EC2Client(clientDefaults(ctx.region));
         const result = await client.send(new DescribeInstancesCommand({
           InstanceIds: params.instanceIds,
         }));
@@ -599,7 +616,7 @@ function ec2Utils(ctx: AwsUtilsContext) {
     /** Reboot instances (in-place reboot). */
     reboot: async (params: { instanceIds: string[]; environment?: string }): Promise<void> => {
       await traced(ctx, `aws.ec2.reboot(${params.instanceIds.join(',')})`, params, params.environment, async () => {
-        const client = new EC2Client({ region: ctx.region });
+        const client = new EC2Client(clientDefaults(ctx.region));
         await client.send(new RebootInstancesCommand({ InstanceIds: params.instanceIds }));
       });
     },
@@ -607,7 +624,7 @@ function ec2Utils(ctx: AwsUtilsContext) {
     /** Start stopped instances. */
     start: async (params: { instanceIds: string[]; environment?: string }): Promise<void> => {
       await traced(ctx, `aws.ec2.start(${params.instanceIds.join(',')})`, params, params.environment, async () => {
-        const client = new EC2Client({ region: ctx.region });
+        const client = new EC2Client(clientDefaults(ctx.region));
         await client.send(new StartInstancesCommand({ InstanceIds: params.instanceIds }));
       });
     },
@@ -615,7 +632,7 @@ function ec2Utils(ctx: AwsUtilsContext) {
     /** Stop running instances. */
     stop: async (params: { instanceIds: string[]; environment?: string }): Promise<void> => {
       await traced(ctx, `aws.ec2.stop(${params.instanceIds.join(',')})`, params, params.environment, async () => {
-        const client = new EC2Client({ region: ctx.region });
+        const client = new EC2Client(clientDefaults(ctx.region));
         await client.send(new StopInstancesCommand({ InstanceIds: params.instanceIds }));
       });
     },
