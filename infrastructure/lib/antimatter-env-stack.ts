@@ -8,6 +8,8 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as events from 'aws-cdk-lib/aws-events';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -98,6 +100,77 @@ export class AntimatterEnvStack extends cdk.Stack {
     });
 
     // ==========================================
+    // Authentication — per-env Cognito User Pool
+    // ==========================================
+    // A separate pool per env keeps test-env auth isolated from prod.
+    // Sign-in is email + admin-created users, same as prod.
+
+    const userPool = new cognito.UserPool(this, 'UserPool', {
+      userPoolName: `antimatter-users-${envId}`,
+      selfSignUpEnabled: false,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: false,
+      },
+      // DESTROY so `cdk destroy` can clean up test envs fully. Prod pool
+      // stays RETAIN — but this stack only creates per-env pools.
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Domain prefix must be globally unique — include account suffix to
+    // reduce collision risk across AWS accounts reusing the codebase.
+    const userPoolDomain = userPool.addDomain('CognitoDomain', {
+      cognitoDomain: { domainPrefix: `antimatter-${envId}-${this.account.slice(-6)}` },
+    });
+
+    // Callback URLs: a placeholder-only set at stack-creation time.
+    // We can't reference `distribution.distributionDomainName` here — it
+    // closes a circular dependency: distribution → BucketDeployment →
+    // API Gateway → ApiFunction → UserPoolClient → distribution.
+    // The authenticated flows we use in practice are userSrp-based (tokens
+    // issued via InitiateAuth, not the Hosted UI), which doesn't consult
+    // the callback list. After the stack deploys, a one-line AWS CLI
+    // update-user-pool-client call can add the real CloudFront URL to
+    // callbackUrls/logoutUrls if Hosted UI access is ever needed for this
+    // env. The CFN output `CognitoClientUpdateHint` spells out the command.
+    const userPoolClient = userPool.addClient('WebClient', {
+      userPoolClientName: `antimatter-web-${envId}`,
+      generateSecret: false,
+      authFlows: { userSrp: true },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.PROFILE,
+        ],
+        callbackUrls: ['http://localhost:5173/'],
+        logoutUrls: ['http://localhost:5173/'],
+      },
+      accessTokenValidity: cdk.Duration.hours(24),
+      idTokenValidity: cdk.Duration.hours(24),
+      refreshTokenValidity: cdk.Duration.days(30),
+      preventUserExistenceErrors: true,
+    });
+
+    // ==========================================
+    // Events — per-env EventBridge bus
+    // ==========================================
+    // The Lambda defaults to bus name 'antimatter' which doesn't exist in
+    // a fresh env — without this, PutEvents calls silently fail. Creating
+    // a scoped bus keeps event-based features working and avoids cross-
+    // env pollution if we ever route S3 file-change events here.
+
+    const eventBus = new events.EventBus(this, 'EventBus', {
+      eventBusName: `antimatter-${envId}`,
+    });
+
+    // ==========================================
     // Backend - API Lambda (no VPC)
     // ==========================================
 
@@ -110,10 +183,15 @@ export class AntimatterEnvStack extends cdk.Stack {
       environment: {
         NODE_ENV: 'production',
         PROJECTS_BUCKET: dataBucket.bucketName,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+        COGNITO_DOMAIN: `${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com`,
+        EVENT_BUS_NAME: eventBus.eventBusName,
       },
     });
 
     dataBucket.grantReadWrite(apiFunction);
+    eventBus.grantPutEventsTo(apiFunction);
 
     // ==========================================
     // Workspace Instances - EC2 + ALB
@@ -372,6 +450,41 @@ export class AntimatterEnvStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'WorkspaceAlbDns', {
       value: workspaceAlb.loadBalancerDnsName,
       description: `ALB DNS for workspace WebSocket connections (${envId})`,
+    });
+
+    new cdk.CfnOutput(this, 'CognitoUserPoolId', {
+      value: userPool.userPoolId,
+      description: `Cognito User Pool ID (${envId})`,
+    });
+
+    new cdk.CfnOutput(this, 'CognitoClientId', {
+      value: userPoolClient.userPoolClientId,
+      description: `Cognito User Pool Client ID (${envId})`,
+    });
+
+    new cdk.CfnOutput(this, 'CognitoDomain', {
+      value: `${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com`,
+      description: `Cognito Hosted UI domain (${envId})`,
+    });
+
+    new cdk.CfnOutput(this, 'EventBusName', {
+      value: eventBus.eventBusName,
+      description: `EventBridge bus name (${envId})`,
+    });
+
+    // Post-deploy hint: if you want Hosted UI (Cognito OAuth code grant)
+    // to work on the CloudFront domain, add it to the callback + logout
+    // lists with this command. Not needed for SRP-based auth.
+    new cdk.CfnOutput(this, 'CognitoClientUpdateHint', {
+      value: [
+        'aws cognito-idp update-user-pool-client',
+        `--user-pool-id ${userPool.userPoolId}`,
+        `--client-id ${userPoolClient.userPoolClientId}`,
+        `--callback-urls http://localhost:5173/ https://${distribution.distributionDomainName}/`,
+        `--logout-urls   http://localhost:5173/ https://${distribution.distributionDomainName}/`,
+        `--region ${this.region}`,
+      ].join(' '),
+      description: `(Optional) add the CloudFront domain to Cognito callbacks for Hosted UI access`,
     });
   }
 }

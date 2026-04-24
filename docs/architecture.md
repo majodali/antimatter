@@ -100,7 +100,23 @@ Region: `us-west-2`. Single AWS account.
 
 ### Environment Stack (AntimatterEnvStack)
 
-Each environment (dev/staging/prod/feature) gets its own S3 buckets, CloudFront distribution, Lambda function, and EC2+ALB. Shares VPC from production stack.
+Each environment (dev/staging/prod/feature) gets its own S3 buckets, CloudFront distribution, API Gateway + Lambda, EC2 launch template, ALB, **Cognito User Pool**, and **EventBridge bus**. Shares VPC from production stack to avoid NAT Gateway duplication.
+
+**Deployment model**: per-env stacks are opt-in via CDK context. `cdk deploy` alone touches only `AntimatterStack`. `cdk deploy AntimatterEnv-test --context envId=test` synthesizes *both* stacks (because the env stack cross-references the prod VPC) but deploys only the named one.
+
+**Env-scoped resource names**: `antimatter-ide-{envId}-{account}`, `antimatter-data-{envId}-{account}`, `antimatter-users-{envId}`, `antimatter-{envId}` (event bus), `antimatter-{envId}-{accountSuffix}` (Cognito domain prefix — must be globally unique). Distribution domains, API Gateway URLs, and ALB DNS names are AWS-generated and output as stack outputs.
+
+**Per-env Cognito**: each env gets its own user pool. Callback URLs are initialized with `http://localhost:5173/` only to avoid a circular dependency against the distribution domain (distribution → BucketDeployment → API Gateway → Lambda → Cognito client → distribution). The stack emits a `CognitoClientUpdateHint` output with the exact `aws cognito-idp update-user-pool-client` command to add the CloudFront domain post-deploy if Hosted UI access is needed. SRP-based auth (the path we use in practice) doesn't consult callback URLs.
+
+### Promotion strategy (evolving)
+
+The current (and only validated) workflow is **deploy-new-stack-then-switch**:
+
+> **Near-term (lowest risk today):** deploy a parallel env stack, sync it to match current production, cutover user DNS (Route 53) to the new stack. Blue-green style. The running IDE is untouched until the DNS flip; rollback is a DNS revert.
+>
+> **Long-term (lower complexity, faster turnaround, requires more architectural comfort):** partial deployments — update only the components that changed (e.g. Lambda code only, or frontend bundle only). Requires per-component rollback, reliable health gates, and confidence that bundle-level and CDK-level changes can be applied independently. Worth moving toward once the promotion process has been exercised end-to-end a few times.
+
+Both approaches assume the deploy orchestrator runs **outside** the target environment. The running IDE can orchestrate deploys to fresh stacks via `wf.utils.http.post` against the Lambda admin endpoints (`/api/admin/*`, see §11), never by modifying itself.
 
 ---
 
