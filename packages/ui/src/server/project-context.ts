@@ -112,7 +112,17 @@ export interface SharedConfig {
 // Default ignore patterns
 // ---------------------------------------------------------------------------
 
-const DEFAULT_WATCHER_IGNORE = ['.git/', '.vite-temp/', '.antimatter-cache/'];
+/**
+ * Watcher ignore patterns that MUST always be present — writing to any of
+ * these paths is the worker's own business and watching them creates
+ * pathological feedback loops (e.g. `.antimatter-cache/events.jsonl`, the
+ * worker's own EventLog append target).
+ *
+ * Project config (`.antimatter/config.json`) can add more patterns but
+ * cannot remove these. See `loadIgnoreConfig`.
+ */
+const STRUCTURAL_WATCHER_IGNORE = ['.git/', '.vite-temp/', '.antimatter-cache/'];
+const DEFAULT_WATCHER_IGNORE = [...STRUCTURAL_WATCHER_IGNORE];
 const DEFAULT_EXPLORER_IGNORE = [
   'node_modules/', '.antimatter-cache/', 'dist/', '.next/', '__pycache__/', '.git/',
 ];
@@ -885,8 +895,12 @@ export class ProjectContext {
       const raw = await readFile(configPath, 'utf-8');
       const config = JSON.parse(raw);
       if (Array.isArray(config.watcherIgnore)) {
-        this.fileChangeNotifier.setWatcherIgnore(config.watcherIgnore);
-        console.log(`[config:${this.projectId}] watcherIgnore loaded: ${config.watcherIgnore.join(', ')}`);
+        // Structural entries (.antimatter-cache/, .git/, .vite-temp/) are
+        // always enforced — they protect against feedback loops and can't
+        // be disabled via config, only extended.
+        const merged = Array.from(new Set([...STRUCTURAL_WATCHER_IGNORE, ...config.watcherIgnore]));
+        this.fileChangeNotifier.setWatcherIgnore(merged);
+        console.log(`[config:${this.projectId}] watcherIgnore loaded: ${merged.join(', ')}`);
       }
       if (Array.isArray(config.explorerIgnore)) {
         this.fileChangeNotifier.setExplorerIgnore(config.explorerIgnore);

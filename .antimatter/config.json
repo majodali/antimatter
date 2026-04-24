@@ -1,5 +1,5 @@
 {
-  "watcherIgnore": [".git/"],
+  "watcherIgnore": [".git/", ".antimatter-cache/", ".vite-temp/"],
   "explorerIgnore": [
     "node_modules/",
     ".antimatter-cache/",
