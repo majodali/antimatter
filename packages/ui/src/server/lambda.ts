@@ -41,9 +41,31 @@ app.use((req, _res, next) => {
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 
-// CORS
+/**
+ * Derive the frontend origin from the inbound request. The SPA always
+ * sends an `Origin` header for cross-origin XHRs (which `/api/*` is, since
+ * the browser sees the API gateway as a same-origin path proxied through
+ * CloudFront). We echo it back for CORS and reuse it as the OAuth
+ * redirectUri — making the Lambda env-portable without baking the
+ * frontend domain into env vars (which would close a CDK cycle:
+ * Distribution → API Gateway → Lambda → Distribution).
+ *
+ * Falls back to the prod URL when no Origin is present (e.g. health
+ * checks). That fallback is harmless: nothing without an Origin needs
+ * the value.
+ */
+const FALLBACK_FRONTEND_URL = 'https://ide.antimatter.solutions';
+function frontendOrigin(req: express.Request): string {
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && origin.length > 0) return origin;
+  return FALLBACK_FRONTEND_URL;
+}
+
+// CORS — origin-aware so each env's CloudFront domain (and localhost dev)
+// gets a matching Access-Control-Allow-Origin without per-env config.
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'https://ide.antimatter.solutions');
+  res.header('Access-Control-Allow-Origin', frontendOrigin(req));
+  res.header('Vary', 'Origin'); // browsers/caches must not reuse the header across origins
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') {
@@ -122,14 +144,18 @@ apiRouter.get('/config', (_req, res) => {
   });
 });
 
-// Auth config — serves Cognito configuration to the frontend (before login)
-apiRouter.get('/auth/config', (_req, res) => {
+// Auth config — serves Cognito configuration to the frontend (before login).
+// `redirectUri` is derived from the request Origin so each env (prod,
+// AntimatterEnv-test, AntimatterEnv-loop2, …) sees its own URL without
+// per-env env vars.
+apiRouter.get('/auth/config', (req, res) => {
+  const origin = frontendOrigin(req);
   res.json({
     userPoolId: process.env.COGNITO_USER_POOL_ID ?? '',
     clientId: process.env.COGNITO_CLIENT_ID ?? '',
     region: process.env.AWS_REGION ?? 'us-west-2',
     domain: process.env.COGNITO_DOMAIN ?? '',
-    redirectUri: 'https://ide.antimatter.solutions/',
+    redirectUri: origin.endsWith('/') ? origin : `${origin}/`,
   });
 });
 
