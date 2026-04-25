@@ -754,9 +754,16 @@ export class ProjectContext {
     }
 
     if (existsSync(this.projectPath)) {
-      const entries = readdirSync(this.projectPath);
-      if (entries.length > 0) {
-        console.log(`[sync:${this.projectId}] Project directory has ${entries.length} entries — skipping S3 sync`);
+      // Treat platform-internal directories as not counting toward "non-empty".
+      // ActivityLog.initialize() runs before this and creates .antimatter-cache/,
+      // so a freshly-initialized project would otherwise look "non-empty" and
+      // we'd skip the S3 sync — leaving git-imported source unreachable until
+      // a manual restart of the worker. (The same applies to a stray `.git`
+      // dir from a previous incomplete init.)
+      const PLATFORM_DIRS = new Set(['.antimatter-cache', '.git']);
+      const userEntries = readdirSync(this.projectPath).filter((e) => !PLATFORM_DIRS.has(e));
+      if (userEntries.length > 0) {
+        console.log(`[sync:${this.projectId}] Project directory has ${userEntries.length} user entries — skipping S3 sync`);
         return [];
       }
     }
