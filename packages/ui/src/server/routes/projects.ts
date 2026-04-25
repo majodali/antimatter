@@ -29,9 +29,24 @@ interface ProjectMeta {
   git?: ProjectGitConfig;
 }
 
-const SKIP_DIRS = new Set([
-  '.git', 'node_modules', '.next', 'dist', 'build',
-  '__pycache__', '.venv', 'target', 'vendor', '.terraform',
+/**
+ * Always skipped at any depth — these are never source code, just
+ * tooling state or platform metadata.
+ */
+const ALWAYS_SKIP_DIRS = new Set([
+  '.git', 'node_modules', '__pycache__', '.venv', '.terraform',
+]);
+
+/**
+ * Skipped only when they appear at the *repo root* — they are
+ * conventional build-output directory names AT THE ROOT, but can
+ * legitimately be source-folder names at nested depths (e.g.
+ * `packages/ui/src/client/components/build/` for Antimatter's own
+ * Build panel components, which broke Loop-2 of M3 self-hosting
+ * when this set was applied recursively).
+ */
+const ROOT_ONLY_SKIP_DIRS = new Set([
+  'dist', 'build', '.next', 'target', 'vendor',
 ]);
 
 const MAX_FILES = 5000;
@@ -48,14 +63,15 @@ function walkDirectory(dir: string, base: string = dir): WalkedFile[] {
   function walk(current: string) {
     if (results.length >= MAX_FILES) return;
 
+    const isRoot = current === base;
     const entries = fs.readdirSync(current, { withFileTypes: true });
     for (const entry of entries) {
       if (results.length >= MAX_FILES) return;
 
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) {
-          walk(path.join(current, entry.name));
-        }
+        if (ALWAYS_SKIP_DIRS.has(entry.name)) continue;
+        if (isRoot && ROOT_ONLY_SKIP_DIRS.has(entry.name)) continue;
+        walk(path.join(current, entry.name));
       } else if (entry.isFile()) {
         const absPath = path.join(current, entry.name);
         try {
