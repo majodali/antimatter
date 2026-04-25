@@ -241,16 +241,33 @@ export class AntimatterEnvStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    // HTTP listener — default action is 404.
-    // Per-project target groups and path-based routing rules are created
-    // dynamically by workspace-ec2-service when instances start.
+    // Shared target group — all workspace EC2 instances register here.
+    // The Router on each instance dispatches /workspace/{projectId}/...
+    // to the correct project worker child process. Mirrors the prod
+    // `ws-default` target group.
+    const workspaceTargetGroup = new elbv2.ApplicationTargetGroup(this, 'WorkspaceTargetGroup', {
+      targetGroupName: `ws-${envId}`,
+      vpc,
+      port: 8080,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      targetType: elbv2.TargetType.IP,
+      healthCheck: {
+        path: '/health',
+        protocol: elbv2.Protocol.HTTP,
+        port: '8080',
+        healthyHttpCodes: '200',
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(5),
+        healthyThresholdCount: 2,
+        unhealthyThresholdCount: 3,
+      },
+      deregistrationDelay: cdk.Duration.seconds(30),
+    });
+
     const workspaceListener = workspaceAlb.addListener('WorkspaceListener', {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
-      defaultAction: elbv2.ListenerAction.fixedResponse(404, {
-        contentType: 'text/plain',
-        messageBody: 'No workspace instance for this path',
-      }),
+      defaultTargetGroups: [workspaceTargetGroup],
     });
 
     // Allow ALB to reach workspace instances on port 8080
@@ -350,6 +367,8 @@ export class AntimatterEnvStack extends cdk.Stack {
     apiFunction.addEnvironment('ALB_LISTENER_ARN', workspaceListener.listenerArn);
     apiFunction.addEnvironment('VPC_ID', vpc.vpcId);
     apiFunction.addEnvironment('WORKSPACE_ALB_DNS', workspaceAlb.loadBalancerDnsName);
+    apiFunction.addEnvironment('WORKSPACE_TARGET_GROUP_ARN', workspaceTargetGroup.targetGroupArn);
+    apiFunction.addEnvironment('WORKSPACE_SHARED_MODE', 'true');
 
     // ==========================================
     // Self-Deployment Permissions
