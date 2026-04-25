@@ -151,7 +151,10 @@ export class AntimatterEnvStack extends cdk.Stack {
     const userPoolClient = userPool.addClient('WebClient', {
       userPoolClientName: `antimatter-web-${envId}`,
       generateSecret: false,
-      authFlows: { userSrp: true },
+      // userSrp: SPA login flow (frontend).
+      // adminUserPassword: admin-side token fetching for tests / automation
+      //   (e.g. CLI scripts that need a token without doing SRP math).
+      authFlows: { userSrp: true, adminUserPassword: true },
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [
