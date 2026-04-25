@@ -158,6 +158,7 @@ const workspaceConfig: WorkspaceEc2ServiceConfig | null = process.env.WORKSPACE_
       sharedMode: process.env.WORKSPACE_SHARED_MODE === 'true',
       s3FilesFileSystemId: process.env.S3_FILES_FS_ID || undefined,
       sqsQueueUrl: process.env.SQS_QUEUE_URL || undefined,
+      envId: process.env.WORKSPACE_ENV_ID || undefined,
     }
   : null;
 

@@ -369,6 +369,7 @@ export class AntimatterEnvStack extends cdk.Stack {
     apiFunction.addEnvironment('WORKSPACE_ALB_DNS', workspaceAlb.loadBalancerDnsName);
     apiFunction.addEnvironment('WORKSPACE_TARGET_GROUP_ARN', workspaceTargetGroup.targetGroupArn);
     apiFunction.addEnvironment('WORKSPACE_SHARED_MODE', 'true');
+    apiFunction.addEnvironment('WORKSPACE_ENV_ID', envId);
 
     // ==========================================
     // Self-Deployment Permissions

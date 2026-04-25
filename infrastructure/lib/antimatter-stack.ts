@@ -550,6 +550,7 @@ export class AntimatterStack extends cdk.Stack {
     apiFunction.addEnvironment('WORKSPACE_TARGET_GROUP_ARN', workspaceTargetGroup.targetGroupArn);
     apiFunction.addEnvironment('WORKSPACE_ALB_DNS', workspaceAlb.loadBalancerDnsName);
     apiFunction.addEnvironment('WORKSPACE_SHARED_MODE', 'true');
+    apiFunction.addEnvironment('WORKSPACE_ENV_ID', 'prod');
     apiFunction.addEnvironment('S3_FILES_FS_ID', s3FilesFileSystemId);
     apiFunction.addEnvironment('SQS_QUEUE_URL', s3EventQueue.queueUrl);
 

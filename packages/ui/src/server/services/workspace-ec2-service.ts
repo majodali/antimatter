@@ -65,6 +65,14 @@ export interface WorkspaceEc2ServiceConfig {
    * initializes project contexts lazily when traffic arrives.
    */
   sharedMode?: boolean;
+  /**
+   * Environment scope for instance/volume discovery + tagging. When set,
+   * RunInstances tags resources with `antimatter:envId={envId}` and every
+   * Describe* filter includes that tag, so DescribeInstances calls cannot
+   * cross envs that share an AWS account. When empty/undefined, tagging
+   * and filtering are skipped (legacy mode — pre-multi-env behavior).
+   */
+  envId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +94,28 @@ export class WorkspaceEc2Service {
     this.ec2 = new EC2Client({ region: config.region });
     this.elbv2 = new ElasticLoadBalancingV2Client({ region: config.region });
     this.eventLogger = eventLogger;
+  }
+
+  /**
+   * Tag set applied to every instance/volume RunInstances/CreateVolume call.
+   * Includes the env scope when configured — fundamental to keeping multi-env
+   * deployments in the same AWS account from finding each other's resources.
+   */
+  private envTag(): { Key: string; Value: string }[] {
+    return this.config.envId
+      ? [{ Key: 'antimatter:envId', Value: this.config.envId }]
+      : [];
+  }
+
+  /**
+   * Filter set applied to every DescribeInstances/DescribeVolumes lookup.
+   * Mirrors {@link envTag}: when envId is set, the filter requires it; when
+   * unset, no env filter is added (legacy single-env behavior).
+   */
+  private envFilter(): { Name: string; Values: string[] }[] {
+    return this.config.envId
+      ? [{ Name: 'tag:antimatter:envId', Values: [this.config.envId] }]
+      : [];
   }
 
   /**
@@ -221,6 +251,7 @@ export class WorkspaceEc2Service {
           { Key: 'antimatter:projectId', Value: projectId },
           { Key: 'antimatter:sessionToken', Value: sessionToken },
           { Key: 'antimatter:managed', Value: 'true' },
+          ...this.envTag(),
         ],
       }],
     }));
@@ -313,6 +344,7 @@ export class WorkspaceEc2Service {
       Filters: [
         { Name: 'tag:antimatter:managed', Values: ['true'] },
         { Name: 'instance-state-name', Values: ['running'] },
+        ...this.envFilter(),
       ],
     }));
 
@@ -374,6 +406,7 @@ export class WorkspaceEc2Service {
       Filters: [
         { Name: 'tag:antimatter:managed', Values: ['true'] },
         { Name: 'instance-state-name', Values: states },
+        ...this.envFilter(),
       ],
     }));
 
@@ -453,6 +486,7 @@ export class WorkspaceEc2Service {
         { Name: 'tag:antimatter:projectId', Values: [projectId] },
         { Name: 'tag:antimatter:volumeType', Values: ['data'] },
         { Name: 'status', Values: ['available', 'in-use'] },
+        ...this.envFilter(),
       ],
     }));
 
@@ -475,6 +509,7 @@ export class WorkspaceEc2Service {
           { Key: 'antimatter:projectId', Value: projectId },
           { Key: 'antimatter:volumeType', Value: 'data' },
           { Key: 'antimatter:managed', Value: 'true' },
+          ...this.envTag(),
         ],
       }],
     }));
@@ -701,6 +736,7 @@ echo "[workspace] Boot script complete"
         { Name: 'tag:antimatter:managed', Values: ['true'] },
         // Exclude terminated instances
         { Name: 'instance-state-name', Values: ['pending', 'running', 'stopping', 'stopped'] },
+        ...this.envFilter(),
       ],
     }));
 
