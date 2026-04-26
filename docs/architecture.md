@@ -118,6 +118,18 @@ The current (and only validated) workflow is **deploy-new-stack-then-switch**:
 
 Both approaches assume the deploy orchestrator runs **outside** the target environment. The running IDE can orchestrate deploys to fresh stacks via `wf.utils.http.post` against the Lambda admin endpoints (`/api/admin/*`, see §11), never by modifying itself.
 
+**Validated end-to-end (M3 Loop-2)**: a fresh test env (`AntimatterEnv-test`) imported the antimatter repo, ran `build:full` to produce all four bundles (vite frontend, Lambda, workspace-server, project-worker), and from a terminal on its own worker ran `cdk deploy AntimatterEnv-loop2 --context envId=loop2` — successfully creating a third independent env (`d191v4l0bzcd73.cloudfront.net`) with its own Cognito pool, S3 buckets, ALB, etc. The orchestrating env's worker did not modify itself; the loop2 stack stood up cleanly in 8 minutes.
+
+**Key safety properties currently relied on:**
+
+- **Zero CFN cross-references between AntimatterStack and any AntimatterEnv-* stack.** The shared VPC is read by env stacks via `ec2.Vpc.fromLookup` (cached in `cdk.context.json`), not via `Fn::ImportValue`. Confirmed: post-deploy, `cdk diff` against either stack shows no changes to the other.
+- **`WORKSPACE_ENV_ID`-scoped EC2 + EBS tagging.** Every `RunInstances`/`CreateVolume` call from a Lambda includes `antimatter:envId={envId}`. Every `DescribeInstances`/`DescribeVolumes` filter requires it. Without this, two envs sharing an account could find and operate on each other's resources via the `antimatter:projectId` tag alone.
+- **Origin-aware Lambda CORS + OAuth `redirectUri`.** `/api/auth/config` reflects the request `Origin` header so each env's CloudFront URL works without per-env env vars (which would close a CDK cycle).
+
+**Asset shipping today is two-step**: CDK packages the Lambda + frontend bundles into the stack as assets (uploaded automatically on `cdk deploy`); the workspace-server + project-worker bundles are NOT in the CDK assets — they're pulled by EC2 user-data from `s3://{dataBucket}/workspace-server/`. So a fresh env deploy needs a follow-up `aws s3 cp` to upload those bundles before any worker can boot. Worth folding into a single workflow rule eventually.
+
+**Future folding into the IDE:** today the `cdk deploy AntimatterEnv-{envId}` step is run from a terminal session on the orchestrator's worker. The natural next step is a `wf.exec`-based ops rule, callable from a widget in the Operations panel — but that should land *after* a UX walkthrough decides where in the IDE multi-env operations belong.
+
 ---
 
 ## 4. Workspace Server — Layered Process Architecture
