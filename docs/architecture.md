@@ -2,6 +2,7 @@
 
 > Current system architecture and implementation details.
 > For planning and status see `BACKLOG.md`. For long-term vision see `docs/project-os.md`.
+> For the **Project Context Model** (hierarchical work + runtime contexts, inheritance, dynamic scoping, perspective-driven UI) — the canonical reference for the next phase of UX evolution — see `docs/contexts.md`.
 
 ---
 

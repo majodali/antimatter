@@ -21,6 +21,7 @@ Antimatter is a self-hosting online development environment with AI agent integr
 | `BACKLOG.md` | **Source of truth** for planning, feature status, and test case tracking |
 | `docs/DONE.md` | Completed features archive (features with all tests passing) |
 | `docs/architecture.md` | Current system architecture and implementation details |
+| `docs/contexts.md` | **Project Context Model** — hierarchical contexts, inheritance, dynamic scoping. Canonical reference for the next phase of UX evolution |
 | `docs/project-os.md` | Long-term vision (reference only) |
 | `CLAUDE.md` | This file — Claude Code working context and development process |
 
