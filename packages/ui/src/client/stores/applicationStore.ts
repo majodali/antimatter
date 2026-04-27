@@ -18,6 +18,11 @@ import type {
   WorkflowDeclarations,
   WorkflowInvocationResult,
 } from '@antimatter/workflow';
+import type {
+  ContextSnapshot,
+  ContextLifecycleSnapshot,
+  ContextNodeSnapshot,
+} from '../../shared/contexts-types';
 import { emitWorkflowEvent, runWorkflowRule } from '@/lib/api';
 export type { ProjectError };
 
@@ -48,6 +53,22 @@ interface ApplicationStore {
   /** Whether at least one full snapshot has been received. */
   loaded: boolean;
 
+  /**
+   * Project context tree parsed from `.antimatter/contexts.dsl` (server-owned).
+   * Lives outside `serverState` because it isn't a workflow concept — the
+   * server pushes it under `state.contexts` and this store splits it back out.
+   * Null until a snapshot arrives; `present: false` if no DSL file exists.
+   */
+  contexts: ContextSnapshot | null;
+
+  /**
+   * Server-derived lifecycle data: per-context status + per-context
+   * requirement pass/fail. Pushed independently of `contexts` (contexts
+   * changes when the DSL file changes; contextLifecycle changes whenever
+   * rule/test results change). Merged with `contexts` by `getContexts()`.
+   */
+  contextLifecycle: ContextLifecycleSnapshot | null;
+
   /** Optimistic rule execution state — maps ruleId to running status. */
   optimisticRunning: Set<string>;
 
@@ -64,10 +85,30 @@ interface ApplicationStore {
   getLastInvocation: () => WorkflowInvocationResult | null;
   getLoadedFiles: () => readonly string[];
 
+  /**
+   * Project context snapshot ENRICHED with the server-derived lifecycle
+   * data when present. Each ContextNodeSnapshot's `lifecycleStatus`
+   * comes from `contextLifecycle.statuses[id]`, and its `requirements`
+   * are overlaid with `contextLifecycle.requirements[id]` (real
+   * pass/fail) when available. Falls back to the placeholder data on
+   * the bare snapshot if the lifecycle store hasn't reported yet.
+   */
+  getContexts: () => ContextSnapshot | null;
+  /** Convenience: just the runtime contexts, sorted by name. */
+  getRuntimeContexts: () => Array<{ name: string; description?: string }>;
+
   // ---- Actions ----
 
-  /** Handle an application-state WebSocket message. */
-  handleStateMessage: (msg: { full?: boolean; state: Partial<ApplicationState> }) => void;
+  /** Handle an application-state WebSocket message.
+   *  The `contexts` and `contextLifecycle` fields are split out of
+   *  `state` and routed to their dedicated top-level store fields. */
+  handleStateMessage: (msg: {
+    full?: boolean;
+    state: Partial<ApplicationState> & {
+      contexts?: ContextSnapshot;
+      contextLifecycle?: ContextLifecycleSnapshot;
+    };
+  }) => void;
 
   /** Emit a workflow event (e.g., build:trigger, deploy:trigger). */
   emitEvent: (event: { type: string; [key: string]: unknown }, projectId?: string) => Promise<any>;
@@ -83,6 +124,8 @@ interface ApplicationStore {
 export const useApplicationStore = create<ApplicationStore>((set, get) => ({
   serverState: null,
   loaded: false,
+  contexts: null,
+  contextLifecycle: null,
   optimisticRunning: new Set(),
 
   // ---- Derived accessors ----
@@ -159,14 +202,58 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
     return get().serverState?.loadedFiles ?? [];
   },
 
+  getContexts: () => {
+    const ctx = get().contexts;
+    if (!ctx) return null;
+    const lifecycle = get().contextLifecycle;
+    if (!lifecycle) return ctx;
+    // Enrich: overlay status + live requirement pass/fail.
+    const enrichedNodes: ContextNodeSnapshot[] = ctx.nodes.map((n) => {
+      const status = lifecycle.statuses[n.id];
+      const liveReqs = lifecycle.requirements[n.id];
+      return {
+        ...n,
+        lifecycleStatus: status ?? n.lifecycleStatus,
+        requirements: liveReqs && liveReqs.length === n.requirements.length
+          ? liveReqs
+          : n.requirements,
+      };
+    });
+    return { ...ctx, nodes: enrichedNodes };
+  },
+
+  getRuntimeContexts: () => {
+    const ctx = get().contexts;
+    if (!ctx?.present) return [];
+    return ctx.nodes
+      .filter(n => n.kind === 'runtime')
+      .map(n => ({ name: n.name, description: n.description }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  },
+
   // ---- Actions ----
 
   handleStateMessage: (msg) => {
+    // Split `contexts` and `contextLifecycle` out — they live in their own
+    // store fields, not inside ApplicationState (which is owned by the
+    // workflow engine).
+    const incoming = (msg.state ?? {}) as Partial<ApplicationState> & {
+      contexts?: ContextSnapshot;
+      contextLifecycle?: ContextLifecycleSnapshot;
+    };
+    const {
+      contexts: nextContexts,
+      contextLifecycle: nextLifecycle,
+      ...workflowState
+    } = incoming;
+
     if (msg.full) {
-      // Full snapshot — replace entire server state
+      // Full snapshot — replace entire server state.
       set({
-        serverState: msg.state as ApplicationState,
+        serverState: workflowState as ApplicationState,
         loaded: true,
+        contexts: nextContexts ?? null,
+        contextLifecycle: nextLifecycle ?? null,
         optimisticRunning: new Set(), // Clear optimistic state on full snapshot
       });
     } else {
@@ -180,17 +267,21 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
       // When ruleResults arrive from server, clear optimistic running state
       // for any rules that now have server-side results.
       let running = get().optimisticRunning;
-      if (msg.state.ruleResults) {
+      if (workflowState.ruleResults) {
         const newRunning = new Set(running);
-        for (const ruleId of Object.keys(msg.state.ruleResults)) {
+        for (const ruleId of Object.keys(workflowState.ruleResults)) {
           newRunning.delete(ruleId);
         }
         running = newRunning;
       }
 
       set({
-        serverState: { ...current, ...msg.state } as ApplicationState,
+        serverState: { ...current, ...workflowState } as ApplicationState,
         loaded: true,
+        // Only overwrite contexts/contextLifecycle if the patch carries them —
+        // patches without those fields shouldn't clobber the cached snapshots.
+        ...(nextContexts !== undefined ? { contexts: nextContexts } : {}),
+        ...(nextLifecycle !== undefined ? { contextLifecycle: nextLifecycle } : {}),
         optimisticRunning: running,
       });
     }

@@ -51,6 +51,9 @@ export class FileTestResultsStorage implements TestResultsStorage {
   private projectRuns: ProjectTestRunSummary[] = [];
   private readonly maxRuns = 50;
   private readonly storagePath: string;
+  /** Optional change hook fired after every save/clear. Used by
+   *  ContextLifecycleStore to trigger a status re-derivation. */
+  onChange?: () => void;
 
   constructor(
     private readonly env: WorkspaceEnvironment,
@@ -86,6 +89,7 @@ export class FileTestResultsStorage implements TestResultsStorage {
       this.results = this.results.slice(-this.maxRuns);
     }
     await this.persist();
+    this.fireChange();
   }
 
   async load(): Promise<TestRunSummary[]> {
@@ -95,6 +99,7 @@ export class FileTestResultsStorage implements TestResultsStorage {
   async clear(): Promise<void> {
     this.results = [];
     await this.persist();
+    this.fireChange();
   }
 
   /** Save a project test run (vitest/jest). */
@@ -104,6 +109,30 @@ export class FileTestResultsStorage implements TestResultsStorage {
       this.projectRuns = this.projectRuns.slice(-this.maxRuns);
     }
     await this.persist();
+    this.fireChange();
+  }
+
+  /** Get the latest pass/fail state for every test that has ever run.
+   *  Most-recent-wins across all runs. Used by ContextLifecycleStore to
+   *  evaluate per-context test requirements without scanning the full
+   *  history on every recompute. */
+  getLatestPasses(): readonly { id: string; pass: boolean }[] {
+    const latest = new Map<string, boolean>();
+    // Walk in chronological order so later runs overwrite earlier ones.
+    for (const run of this.results) {
+      for (const r of run.results) {
+        latest.set(r.id, r.pass);
+      }
+    }
+    return [...latest].map(([id, pass]) => ({ id, pass }));
+  }
+
+  private fireChange(): void {
+    if (this.onChange) {
+      try { this.onChange(); } catch (err) {
+        console.error('[test-results] onChange hook failed:', err);
+      }
+    }
   }
 
   /** Load all project test runs. */

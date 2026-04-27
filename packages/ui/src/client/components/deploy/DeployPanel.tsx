@@ -16,11 +16,12 @@ type OpsView = 'ops' | 'secrets';
 /**
  * Runtime-context selector for the Operations panel header.
  *
- * Today there's typically one declared environment per project (the
- * project's `wf.environment(...)` call), so this dropdown is often
- * single-item. The surface is here so future multi-runtime work
- * (deploy targets, blue-green flips, preview envs) doesn't require
- * a header redesign — it just adds entries to the same dropdown.
+ * Source priority for the option list:
+ *   1. Runtime contexts parsed from `.antimatter/contexts.dsl` (the
+ *      Project Context Model — first-class, hierarchical, kind=runtime).
+ *   2. Legacy `wf.environment(...)` declarations from the workflow
+ *      runtime (older projects without contexts.dsl).
+ *   3. A single 'production' fallback so the selector always has a label.
  *
  * Selection persists per user via `useUIStore.currentRuntimeContextId`.
  * No filtering is wired yet — see `docs/contexts.md` § Perspectives
@@ -28,18 +29,19 @@ type OpsView = 'ops' | 'secrets';
  */
 function RuntimeContextSelector() {
   const declarations = useApplicationStore((s) => s.getDeclarations());
+  const runtimeContexts = useApplicationStore((s) => s.getRuntimeContexts());
   const currentId = useUIStore((s) => s.currentRuntimeContextId);
   const setCurrentId = useUIStore((s) => s.setCurrentRuntimeContextId);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Build the option list from declared environments. If the project
-  // doesn't declare any, fall back to a single 'production' entry so
-  // the selector still has a label rather than appearing empty.
+  // Source priority: contexts.dsl runtimes > wf.environment declarations > 'production'.
   const envs = declarations.environments ?? [];
-  const options = envs.length > 0
-    ? envs.map((e) => ({ id: e.name, label: e.name, url: e.url }))
-    : [{ id: 'production', label: 'production', url: undefined as string | undefined }];
+  const options = runtimeContexts.length > 0
+    ? runtimeContexts.map((rc) => ({ id: rc.name, label: rc.name, url: undefined as string | undefined, description: rc.description }))
+    : envs.length > 0
+      ? envs.map((e) => ({ id: e.name, label: e.name, url: e.url, description: undefined as string | undefined }))
+      : [{ id: 'production', label: 'production', url: undefined as string | undefined, description: undefined as string | undefined }];
 
   // Self-correct stale selection: if the persisted id no longer matches
   // any declared env, snap to the first available.
@@ -87,6 +89,7 @@ function RuntimeContextSelector() {
               role="option"
               aria-selected={opt.id === currentId}
               onClick={() => { setCurrentId(opt.id); setOpen(false); }}
+              title={opt.description}
               className={cn(
                 'w-full text-left flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent transition-colors',
                 opt.id === currentId ? 'text-foreground' : 'text-muted-foreground',

@@ -69,6 +69,9 @@ export interface WorkflowManagerOptions {
   readonly activityLog?: import('./activity-log.js').ActivityLog;
   /** Project ID for per-project scoping (secrets, resources, etc.). */
   readonly projectId?: string;
+  /** Optional hook fired whenever rule results change. Used by
+   *  ContextLifecycleStore to trigger a status re-derivation. */
+  readonly onRuleResultsChanged?: () => void;
 }
 
 /** Tagged definition — pairs a file path with its loaded definition function. */
@@ -107,6 +110,7 @@ export class WorkflowManager {
   private readonly deployedResourceStore?: import('./deployed-resource-store.js').DeployedResourceStore;
   private readonly activityLog?: import('./activity-log.js').ActivityLog;
   private readonly projectId?: string;
+  private readonly onRuleResultsChanged?: () => void;
 
   /** Tracks which files were loaded in the last definition load. */
   private loadedFiles: string[] = [];
@@ -138,6 +142,7 @@ export class WorkflowManager {
     this.deployedResourceStore = options.deployedResourceStore;
     this.activityLog = options.activityLog;
     this.projectId = options.projectId;
+    this.onRuleResultsChanged = options.onRuleResultsChanged;
 
     // Subscribe to event log drain — batched events arrive here
     if (this.eventLog) {
@@ -690,6 +695,13 @@ export class WorkflowManager {
     return this.runtime.declarations;
   }
 
+  /** Get the current persisted result for a single rule by id, or
+   *  undefined if the rule has never run. Used by ContextLifecycleStore
+   *  to evaluate per-context rule requirements. */
+  getRuleResult(ruleId: string): PersistedRuleResult | undefined {
+    return this.persisted?.ruleResults?.[ruleId];
+  }
+
   /** Assemble full application state snapshot — all state in one object. */
   getApplicationState(): ApplicationState {
     return {
@@ -710,6 +722,14 @@ export class WorkflowManager {
       type: 'application-state',
       state: { ...patch, updatedAt: new Date().toISOString() },
     });
+    // Notify hooks (ContextLifecycleStore) when rule results change so
+    // lifecycle status can be re-derived. Cheap to over-fire — the
+    // lifecycle store debounces.
+    if (patch.ruleResults && this.onRuleResultsChanged) {
+      try { this.onRuleResultsChanged(); } catch (err) {
+        console.error('[workflow-manager] onRuleResultsChanged hook failed:', err);
+      }
+    }
   }
 
   /** Broadcast full application state (used on WS connect). */

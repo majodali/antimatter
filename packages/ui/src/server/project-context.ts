@@ -51,11 +51,14 @@ import { createEventsRouter } from './routes/events.js';
 import { createWorkflowRouter } from './routes/workflow.js';
 import { createTestResultsRouter, FileTestResultsStorage } from './routes/test-results.js';
 import { createAutomationRouter } from './routes/automation.js';
+import { createContextsRouter } from './routes/contexts.js';
 import { createServerCommandExecutor } from './automation/server-commands.js';
 import { WorkflowManager } from './services/workflow-manager.js';
 import { ErrorStore } from './services/error-store.js';
 import { DeployedResourceStore } from './services/deployed-resource-store.js';
 import { ActivityLog } from './services/activity-log.js';
+import { ContextStore } from './services/context-store.js';
+import { ContextLifecycleStore } from './services/context-lifecycle-store.js';
 import { Kinds } from '../shared/activity-types.js';
 import {
   COMMAND_TIMEOUTS,
@@ -504,6 +507,8 @@ export class ProjectContext {
   errorStore!: ErrorStore;
   testResultsStorage!: FileTestResultsStorage;
   deployedResourceStore!: DeployedResourceStore;
+  contextStore!: ContextStore;
+  contextLifecycleStore!: ContextLifecycleStore;
   private eventLog?: import('./event-log.js').EventLog;
   /** Unified activity log for worker/workflow/pty/service events. Created during initialize(). */
   activityLog?: import('./services/activity-log.js').ActivityLog;
@@ -656,7 +661,10 @@ export class ProjectContext {
       });
     });
 
-    // Workflow manager — broadcast callback also captures build terminal output
+    // Workflow manager — broadcast callback also captures build terminal output.
+    // The onRuleResultsChanged hook drives ContextLifecycleStore re-derivation
+    // (created below; the closure resolves it lazily so the wiring order works
+    // — workflowManager is constructed before contextLifecycleStore exists).
     this.workflowManager = new WorkflowManager({
       env: this.env,
       broadcast: (msg: object) => {
@@ -674,12 +682,82 @@ export class ProjectContext {
       projectId: this.projectId,
       onExecStart: () => this.config.onExecStart(),
       onExecEnd: () => this.config.onExecEnd(),
+      onRuleResultsChanged: () => this.contextLifecycleStore?.scheduleRecompute(),
     });
 
     await this.errorStore.initialize();
     await this.testResultsStorage.initialize();
     await this.deployedResourceStore.initialize();
+
+    // Project context tree — parsed from `.antimatter/contexts.dsl` if present.
+    // Always safe to construct (empty snapshot if no DSL file). Subscribe so
+    // changes broadcast as application-state patches to all connected clients.
+    this.contextStore = new ContextStore(this.env);
+    await this.contextStore.initialize();
+    this.contextStore.subscribe((snap) => {
+      this.broadcastToClients({
+        type: 'application-state',
+        state: { contexts: snap },
+      });
+    });
+    {
+      const initialSnap = this.contextStore.getSnapshot();
+      if (initialSnap.present) {
+        const errCount = initialSnap.errors.length;
+        console.log(`[project-context:${this.projectId}] Loaded contexts.dsl: ${initialSnap.nodes.length} contexts, ${errCount} validation error(s)`);
+        if (errCount > 0) {
+          this.activityLog?.emit({
+            source: 'worker', kind: Kinds.WorkerError, level: 'warn',
+            message: `contexts.dsl has ${errCount} validation error(s)`,
+            projectId: this.projectId, correlationId: this.projectId,
+            data: { errors: initialSnap.errors.map(e => ({ code: e.code, message: e.message })) },
+          });
+        }
+      }
+    }
+
     await this.workflowManager.start();
+
+    // Lifecycle store — derives status per context from rule + test
+    // pass state. Construct AFTER WorkflowManager so the rule catalog
+    // and result API are ready. The hook in WorkflowManager
+    // (onRuleResultsChanged) calls scheduleRecompute() whenever rule
+    // results update; same for FileTestResultsStorage.onChange below.
+    this.contextLifecycleStore = new ContextLifecycleStore({
+      env: this.env,
+      contextStore: this.contextStore,
+      getRuleDeclarations: () => this.workflowManager.getDeclarations().rules,
+      getRuleResult: (id) => this.workflowManager.getRuleResult(id)?.status,
+      getTestPasses: () => this.testResultsStorage.getLatestPasses(),
+      onTransitions: (transitions) => {
+        // Emit a workflow event per transition so rules can react
+        // (e.g. agent watches for context:transitioned to=regressed and
+        // opens a debugging session). Fire-and-forget.
+        for (const t of transitions) {
+          this.workflowManager.emitEvent({
+            type: 'context:transitioned',
+            contextId: t.contextId,
+            from: t.from,
+            to: t.to,
+            at: t.at,
+          }).catch((err: unknown) => {
+            console.error(`[project-context:${this.projectId}] context:transitioned emit failed:`, err);
+          });
+        }
+      },
+    });
+    await this.contextLifecycleStore.initialize();
+    // Subscribe lifecycle changes → broadcast to clients.
+    this.contextLifecycleStore.subscribe((snap) => {
+      this.broadcastToClients({
+        type: 'application-state',
+        state: { contextLifecycle: snap },
+      });
+    });
+    // Wire test-results changes to lifecycle recompute.
+    this.testResultsStorage.onChange = () => {
+      this.contextLifecycleStore.scheduleRecompute();
+    };
 
     // Auto-register Preview resource if project has an index.html
     const previewCandidates = ['dist/index.html', 'src/index.html'];
@@ -724,12 +802,21 @@ export class ProjectContext {
       this.s3SyncScheduler.start(30_000);
     }
 
-    // File change notifier
+    // File change notifier — also watches `.antimatter/contexts.dsl` and
+    // re-parses it via ContextStore so the UI sees a fresh tree without
+    // requiring a worker restart.
     this.fileChangeNotifier.start(
       this.env.fileSystem,
       (msg: object) => this.broadcastToClients(msg),
       () => this.s3SyncScheduler?.sync(),
-      (events, source) => this.workflowManager.onFileChanges(events, source as any),
+      (events, source) => {
+        if (events.some(e => ContextStore.isContextsFile(e.path))) {
+          this.contextStore.reload().catch((err: unknown) => {
+            console.error(`[project-context:${this.projectId}] contexts.dsl reload failed:`, err);
+          });
+        }
+        this.workflowManager.onFileChanges(events, source as any);
+      },
     );
 
     this.initialized = true;
@@ -1040,6 +1127,14 @@ export class ProjectContext {
       res.json({ queued: true, type: body.type, environment });
     });
     router.use('/api/test-results', createTestResultsRouter(this.testResultsStorage));
+    router.use('/api/contexts', (req, res, next) => {
+      // Lazy: contextStore exists only after initialize() completes.
+      if (this.contextStore) {
+        createContextsRouter(this.contextStore)(req, res, next);
+      } else {
+        res.status(503).json({ error: 'Project not yet initialized' });
+      }
+    });
 
     // Automation API — unified command endpoint for external agents
     const executeServerCommand = createServerCommandExecutor({
@@ -1134,7 +1229,15 @@ export class ProjectContext {
     // Status + application state
     messages.push({ type: 'status', state: 'ready' });
     if (this.workflowManager) {
-      messages.push({ type: 'application-state', full: true, state: this.workflowManager.getApplicationState() });
+      messages.push({
+        type: 'application-state',
+        full: true,
+        state: {
+          ...this.workflowManager.getApplicationState(),
+          contexts: this.contextStore?.getSnapshot(),
+          contextLifecycle: this.contextLifecycleStore?.getSnapshot(),
+        },
+      });
     }
 
     // Subscribe PTY output → broadcast (single subscription, not per-client)
@@ -1294,7 +1397,11 @@ export class ProjectContext {
       ws.send(JSON.stringify({
         type: 'application-state',
         full: true,
-        state: this.workflowManager.getApplicationState(),
+        state: {
+          ...this.workflowManager.getApplicationState(),
+          contexts: this.contextStore?.getSnapshot(),
+          contextLifecycle: this.contextLifecycleStore?.getSnapshot(),
+        },
       }));
     }
 
@@ -1524,6 +1631,7 @@ export class ProjectContext {
     });
     this.fileChangeNotifier.stop();
     this.ptyManager.closeAll();
+    if (this.contextLifecycleStore) await this.contextLifecycleStore.shutdown();
     if (this.eventLog) await this.eventLog.shutdown();
     if (this.s3SyncScheduler) await this.s3SyncScheduler.shutdown();
     if (this.activityLog) await this.activityLog.shutdown();
