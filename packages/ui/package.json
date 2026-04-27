@@ -16,6 +16,7 @@
   "dependencies": {
     "@antimatter/agent-framework": "*",
     "@antimatter/build-system": "*",
+    "@antimatter/contexts": "*",
     "@antimatter/filesystem": "*",
     "@antimatter/project-model": "*",
     "@antimatter/service-interface": "*",
