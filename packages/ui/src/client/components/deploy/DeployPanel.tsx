@@ -1,16 +1,107 @@
-import { useState, useEffect } from 'react';
-import { Rocket, Play, Trash2, Settings, Hammer, Pause, Globe, ExternalLink, Eye } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Rocket, Play, Trash2, Settings, Hammer, Pause, Globe, ExternalLink, Eye, ChevronDown, Check } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { WidgetBar } from '../widgets/WidgetRenderer';
 import { SecretsPanel } from './SecretsPanel';
 import { useApplicationStore } from '@/stores/applicationStore';
 import { useProjectStore } from '@/stores/projectStore';
+import { useUIStore } from '@/stores/uiStore';
 import { cn } from '@/lib/utils';
 import type { EnvironmentActionDeclaration } from '@/lib/api';
 import type { WidgetState } from '@antimatter/workflow';
 
 type OpsView = 'ops' | 'secrets';
+
+/**
+ * Runtime-context selector for the Operations panel header.
+ *
+ * Today there's typically one declared environment per project (the
+ * project's `wf.environment(...)` call), so this dropdown is often
+ * single-item. The surface is here so future multi-runtime work
+ * (deploy targets, blue-green flips, preview envs) doesn't require
+ * a header redesign — it just adds entries to the same dropdown.
+ *
+ * Selection persists per user via `useUIStore.currentRuntimeContextId`.
+ * No filtering is wired yet — see `docs/contexts.md` § Perspectives
+ * for the long-term semantics.
+ */
+function RuntimeContextSelector() {
+  const declarations = useApplicationStore((s) => s.getDeclarations());
+  const currentId = useUIStore((s) => s.currentRuntimeContextId);
+  const setCurrentId = useUIStore((s) => s.setCurrentRuntimeContextId);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Build the option list from declared environments. If the project
+  // doesn't declare any, fall back to a single 'production' entry so
+  // the selector still has a label rather than appearing empty.
+  const envs = declarations.environments ?? [];
+  const options = envs.length > 0
+    ? envs.map((e) => ({ id: e.name, label: e.name, url: e.url }))
+    : [{ id: 'production', label: 'production', url: undefined as string | undefined }];
+
+  // Self-correct stale selection: if the persisted id no longer matches
+  // any declared env, snap to the first available.
+  useEffect(() => {
+    if (!options.find((o) => o.id === currentId) && options.length > 0) {
+      setCurrentId(options[0].id);
+    }
+  }, [options, currentId, setCurrentId]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  const current = options.find((o) => o.id === currentId) ?? options[0];
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
+        title="Select the runtime context this panel operates on"
+        data-testid="runtime-context-selector"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span>{current?.label ?? 'production'}</span>
+        <ChevronDown className="h-3 w-3" />
+      </button>
+      {open && (
+        <div
+          className="absolute top-full left-0 mt-1 min-w-[10rem] bg-popover border border-border rounded-md shadow-lg z-50 py-1"
+          role="listbox"
+        >
+          {options.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              role="option"
+              aria-selected={opt.id === currentId}
+              onClick={() => { setCurrentId(opt.id); setOpen(false); }}
+              className={cn(
+                'w-full text-left flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent transition-colors',
+                opt.id === currentId ? 'text-foreground' : 'text-muted-foreground',
+              )}
+              data-testid={`runtime-context-option-${opt.id}`}
+            >
+              <span className="font-mono flex-1 truncate">{opt.label}</span>
+              {opt.id === currentId && <Check className="h-3 w-3 shrink-0" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function DeployPanel() {
   // Panel is now labelled "Operations" but the component name stays the same
@@ -48,6 +139,9 @@ export function DeployPanel() {
       <div className="px-3 py-2 border-b border-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Rocket className="h-4 w-4 text-primary" />
+          {/* Runtime-context selector — claims the surface for multi-runtime
+              work. Today usually shows the single declared environment. */}
+          <RuntimeContextSelector />
           {/* View toggle tabs */}
           <div className="flex items-center gap-0.5 bg-accent/40 rounded p-0.5">
             <button

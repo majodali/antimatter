@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Moon, Sun, Settings, User, ChevronDown, ExternalLink, Check, Lock } from 'lucide-react';
+import { Moon, Sun, Settings, User, ChevronDown, ExternalLink, Check, Lock, Hammer, Server } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useTheme } from '../theme-provider';
 import { useProjectStore } from '@/stores/projectStore';
@@ -7,7 +7,50 @@ import { useFileStore } from '@/stores/fileStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useTerminalStore } from '@/stores/terminalStore';
+import { useUIStore, type Perspective } from '@/stores/uiStore';
 import { isLockedByOther } from '@/lib/tab-lock';
+import { cn } from '@/lib/utils';
+
+/**
+ * Two-state segmented control for the active perspective.
+ * See `docs/contexts.md` § Perspectives — Build vs Ops drives which
+ * axis is primary in the layout.
+ *
+ * Today the toggle is a placeholder for future filtering/highlighting
+ * behaviour — it persists user preference but no panel reacts to it
+ * yet. The real estate is claimed where the selector will live so
+ * future work doesn't churn the header.
+ */
+function PerspectiveToggle() {
+  const perspective = useUIStore((s) => s.perspective);
+  const setPerspective = useUIStore((s) => s.setPerspective);
+
+  const Btn = ({ value, label, icon: Icon, hint }: { value: Perspective; label: string; icon: typeof Hammer; hint: string }) => (
+    <button
+      type="button"
+      onClick={() => setPerspective(value)}
+      title={hint}
+      className={cn(
+        'flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors',
+        perspective === value
+          ? 'bg-background text-foreground shadow-sm'
+          : 'text-muted-foreground hover:text-foreground',
+      )}
+      data-testid={`perspective-${value}`}
+      aria-pressed={perspective === value}
+    >
+      <Icon className="h-3 w-3" />
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="flex items-center gap-0.5 bg-accent/40 rounded p-0.5" role="group" aria-label="Perspective">
+      <Btn value="build" label="Build" icon={Hammer} hint="Build perspective: work context is primary." />
+      <Btn value="ops" label="Ops" icon={Server} hint="Ops perspective: runtime context is primary." />
+    </div>
+  );
+}
 
 export function Header() {
   const { theme, setTheme } = useTheme();
@@ -118,6 +161,7 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-2">
+        <PerspectiveToggle />
         <Button variant="ghost" size="icon" onClick={toggleTheme}>
           {theme === 'dark' ? (
             <Sun className="h-4 w-4" />
