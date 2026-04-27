@@ -46,8 +46,8 @@ export type {
   RequirementKind,
 } from './parse.js';
 
-export { validateContexts, assertValidContexts } from './validate.js';
-export type { ValidationError } from './validate.js';
+export { validateContexts, assertValidContexts, validateRequirements } from './validate.js';
+export type { ValidationError, RequirementCatalogs } from './validate.js';
 
 export { deriveLifecycleStatuses, LIFECYCLE_STATUSES } from './lifecycle.js';
 export type {

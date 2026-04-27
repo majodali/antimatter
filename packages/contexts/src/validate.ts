@@ -25,20 +25,22 @@ import {
   KIND_WORK,
   KIND_RUNTIME,
 } from './metamodel.js';
-import type { UnresolvedReference } from './parse.js';
+import type { UnresolvedReference, ContextRequirement } from './parse.js';
 
 export interface ValidationError {
   readonly code:
-    | 'metamodel'              // simple-modeling's built-in check failed
-    | 'targets-source-kind'    // `targets` from a non-work context
-    | 'targets-target-kind'    // `targets` to a non-runtime context
-    | 'depends-source-kind'    // `depends_on` from a non-work context
-    | 'depends-target-kind'    // `depends_on` to a non-work context
-    | 'self-reference'         // self-loop on targets/depends_on
-    | 'depends-cycle'          // cycle in depends_on graph
-    | 'multiple-roots'         // more than one Context with no parent
-    | 'no-root'                // no Context with zero parents
-    | 'unresolved-reference';  // `targets X` / `depends X` with no matching Context
+    | 'metamodel'                 // simple-modeling's built-in check failed
+    | 'targets-source-kind'       // `targets` from a non-work context
+    | 'targets-target-kind'       // `targets` to a non-runtime context
+    | 'depends-source-kind'       // `depends_on` from a non-work context
+    | 'depends-target-kind'       // `depends_on` to a non-work context
+    | 'self-reference'            // self-loop on targets/depends_on
+    | 'depends-cycle'             // cycle in depends_on graph
+    | 'multiple-roots'            // more than one Context with no parent
+    | 'no-root'                   // no Context with zero parents
+    | 'unresolved-reference'      // `targets X` / `depends X` with no matching Context
+    | 'unresolved-rule-reference' // `requires rule X` with no matching declared rule
+    | 'unresolved-test-reference';// `requires test X` with no matching test id
   readonly message: string;
   /** Optional context names involved in the error (for UI display). */
   readonly context?: string;
@@ -161,6 +163,61 @@ export function assertValidContexts(
     const lines = errors.map(e => `  - [${e.code}] ${e.message}`).join('\n');
     throw new Error(`Context model validation failed:\n${lines}`);
   }
+}
+
+/**
+ * Catalogs of valid rule and test identifiers, used to validate
+ * `requires rule X` / `requires test X` lines.
+ *
+ * For rules, the set should include BOTH the workflow runtime's
+ * canonical id (slugified, e.g. `bundle-api-lambda`) AND the display
+ * name as written in `wf.rule(name, ...)` (e.g. `Bundle API Lambda`),
+ * so authors can write either form. The caller is responsible for
+ * populating both forms.
+ */
+export interface RequirementCatalogs {
+  /** Set of every valid rule identifier (display names + slug ids). */
+  readonly ruleIds?: ReadonlySet<string>;
+  /** Set of every valid test id (e.g. `FT-M3-001`). */
+  readonly testIds?: ReadonlySet<string>;
+}
+
+/**
+ * Validate `requires rule X` / `requires test X` lines against the
+ * runtime catalogs. Returns one error per requirement whose target
+ * isn't found in the corresponding catalog.
+ *
+ * This is a SEPARATE function from `validateContexts` because it needs
+ * runtime data (the workflow rule registry, the test results history)
+ * that the contexts package doesn't own. Callers (typically
+ * ContextLifecycleStore on the server) merge these errors with the
+ * structural errors from `validateContexts`.
+ *
+ * Catalogs that are `undefined` are not validated — useful when only
+ * one of (rules, tests) is available.
+ */
+export function validateRequirements(
+  requirements: ReadonlyMap<string, readonly ContextRequirement[]>,
+  catalogs: RequirementCatalogs,
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+
+  for (const [contextId, reqs] of requirements) {
+    for (const req of reqs) {
+      const catalog = req.kind === 'rule' ? catalogs.ruleIds : catalogs.testIds;
+      // No catalog supplied for this kind → skip (caller hasn't wired it).
+      if (!catalog) continue;
+      if (catalog.has(req.id)) continue;
+      errors.push({
+        code: req.kind === 'rule' ? 'unresolved-rule-reference' : 'unresolved-test-reference',
+        message: `Context '${contextId}' requires ${req.kind} '${req.id}', but no ${req.kind} with that name is declared`,
+        context: contextId,
+        target: req.id,
+      });
+    }
+  }
+
+  return errors;
 }
 
 function findDependsCycles(model: Model): ValidationError[] {

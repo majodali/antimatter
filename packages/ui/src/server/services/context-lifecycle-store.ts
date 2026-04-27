@@ -29,6 +29,7 @@ import type { WorkspaceEnvironment } from '@antimatter/workspace';
 import {
   CONTEXT_NODE_TYPE,
   deriveLifecycleStatuses,
+  validateRequirements,
   type LifecycleStatus,
   type LifecycleTransition,
 } from '@antimatter/contexts';
@@ -37,6 +38,7 @@ import type {
   ContextLifecycleSnapshot,
   ContextLifecycleTransition,
   ContextRequirementSnapshot,
+  ContextValidationError,
 } from '../../shared/contexts-types.js';
 
 const STORAGE_PATH = '.antimatter-cache/context-lifecycle.json';
@@ -96,6 +98,7 @@ const PERSISTENCE_VERSION = 1;
 export class ContextLifecycleStore {
   private statuses = new Map<string, LifecycleStatus>();
   private requirementResults = new Map<string, ContextRequirementSnapshot[]>();
+  private validationErrors: ContextValidationError[] = [];
   private subscribers = new Set<(snap: ContextLifecycleSnapshot) => void>();
   private recomputeTimer: ReturnType<typeof setTimeout> | null = null;
   private contextStoreUnsub?: () => void;
@@ -154,9 +157,12 @@ export class ContextLifecycleStore {
 
     if (!parsed) {
       // No DSL — clear everything if we had data, then notify.
-      const had = this.statuses.size > 0 || this.requirementResults.size > 0;
+      const had = this.statuses.size > 0
+        || this.requirementResults.size > 0
+        || this.validationErrors.length > 0;
       this.statuses.clear();
       this.requirementResults.clear();
+      this.validationErrors = [];
       if (had) {
         await this.persist();
         this.notify();
@@ -171,11 +177,9 @@ export class ContextLifecycleStore {
     // to the same rule. The id form wins if a name happens to collide
     // with a different rule's id.
     const ruleIdByName = new Map<string, string>();
-    const validRuleIds = new Set<string>();
     for (const decl of this.config.getRuleDeclarations()) {
       ruleIdByName.set(decl.name, decl.id);
       ruleIdByName.set(decl.id, decl.id);
-      validRuleIds.add(decl.id);
     }
 
     // Build test-id → pass map (latest-wins is the caller's responsibility).
@@ -185,6 +189,17 @@ export class ContextLifecycleStore {
       testPassMap.set(t.id, t.pass);
       validTestIds.add(t.id);
     }
+
+    // Validate requires lines against the runtime catalogs. Surfaces
+    // typos like `requires rule Bundle API Lambdaa` as user-visible
+    // errors. Does NOT affect the lifecycle status derivation —
+    // unresolved requires lines still produce passing=false on their
+    // requirement snapshot, so the status logic is consistent. The
+    // errors are an additional, clearer signal for the UI.
+    const runtimeValidationErrors = validateRequirements(requirements, {
+      ruleIds: new Set(ruleIdByName.keys()),
+      testIds: validTestIds,
+    });
 
     // Build per-context requirement snapshots AND per-requirement-id pass
     // maps for the derivation function. The derivation function looks up
@@ -227,9 +242,11 @@ export class ContextLifecycleStore {
 
     const statusesChanged = !mapsEqual(this.statuses, nextStatuses);
     const reqsChanged = !requirementsMapsEqual(this.requirementResults, requirementSnapshots);
+    const errorsChanged = !validationErrorsEqual(this.validationErrors, runtimeValidationErrors);
 
     this.statuses = new Map(nextStatuses);
     this.requirementResults = requirementSnapshots;
+    this.validationErrors = runtimeValidationErrors;
 
     // Persist whenever statuses change (regression detection depends on it).
     if (statusesChanged) {
@@ -252,7 +269,7 @@ export class ContextLifecycleStore {
       }
     }
 
-    if (statusesChanged || reqsChanged) this.notify();
+    if (statusesChanged || reqsChanged || errorsChanged) this.notify();
   }
 
   /** Get the current snapshot (cheap; no I/O). */
@@ -262,6 +279,7 @@ export class ContextLifecycleStore {
       requirements: Object.fromEntries(
         [...this.requirementResults.entries()].map(([k, v]) => [k, [...v]]),
       ),
+      validationErrors: [...this.validationErrors],
       derivedAt: new Date().toISOString(),
     };
   }
@@ -335,6 +353,20 @@ function requirementsMapsEqual(
           av[i].passing !== bv[i].passing ||
           av[i].unresolved !== bv[i].unresolved) return false;
     }
+  }
+  return true;
+}
+
+function validationErrorsEqual(
+  a: readonly ContextValidationError[],
+  b: readonly ContextValidationError[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].code !== b[i].code ||
+        a[i].message !== b[i].message ||
+        a[i].context !== b[i].context ||
+        a[i].target !== b[i].target) return false;
   }
   return true;
 }

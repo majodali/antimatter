@@ -207,7 +207,9 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
     if (!ctx) return null;
     const lifecycle = get().contextLifecycle;
     if (!lifecycle) return ctx;
-    // Enrich: overlay status + live requirement pass/fail.
+    // Enrich: overlay status + live requirement pass/fail; concatenate
+    // structural errors (parse-time) with runtime validation errors
+    // (catalog-resolution).
     const enrichedNodes: ContextNodeSnapshot[] = ctx.nodes.map((n) => {
       const status = lifecycle.statuses[n.id];
       const liveReqs = lifecycle.requirements[n.id];
@@ -219,7 +221,11 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
           : n.requirements,
       };
     });
-    return { ...ctx, nodes: enrichedNodes };
+    return {
+      ...ctx,
+      nodes: enrichedNodes,
+      errors: [...ctx.errors, ...lifecycle.validationErrors],
+    };
   },
 
   getRuntimeContexts: () => {

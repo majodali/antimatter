@@ -54,7 +54,9 @@ export interface ContextValidationError {
     | 'depends-cycle'
     | 'multiple-roots'
     | 'no-root'
-    | 'unresolved-reference';
+    | 'unresolved-reference'
+    | 'unresolved-rule-reference'
+    | 'unresolved-test-reference';
   message: string;
   context?: string;
   target?: string;
@@ -117,6 +119,14 @@ export interface ContextLifecycleSnapshot {
   /** Context id → live requirement pass/fail (overlays placeholder
    *  data in ContextSnapshot.nodes[].requirements). */
   requirements: Record<string, ContextRequirementSnapshot[]>;
+  /**
+   * Validation errors that need runtime catalogs (rule registry, test
+   * results) to detect — `unresolved-rule-reference` /
+   * `unresolved-test-reference` for typos in `requires` lines, etc.
+   * The client merges these with `ContextSnapshot.errors` to give a
+   * single combined error list.
+   */
+  validationErrors: ContextValidationError[];
   /** ISO timestamp of last derivation. */
   derivedAt: string;
 }

@@ -304,3 +304,77 @@ describe('ContextLifecycleStore — subscribe', () => {
     expect(cb.mock.callCount()).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Validation errors (catalog-aware)
+// ---------------------------------------------------------------------------
+
+describe('ContextLifecycleStore — validation errors', () => {
+  it('reports unresolved-rule-reference for typo in requires rule', async () => {
+    const dsl = `work root "R"
+  requires rule Bundle API Lambdaa
+`;
+    const { lifecycle } = await build({
+      dsl,
+      ruleDeclarations: [{ id: 'bundle-api-lambda', name: 'Bundle API Lambda' }],
+    });
+    const snap = lifecycle.getSnapshot();
+    expect(snap.validationErrors.length).toBe(1);
+    expect(snap.validationErrors[0].code).toBe('unresolved-rule-reference');
+    expect(snap.validationErrors[0].target).toBe('Bundle API Lambdaa');
+    // The corresponding requirement also has unresolved=true (per-requirement signal).
+    expect(snap.requirements.root[0].unresolved).toBe(true);
+  });
+
+  it('reports unresolved-test-reference for unknown test id', async () => {
+    const dsl = `work root "R"
+  requires test FT-DOES-NOT-EXIST
+`;
+    const { lifecycle } = await build({
+      dsl,
+      testPasses: [{ id: 'FT-M1-001', pass: true }],
+    });
+    const snap = lifecycle.getSnapshot();
+    expect(snap.validationErrors.length).toBe(1);
+    expect(snap.validationErrors[0].code).toBe('unresolved-test-reference');
+    expect(snap.validationErrors[0].target).toBe('FT-DOES-NOT-EXIST');
+  });
+
+  it('produces no validation errors when all requirements resolve', async () => {
+    const dsl = `work root "R"
+  requires rule build:full
+  requires test FT-M1-001
+`;
+    const { lifecycle } = await build({
+      dsl,
+      ruleDeclarations: [{ id: 'build:full', name: 'build:full' }],
+      testPasses: [{ id: 'FT-M1-001', pass: true }],
+    });
+    const snap = lifecycle.getSnapshot();
+    expect(snap.validationErrors).toEqual([]);
+  });
+
+  it('clears validation errors when DSL is removed', async () => {
+    const dsl = `work root "R"
+  requires rule typo
+`;
+    const env = makeEnv({ '.antimatter/contexts.dsl': dsl });
+    const ctxStore = new ContextStore(env);
+    await ctxStore.initialize();
+    const lifecycle = new ContextLifecycleStore({
+      env, contextStore: ctxStore,
+      getRuleDeclarations: () => [],
+      getRuleResult: () => undefined,
+      getTestPasses: () => [],
+    });
+    await lifecycle.initialize();
+    expect(lifecycle.getSnapshot().validationErrors.length).toBe(1);
+
+    // Remove the DSL file; reload context store; recompute lifecycle.
+    delete (env as any)._store['.antimatter/contexts.dsl'];
+    (env.exists as any).mockImplementation(async (path: string) => path in (env as any)._store);
+    await ctxStore.reload();
+    await lifecycle.recomputeNow();
+    expect(lifecycle.getSnapshot().validationErrors).toEqual([]);
+  });
+});
