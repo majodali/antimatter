@@ -663,6 +663,7 @@ ExecStartPre=/bin/bash -c '. /opt/antimatter/config.env && aws s3 cp "s3://$PROJ
 ExecStart=/usr/bin/node /opt/antimatter/workspace-server.js
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal
 

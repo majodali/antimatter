@@ -742,17 +742,62 @@ function reapOrphans(): { sockets: string[]; pids: number[] } {
     }
   } catch { /* /tmp missing, skip */ }
 
-  // 2. Orphaned worker processes. On Linux, pgrep finds them by name.
-  try {
-    const out = execSync('pgrep -f project-worker.js', { encoding: 'utf-8' });
-    const pids = out.trim().split('\n').filter(Boolean).map(p => parseInt(p, 10))
-      .filter(p => p && p !== process.pid);
-    for (const pid of pids) {
-      try { process.kill(pid, 'SIGKILL'); reaped.pids.push(pid); } catch { /* ignore */ }
-    }
-  } catch { /* pgrep found nothing or not available */ }
+  // 2. Orphaned worker AND stuck Router processes from a prior generation.
+  //    pgrep matches by full cmdline; we filter out our own PID so we never self-kill.
+  for (const pattern of ['project-worker.js', 'workspace-server.js']) {
+    try {
+      const out = execSync(`pgrep -f ${pattern}`, { encoding: 'utf-8' });
+      const pids = out.trim().split('\n').filter(Boolean).map(p => parseInt(p, 10))
+        .filter(p => p && p !== process.pid);
+      for (const pid of pids) {
+        try { process.kill(pid, 'SIGKILL'); reaped.pids.push(pid); } catch { /* ignore */ }
+      }
+    } catch { /* pgrep found nothing or not available */ }
+  }
 
   return reaped;
+}
+
+/**
+ * Bind the HTTP server to PORT, retrying once on EADDRINUSE after killing
+ * whichever process holds the port. The reaper covers most cases by name
+ * pattern; this is a last-resort heal-in-place against any other holder.
+ */
+async function listenWithRetry(port: number, maxRetries = 1): Promise<void> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (err: NodeJS.ErrnoException) => {
+          server.removeListener('listening', onListening);
+          reject(err);
+        };
+        const onListening = () => {
+          server.removeListener('error', onError);
+          resolve();
+        };
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(port);
+      });
+      return;
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== 'EADDRINUSE' || attempt === maxRetries) throw err;
+      console.warn(`[workspace-server] Port ${port} in use — searching for holder`);
+      try {
+        const out = execSync(`ss -ltnp 'sport = :${port}'`, { encoding: 'utf-8' });
+        const m = out.match(/pid=(\d+)/);
+        if (m) {
+          const pid = parseInt(m[1], 10);
+          if (pid && pid !== process.pid) {
+            console.warn(`[workspace-server] Killing PID ${pid} holding port ${port}`);
+            try { process.kill(pid, 'SIGKILL'); } catch { /* ignore */ }
+          }
+        }
+      } catch { /* ss failed; fall through to delay + retry */ }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
 }
 
 async function startup() {
@@ -767,30 +812,30 @@ async function startup() {
     await initLegacyMode();
   }
 
-  server.listen(PORT, async () => {
-    console.log(`[workspace-server] Listening on port ${PORT}`);
-    emitActivity({
-      source: 'router', kind: Kinds.RouterStart, level: 'info',
-      message: `Router listening on port ${PORT}`,
-      data: { port: PORT, mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy' },
-    });
-    if (reaped.sockets.length > 0 || reaped.pids.length > 0) {
-      emitActivity({
-        source: 'router', kind: Kinds.RouterReapOrphans, level: 'warn',
-        message: `Reaped orphans at startup: ${reaped.sockets.length} sockets, ${reaped.pids.length} processes`,
-        data: reaped,
-      });
-    }
-    await globalEventLogger.emit('workspace.ready', 'workspace', 'info',
-      'Workspace server ready', { port: PORT, mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy', uptime: process.uptime() });
-
-    if (PROJECT_ID) {
-      console.log(`[workspace-server] Primary project: ${PROJECT_ID} (lazy init on first request)`);
-    }
+  await listenWithRetry(PORT);
+  console.log(`[workspace-server] Listening on port ${PORT}`);
+  emitActivity({
+    source: 'router', kind: Kinds.RouterStart, level: 'info',
+    message: `Router listening on port ${PORT}`,
+    data: { port: PORT, mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy' },
   });
+  if (reaped.sockets.length > 0 || reaped.pids.length > 0) {
+    emitActivity({
+      source: 'router', kind: Kinds.RouterReapOrphans, level: 'warn',
+      message: `Reaped orphans at startup: ${reaped.sockets.length} sockets, ${reaped.pids.length} processes`,
+      data: reaped,
+    });
+  }
+  await globalEventLogger.emit('workspace.ready', 'workspace', 'info',
+    'Workspace server ready', { port: PORT, mode: CHILD_PROCESS_MODE ? 'child-process' : 'legacy', uptime: process.uptime() });
+
+  if (PROJECT_ID) {
+    console.log(`[workspace-server] Primary project: ${PROJECT_ID} (lazy init on first request)`);
+  }
 }
 
-// Graceful shutdown
+// Graceful shutdown — bounded by a hard 30s outer timeout so systemd never
+// has to escalate to SIGKILL of the cgroup just because cleanup hung.
 process.on('SIGTERM', async () => {
   console.log('[workspace-server] SIGTERM received — shutting down');
   globalEventLogger.info('workspace', 'SIGTERM received — shutting down');
@@ -799,20 +844,29 @@ process.on('SIGTERM', async () => {
     message: 'Router shutting down (SIGTERM)',
   });
 
-  if (CHILD_PROCESS_MODE) {
-    for (const child of children.values()) {
-      await child.shutdown();
-    }
-  } else {
-    const contexts = (globalThis as any).__legacyProjectContexts as Map<string, any> | undefined;
-    if (contexts) {
-      for (const ctx of contexts.values()) {
-        await ctx.shutdown();
+  const HARD_TIMEOUT_MS = 30_000;
+  const forceExit = setTimeout(() => {
+    console.error(`[workspace-server] Shutdown exceeded ${HARD_TIMEOUT_MS}ms — forcing exit`);
+    process.exit(1);
+  }, HARD_TIMEOUT_MS);
+  forceExit.unref();
+
+  try {
+    if (CHILD_PROCESS_MODE) {
+      // Parallel — each ChildProcessManager.shutdown() has its own 10s internal timeout.
+      await Promise.all([...children.values()].map(c => c.shutdown()));
+    } else {
+      const contexts = (globalThis as any).__legacyProjectContexts as Map<string, any> | undefined;
+      if (contexts) {
+        await Promise.all([...contexts.values()].map(ctx => ctx.shutdown()));
       }
     }
+    await globalEventLogger.shutdown();
+  } catch (err) {
+    console.error('[workspace-server] Error during shutdown:', err);
   }
 
-  await globalEventLogger.shutdown();
+  clearTimeout(forceExit);
   process.exit(0);
 });
 

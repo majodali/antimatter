@@ -264,4 +264,12 @@ process.on('unhandledRejection', (reason) => {
   sendToParent({ type: 'error', message });
 });
 
+// Handle systemd cgroup-wide SIGTERM directly (in addition to the parent's
+// 'shutdown' IPC). Closing httpServer first sends FIN to clients, reducing
+// TIME-WAIT pileup that can cause Router rebind contention.
+process.on('SIGTERM', async () => {
+  log('info', 'SIGTERM received — shutting down');
+  await shutdown();
+});
+
 log('info', 'Worker process started, waiting for initialize message...');
