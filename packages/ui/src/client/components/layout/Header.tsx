@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Moon, Sun, Settings, User, ChevronDown, ExternalLink, Check, Lock, Hammer, Server } from 'lucide-react';
+import { Moon, Sun, Settings, User, ChevronDown, ExternalLink, Check, Lock, Hammer, Server, LogOut } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useTheme } from '../theme-provider';
 import { useProjectStore } from '@/stores/projectStore';
@@ -10,6 +10,7 @@ import { useTerminalStore } from '@/stores/terminalStore';
 import { useUIStore, type Perspective } from '@/stores/uiStore';
 import { isLockedByOther } from '@/lib/tab-lock';
 import { cn } from '@/lib/utils';
+import { signOut, getUserEmail } from '@/lib/auth';
 
 /**
  * Two-state segmented control for the active perspective.
@@ -58,6 +59,26 @@ export function Header() {
   const currentProject = projects.find((p) => p.id === currentProjectId);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getUserEmail().then((email) => {
+      if (!cancelled) setUserEmail(email);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleSignOut = async () => {
+    setUserMenuOpen(false);
+    try {
+      await signOut();
+    } catch (err) {
+      console.error('[Header] Sign-out failed:', err);
+    }
+  };
 
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
@@ -99,6 +120,17 @@ export function Header() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [dropdownOpen]);
+
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [userMenuOpen]);
 
   return (
     <header className="h-12 px-4 flex items-center justify-between border-b border-border bg-card">
@@ -172,9 +204,38 @@ export function Header() {
         <Button variant="ghost" size="icon">
           <Settings className="h-4 w-4" />
         </Button>
-        <Button variant="ghost" size="icon">
-          <User className="h-4 w-4" />
-        </Button>
+        <div className="relative" ref={userMenuRef}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setUserMenuOpen((v) => !v)}
+            title={userEmail ?? 'Account'}
+            data-testid="user-menu-button"
+          >
+            <User className="h-4 w-4" />
+          </Button>
+          {userMenuOpen && (
+            <div
+              className="absolute top-full right-0 mt-1 w-56 bg-popover border border-border rounded-md shadow-lg z-50 py-1"
+              data-testid="user-menu-content"
+            >
+              {userEmail && (
+                <div className="px-3 py-1.5 text-xs text-muted-foreground border-b border-border truncate" title={userEmail}>
+                  {userEmail}
+                </div>
+              )}
+              <button
+                type="button"
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-foreground hover:bg-accent"
+                onClick={handleSignOut}
+                data-testid="sign-out-button"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                Sign out
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

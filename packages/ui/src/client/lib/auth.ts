@@ -73,4 +73,18 @@ export async function getAccessToken(): Promise<string | null> {
   }
 }
 
+/**
+ * Read the user's email from the ID token payload, or null if unavailable.
+ * The email scope is requested in initAuth so the claim is present.
+ */
+export async function getUserEmail(): Promise<string | null> {
+  try {
+    const session = await fetchAuthSession();
+    const email = session.tokens?.idToken?.payload?.email;
+    return typeof email === 'string' ? email : null;
+  } catch {
+    return null;
+  }
+}
+
 export { signOut, getCurrentUser, signInWithRedirect, Hub };
