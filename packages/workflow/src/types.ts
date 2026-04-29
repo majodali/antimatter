@@ -414,6 +414,12 @@ export interface Workflow<S> {
    * Pass an empty array to clear previous errors from this tool.
    */
   reportErrors(toolId: string, errors: ProjectError[]): void;
+
+  /** Absolute path to the project workspace root on the filesystem. */
+  readonly projectRoot: string;
+
+  /** Server-provided utilities (S3, CloudFront, etc.) injected by the workflow manager. */
+  readonly utils: Record<string, unknown>;
 }
 
 // ----------------------------------------------------------------------------

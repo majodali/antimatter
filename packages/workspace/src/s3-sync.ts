@@ -6,9 +6,8 @@
  * sync (only transfer files that actually changed).
  */
 
-import { readFile, writeFile, mkdir, readdir, unlink, stat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, dirname, relative, posix } from 'node:path';
+import { readFile, writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
+import { join, dirname, relative } from 'node:path';
 import type { S3Client } from '@aws-sdk/client-s3';
 import {
   ListObjectsV2Command,
