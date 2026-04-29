@@ -9,20 +9,33 @@
  */
 import { Router } from 'express';
 import type { ContextStore } from '../services/context-store.js';
+import {
+  enrichContextSnapshot,
+  type ContextLifecycleSnapshot,
+} from '../../shared/contexts-types.js';
 
-export function createContextsRouter(contextStore: ContextStore): Router {
+/**
+ * REST surface over the parsed contexts model.
+ *
+ * When `getLifecycle` is provided, responses are enriched with the
+ * runtime lifecycle data (per-context status + live requirement
+ * pass/fail + catalog-resolution validation errors). External callers
+ * (Automation API, MCP) get the same merged view the IDE renders.
+ */
+export function createContextsRouter(
+  contextStore: ContextStore,
+  getLifecycle?: () => ContextLifecycleSnapshot | null,
+): Router {
   const router = Router();
 
-  // GET / — current snapshot.
   router.get('/', (_req, res) => {
-    res.json(contextStore.getSnapshot());
+    res.json(enrichContextSnapshot(contextStore.getSnapshot(), getLifecycle?.()));
   });
 
-  // POST /reload — force re-parse from disk (idempotent).
   router.post('/reload', async (_req, res) => {
     try {
       const snap = await contextStore.reload();
-      res.json(snap);
+      res.json(enrichContextSnapshot(snap, getLifecycle?.()));
     } catch (err) {
       res.status(500).json({
         error: 'Failed to reload contexts',

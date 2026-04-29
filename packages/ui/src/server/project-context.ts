@@ -1130,7 +1130,10 @@ export class ProjectContext {
     router.use('/api/contexts', (req, res, next) => {
       // Lazy: contextStore exists only after initialize() completes.
       if (this.contextStore) {
-        createContextsRouter(this.contextStore)(req, res, next);
+        createContextsRouter(
+          this.contextStore,
+          () => this.contextLifecycleStore?.getSnapshot() ?? null,
+        )(req, res, next);
       } else {
         res.status(503).json({ error: 'Project not yet initialized' });
       }

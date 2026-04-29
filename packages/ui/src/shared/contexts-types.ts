@@ -142,3 +142,37 @@ export interface ContextLifecycleTransition {
   /** ISO timestamp of the transition. */
   at: string;
 }
+
+/**
+ * Merge a bare `ContextSnapshot` (parser output, requirements marked
+ * `unresolved`) with the runtime lifecycle data into the enriched view
+ * the UI renders. Each node gets `lifecycleStatus` and live
+ * `requirements` (rule/test resolution + pass state) when present;
+ * structural and runtime validation errors are concatenated.
+ *
+ * Used by the server's `/api/contexts` route to ship a fully resolved
+ * snapshot to external callers (Automation API, MCP), and by the client
+ * for the same merge over the WebSocket-delivered split frames.
+ */
+export function enrichContextSnapshot(
+  snapshot: ContextSnapshot,
+  lifecycle: ContextLifecycleSnapshot | null | undefined,
+): ContextSnapshot {
+  if (!lifecycle) return snapshot;
+  const enrichedNodes: ContextNodeSnapshot[] = snapshot.nodes.map((n) => {
+    const status = lifecycle.statuses[n.id];
+    const liveReqs = lifecycle.requirements[n.id];
+    return {
+      ...n,
+      lifecycleStatus: status ?? n.lifecycleStatus,
+      requirements: liveReqs && liveReqs.length === n.requirements.length
+        ? liveReqs
+        : n.requirements,
+    };
+  });
+  return {
+    ...snapshot,
+    nodes: enrichedNodes,
+    errors: [...snapshot.errors, ...lifecycle.validationErrors],
+  };
+}
