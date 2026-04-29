@@ -55,6 +55,10 @@ workspace-test-output.json
 # Claude Code local settings
 .claude/
 
+# Auth tokens (canonical location is ~/.config/antimatter/tokens.json — never commit)
+antimatter-tokens.json
+_test_token.txt
+
 # AI agent generated rules
 .cursor/rules/nx-rules.mdc
 .github/instructions/nx.instructions.md

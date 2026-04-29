@@ -7,7 +7,7 @@
       "env": {
         "ANTIMATTER_BASE_URL": "https://ide.antimatter.solutions",
         "ANTIMATTER_PROJECT_ID": "4f5a88cf-37b2-4304-ba99-7e1ad1432bf8",
-        "ANTIMATTER_TOKEN_FILE": "./antimatter-tokens.json"
+        "ANTIMATTER_TOKEN_FILE": "/home/matthew/.config/antimatter/tokens.json"
       }
     }
   }
