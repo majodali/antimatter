@@ -155,6 +155,12 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'client.navigate', execution: 'browser', description: 'Navigate to a URL or IDE view' },
   { command: 'client.state', execution: 'browser', description: 'Get comprehensive UI state snapshot (editor, files, problems, workflow, git, tests, terminal)' },
 
+  // Project context model (new defineX-based model)
+  { command: 'contexts.model.get', execution: 'server', description: 'Get the assembled project context model snapshot' },
+  { command: 'contexts.model.reload', execution: 'server', description: 'Re-load the project context model from .antimatter/*.ts' },
+  { command: 'contexts.templates.list', execution: 'server', description: 'List available cold-start templates' },
+  { command: 'contexts.templates.apply', execution: 'server', description: 'Apply a template — write its files into the project. Refuses to overwrite.' },
+
   // Meta
   { command: 'commands.list', execution: 'server', description: 'List all available commands' },
 ] as const;

@@ -123,6 +123,20 @@ export {
 export { deriveProjectLifecycle, validationKey } from './derive.js';
 export type { DeriveLifecycleInput, DeriveLifecycleOutput } from './derive.js';
 
+// Templates
+export {
+  listTemplates,
+  getTemplate,
+  renderTemplate,
+} from './templates.js';
+export type {
+  TemplateParam,
+  TemplateMetadata,
+  RenderedTemplate,
+  TemplateRender,
+  TemplateDefinition,
+} from './templates.js';
+
 // ============================================================================
 // LEGACY surface (pre-Phase-0; retired in Phase 1+)
 // ============================================================================

@@ -29,7 +29,8 @@ export type FeatureArea =
   | 'cross-tab'
   | 'test-infra'
   | 'projects'
-  | 'm1';
+  | 'm1'
+  | 'contexts';
 
 /**
  * A single functional test.

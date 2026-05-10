@@ -147,7 +147,22 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-FOUND-084 | empty / missing project handled gracefully | test-passing |
 | FT-FOUND-085 | compile error in a single file is surfaced and isolated | test-passing |
 
-**Upcoming phases** *(test areas not yet defined)*: Phase 1 — Cold start (FT-COLDSTART-***), Phase 2 — Decompose / manual authoring (FT-DECOMP-***), Phase 3 — Focused build with fingerprints (FT-FOCUS-***), Phase 4 — Status check (FT-STATUS-***), Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***).
+**Phase 1 — Cold start** *(test-implemented; passes after deploy)*: empty-state UI, template registry, automation commands (`contexts.model.get`, `contexts.templates.list`, `contexts.templates.apply`), basic context tree render, ProjectContextModelStore on the workspace server. Templates: `empty`, `json-validator`.
+
+| Test ID | Name | Status |
+|---------|------|--------|
+| FT-COLDSTART-001 | listTemplates returns metadata for each registered template | test-passing |
+| FT-COLDSTART-002 | getTemplate / renderTemplate basics | test-passing |
+| FT-COLDSTART-003 | empty template renders an empty .antimatter directory marker | test-passing |
+| FT-COLDSTART-004 | json-validator template renders three .antimatter/*.ts files | test-passing |
+| FT-COLDSTART-005 | rendered json-validator template assembles into a valid model | test-passing |
+| FT-COLDSTART-006 | empty template produces an empty model with no errors | test-passing |
+| FT-COLDSTART-101 | Empty project — contexts.model.get reports present: false | test-implemented |
+| FT-COLDSTART-102 | contexts.templates.list returns registered templates | test-implemented |
+| FT-COLDSTART-103 | Apply json-validator template — model populated with expected nodes | test-implemented |
+| FT-COLDSTART-104 | contexts.templates.apply refuses to overwrite, succeeds with overwrite flag | test-implemented |
+
+**Upcoming phases** *(test areas not yet defined)*: Phase 2 — Decompose / manual authoring (FT-DECOMP-***), Phase 3 — Focused build with fingerprints (FT-FOCUS-***), Phase 4 — Status check (FT-STATUS-***), Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***).
 
 ---
 

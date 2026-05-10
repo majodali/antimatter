@@ -6,14 +6,15 @@
  */
 
 import { useState } from 'react';
-import { Terminal as TerminalIcon, AlertCircle, TestTube2 } from 'lucide-react';
+import { Terminal as TerminalIcon, AlertCircle, TestTube2, Boxes } from 'lucide-react';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { ProblemsPanel } from '../problems/ProblemsPanel';
 import { TestResultsPanel } from '../tests/TestResultsPanel';
+import { ContextsPanel } from '../contexts/ContextsPanel';
 import { useApplicationStore } from '@/stores/applicationStore';
 import { useTestResultStore } from '@/stores/testResultStore';
 
-type BottomTab = 'terminal' | 'problems' | 'tests';
+type BottomTab = 'terminal' | 'problems' | 'tests' | 'contexts';
 
 export function BottomPanelTabs() {
   const [activeTab, setActiveTab] = useState<BottomTab>('terminal');
@@ -50,6 +51,14 @@ export function BottomPanelTabs() {
           <TestTube2 className="h-3.5 w-3.5" />
           Tests
         </TabButton>
+        <TabButton
+          active={activeTab === 'contexts'}
+          onClick={() => setActiveTab('contexts')}
+          testId="bottom-panel-contexts-tab"
+        >
+          <Boxes className="h-3.5 w-3.5" />
+          Contexts
+        </TabButton>
       </div>
 
       {/* Panel content — all stay mounted, toggled with CSS */}
@@ -62,6 +71,9 @@ export function BottomPanelTabs() {
         </div>
         <div className={activeTab === 'tests' ? 'h-full' : 'h-0 overflow-hidden'}>
           <TestResultsPanel />
+        </div>
+        <div className={activeTab === 'contexts' ? 'h-full' : 'h-0 overflow-hidden'}>
+          <ContextsPanel />
         </div>
       </div>
     </div>

@@ -59,6 +59,7 @@ import { DeployedResourceStore } from './services/deployed-resource-store.js';
 import { ActivityLog } from './services/activity-log.js';
 import { ContextStore } from './services/context-store.js';
 import { ContextLifecycleStore } from './services/context-lifecycle-store.js';
+import { ProjectContextModelStore } from './services/project-context-model-store.js';
 import { Kinds } from '../shared/activity-types.js';
 import {
   COMMAND_TIMEOUTS,
@@ -509,6 +510,13 @@ export class ProjectContext {
   deployedResourceStore!: DeployedResourceStore;
   contextStore!: ContextStore;
   contextLifecycleStore!: ContextLifecycleStore;
+  /**
+   * Server-side cache for the NEW (Phase 0+) project context model
+   * loaded from `.antimatter/{resources,contexts,build}.ts`. Coexists
+   * with `contextStore` (legacy DSL) until the new model fully
+   * replaces it.
+   */
+  projectContextModelStore!: ProjectContextModelStore;
   private eventLog?: import('./event-log.js').EventLog;
   /** Unified activity log for worker/workflow/pty/service events. Created during initialize(). */
   activityLog?: import('./services/activity-log.js').ActivityLog;
@@ -700,6 +708,12 @@ export class ProjectContext {
         state: { contexts: snap },
       });
     });
+
+    // NEW project context model (Phase 0+): defineX-based declarations
+    // in `.antimatter/{resources,contexts,build}.ts`. Phase 1 = on-demand
+    // load only; the file watcher hookup + broadcast lands in Phase 2.
+    this.projectContextModelStore = new ProjectContextModelStore(this.projectPath);
+    await this.projectContextModelStore.reload();
     {
       const initialSnap = this.contextStore.getSnapshot();
       if (initialSnap.present) {
@@ -1148,6 +1162,7 @@ export class ProjectContext {
       ptySessionPool: () => this.ptyManager,
       deployedResourceStore: () => this.deployedResourceStore,
       activityLog: () => this.activityLog,
+      projectContextModelStore: () => this.projectContextModelStore,
       explorerIgnore: () => this.fileChangeNotifier.getExplorerIgnore(),
     });
     router.use('/api/automation', createAutomationRouter({

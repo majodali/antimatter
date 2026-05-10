@@ -133,6 +133,8 @@ export interface ServerCommandDependencies {
   deployedResourceStore?: () => import('../services/deployed-resource-store.js').DeployedResourceStore | undefined;
   /** Lazy getter — unified activity log (worker/workflow/pty events). */
   activityLog?: () => import('../services/activity-log.js').ActivityLog | undefined;
+  /** Lazy getter — project context model store (new defineX-based model). */
+  projectContextModelStore?: () => import('../services/project-context-model-store.js').ProjectContextModelStore | undefined;
   /** Returns current explorer ignore patterns for file tree filtering. */
   explorerIgnore: () => string[];
 }
@@ -157,7 +159,7 @@ type CommandHandler = (params: Record<string, unknown>) => Promise<unknown>;
 export function createServerCommandExecutor(
   deps: ServerCommandDependencies,
 ): (command: string, params: Record<string, unknown>) => Promise<unknown> {
-  const { workspace, workflowManager, errorStore, testResultsStorage, ptySessionPool, deployedResourceStore, activityLog, explorerIgnore } = deps;
+  const { workspace, workflowManager, errorStore, testResultsStorage, ptySessionPool, deployedResourceStore, activityLog, projectContextModelStore, explorerIgnore } = deps;
 
   /** Helper: run a git command via workspace environment. */
   async function runGit(args: string, timeout = 30_000): Promise<{
@@ -863,6 +865,81 @@ export function createServerCommandExecutor(
       console.error(`[actions.invoke] Error processing ${triggerId}:`, err);
     });
     return { queued: true, triggerId, operationId };
+  });
+
+  // ---- Project context model (new defineX-based model) ----
+
+  handlers.set('contexts.model.get', async () => {
+    const store = projectContextModelStore?.();
+    if (!store) throw new AutomationCommandError('Project context model store not ready', 'execution-error');
+    return store.getSnapshot();
+  });
+
+  handlers.set('contexts.model.reload', async () => {
+    const store = projectContextModelStore?.();
+    if (!store) throw new AutomationCommandError('Project context model store not ready', 'execution-error');
+    const snapshot = await store.reload();
+    return snapshot;
+  });
+
+  handlers.set('contexts.templates.list', async () => {
+    const { listTemplates } = await import('@antimatter/contexts');
+    return { templates: listTemplates() };
+  });
+
+  handlers.set('contexts.templates.apply', async (params) => {
+    const templateId = requireParam<string>(params, 'templateId');
+    const templateParams = (params.params as Record<string, string> | undefined) ?? {};
+    const overwrite = params.overwrite === true;
+
+    const { renderTemplate } = await import('@antimatter/contexts');
+
+    let rendered: ReturnType<typeof renderTemplate>;
+    try {
+      rendered = renderTemplate(templateId, templateParams);
+    } catch (err: unknown) {
+      throw new AutomationCommandError(
+        err instanceof Error ? err.message : String(err),
+        'invalid-params',
+      );
+    }
+
+    // Refuse to overwrite existing files unless explicitly requested.
+    const conflicts: string[] = [];
+    for (const path of Object.keys(rendered.files)) {
+      if (await workspace.exists(path)) conflicts.push(path);
+    }
+    if (conflicts.length > 0 && !overwrite) {
+      throw new AutomationCommandError(
+        `Refusing to overwrite existing files (pass { overwrite: true } to force): ${conflicts.join(', ')}`,
+        'invalid-params',
+      );
+    }
+
+    // Make sure parent directories exist before writing.
+    const writtenPaths: string[] = [];
+    for (const [path, contents] of Object.entries(rendered.files)) {
+      const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+      if (parent) {
+        try { await workspace.mkdir(parent); } catch { /* already exists */ }
+      }
+      await workspace.writeFile(path, contents);
+      writtenPaths.push(path);
+    }
+
+    // Re-load the model so the next contexts.model.get reflects the new files.
+    const store = projectContextModelStore?.();
+    let snapshot: import('../services/project-context-model-store.js').ProjectContextModelSnapshot | null = null;
+    if (store) {
+      snapshot = await store.reload();
+    }
+
+    return {
+      templateId,
+      writtenPaths,
+      summary: rendered.summary,
+      snapshot,
+    };
   });
 
   handlers.set('commands.list', async () => {

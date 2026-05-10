@@ -1,0 +1,356 @@
+/**
+ * ContextsPanel — bottom-panel surface for the new project context
+ * model.
+ *
+ * Two states:
+ *
+ *   1. Cold start (no `.antimatter/{resources,contexts,build}.ts`)
+ *      — render `ContextsEmptyState`: a list of templates the user can
+ *        apply manually. The chat-bootstrapped flow is deferred to
+ *        Phase N (agent integration).
+ *
+ *   2. Loaded — render `ContextTreeView`: a flat-with-indent list of
+ *      contexts plus quick counts of resources / rules. Sidebar tree +
+ *      detail view land in Phase 2.
+ *
+ * Data plane is the automation API (`contexts.model.get`,
+ * `contexts.templates.list`, `contexts.templates.apply`) so the same
+ * code path is exercised by functional tests and by the IDE UI.
+ */
+
+import { useCallback, useEffect, useState } from 'react';
+import { Loader2, Folder, FileText, Wrench, Boxes, RefreshCw } from 'lucide-react';
+import { ScrollArea } from '../ui/scroll-area';
+import { Button } from '../ui/button';
+import { useProjectStore } from '@/stores/projectStore';
+import {
+  fetchContextModel,
+  listContextTemplates,
+  applyContextTemplate,
+  type ContextModelSnapshot,
+  type TemplateMetadata,
+} from '@/lib/contexts-automation';
+
+export function ContextsPanel() {
+  const projectId = useProjectStore((s) => s.currentProjectId);
+  const [snapshot, setSnapshot] = useState<ContextModelSnapshot | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const snap = await fetchContextModel(projectId);
+      setSnapshot(snap);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (projectId) refresh();
+  }, [projectId, refresh]);
+
+  if (!projectId) {
+    return (
+      <div className="h-full flex items-center justify-center text-sm text-muted-foreground" data-testid="contexts-panel-no-project">
+        No project selected.
+      </div>
+    );
+  }
+
+  if (loading && !snapshot) {
+    return (
+      <div className="h-full flex items-center justify-center text-sm text-muted-foreground" data-testid="contexts-panel-loading">
+        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+        Loading contexts…
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="h-full p-4 text-sm" data-testid="contexts-panel-error">
+        <div className="text-destructive">Failed to load context model: {error}</div>
+        <Button variant="outline" size="sm" className="mt-2" onClick={refresh}>
+          <RefreshCw className="h-3.5 w-3.5 mr-1" />
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (!snapshot || !snapshot.present) {
+    return <ContextsEmptyState onApplied={refresh} />;
+  }
+
+  return <ContextTreeView snapshot={snapshot} onRefresh={refresh} loading={loading} />;
+}
+
+// ---------------------------------------------------------------------------
+// Cold-start empty state
+// ---------------------------------------------------------------------------
+
+function ContextsEmptyState({ onApplied }: { onApplied: () => void }) {
+  const projectId = useProjectStore((s) => s.currentProjectId);
+  const [templates, setTemplates] = useState<TemplateMetadata[] | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [paramValues, setParamValues] = useState<Record<string, string>>({});
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!projectId) return;
+    listContextTemplates(projectId)
+      .then((list) => {
+        setTemplates(list);
+        if (!selectedId && list.length > 0) setSelectedId(list[0].id);
+      })
+      .catch((err: unknown) => setApplyError(err instanceof Error ? err.message : String(err)));
+  }, [projectId, selectedId]);
+
+  const selected = templates?.find((t) => t.id === selectedId) ?? null;
+
+  const handleApply = async () => {
+    if (!projectId || !selected) return;
+    setApplying(true);
+    setApplyError(null);
+    try {
+      await applyContextTemplate(projectId, selected.id, paramValues);
+      onApplied();
+    } catch (err: unknown) {
+      setApplyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <ScrollArea className="h-full" data-testid="contexts-empty-state">
+      <div className="p-4 max-w-2xl mx-auto">
+        <div className="mb-4">
+          <h2 className="text-base font-semibold">No project context model yet</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            This project has no <code className="font-mono text-xs px-1 bg-muted rounded">.antimatter/contexts.ts</code>.
+            Pick a template to scaffold one, or start blank and add contexts manually.
+          </p>
+        </div>
+
+        {!templates && (
+          <div className="text-sm text-muted-foreground flex items-center" data-testid="contexts-templates-loading">
+            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            Loading templates…
+          </div>
+        )}
+
+        {templates && templates.length === 0 && (
+          <div className="text-sm text-muted-foreground" data-testid="contexts-templates-empty">
+            No templates registered.
+          </div>
+        )}
+
+        {templates && templates.length > 0 && (
+          <div className="space-y-3" data-testid="contexts-templates-list">
+            {templates.map((t) => (
+              <label
+                key={t.id}
+                className={`block border rounded-md p-3 cursor-pointer transition-colors ${
+                  selectedId === t.id ? 'border-primary bg-accent/40' : 'border-border hover:bg-accent/20'
+                }`}
+                data-testid={`contexts-template-${t.id}`}
+              >
+                <input
+                  type="radio"
+                  name="template"
+                  className="sr-only"
+                  checked={selectedId === t.id}
+                  onChange={() => {
+                    setSelectedId(t.id);
+                    setParamValues({});
+                  }}
+                />
+                <div className="font-medium text-sm">{t.name}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{t.description}</div>
+                {t.tags && t.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {t.tags.map((tag) => (
+                      <span key={tag} className="text-[10px] uppercase tracking-wide bg-muted text-muted-foreground px-1.5 py-0.5 rounded">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </label>
+            ))}
+          </div>
+        )}
+
+        {selected && selected.params && selected.params.length > 0 && (
+          <div className="mt-4 space-y-2 border-t border-border pt-4" data-testid="contexts-template-params">
+            {selected.params.map((p) => (
+              <label key={p.name} className="block text-sm">
+                <div className="font-medium">{p.label}{p.required && <span className="text-destructive ml-1">*</span>}</div>
+                {p.description && <div className="text-xs text-muted-foreground">{p.description}</div>}
+                <input
+                  type="text"
+                  className="mt-1 w-full px-2 py-1 text-sm bg-background border border-border rounded"
+                  placeholder={p.default ?? ''}
+                  value={paramValues[p.name] ?? ''}
+                  onChange={(e) => setParamValues((prev) => ({ ...prev, [p.name]: e.target.value }))}
+                  data-testid={`contexts-template-param-${p.name}`}
+                />
+              </label>
+            ))}
+          </div>
+        )}
+
+        {applyError && (
+          <div className="mt-3 text-sm text-destructive" data-testid="contexts-apply-error">
+            {applyError}
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end">
+          <Button
+            onClick={handleApply}
+            disabled={!selected || applying}
+            data-testid="contexts-apply-template-button"
+          >
+            {applying ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+            {applying ? 'Creating…' : 'Create from template'}
+          </Button>
+        </div>
+      </div>
+    </ScrollArea>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Loaded state — basic context tree
+// ---------------------------------------------------------------------------
+
+function ContextTreeView({
+  snapshot,
+  onRefresh,
+  loading,
+}: {
+  snapshot: ContextModelSnapshot;
+  onRefresh: () => void;
+  loading: boolean;
+}) {
+  const tree = buildTree(snapshot);
+
+  return (
+    <div className="h-full flex flex-col" data-testid="contexts-tree-view">
+      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border text-xs text-muted-foreground">
+        <span data-testid="contexts-count-contexts">
+          <Folder className="h-3 w-3 inline mr-1" />
+          {snapshot.counts.contexts} contexts
+        </span>
+        <span data-testid="contexts-count-resources">
+          <Boxes className="h-3 w-3 inline mr-1" />
+          {snapshot.counts.resources} resources
+        </span>
+        <span data-testid="contexts-count-rules">
+          <Wrench className="h-3 w-3 inline mr-1" />
+          {snapshot.counts.rules} rules
+        </span>
+        <div className="flex-1" />
+        <button
+          className="hover:text-foreground"
+          onClick={onRefresh}
+          disabled={loading}
+          data-testid="contexts-refresh-button"
+          title="Reload"
+        >
+          <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      {snapshot.modelErrors.length > 0 && (
+        <div className="px-3 py-2 border-b border-border bg-destructive/10 text-xs" data-testid="contexts-model-errors">
+          <div className="font-semibold text-destructive mb-1">Model errors:</div>
+          <ul className="space-y-0.5">
+            {snapshot.modelErrors.map((e, i) => (
+              <li key={i} className="text-destructive/90">[{e.code}] {e.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <ScrollArea className="flex-1">
+        <ul className="py-1" data-testid="contexts-tree-list">
+          {tree.map((node) => (
+            <ContextRow key={node.id} node={node} depth={0} />
+          ))}
+        </ul>
+      </ScrollArea>
+    </div>
+  );
+}
+
+interface TreeNode {
+  id: string;
+  name: string;
+  objective: string;
+  actionKind: string;
+  validationCount: number;
+  children: TreeNode[];
+}
+
+function buildTree(snapshot: ContextModelSnapshot): TreeNode[] {
+  const byId = new Map<string, TreeNode>();
+  for (const c of snapshot.contexts) {
+    byId.set(c.id, {
+      id: c.id,
+      name: c.name,
+      objective: c.objectiveStatement,
+      actionKind: c.actionKind,
+      validationCount: c.validationIds.length,
+      children: [],
+    });
+  }
+  const roots: TreeNode[] = [];
+  for (const c of snapshot.contexts) {
+    const node = byId.get(c.id)!;
+    if (c.parentId && byId.has(c.parentId)) {
+      byId.get(c.parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
+function ContextRow({ node, depth }: { node: TreeNode; depth: number }) {
+  return (
+    <>
+      <li
+        className="px-3 py-1 text-sm hover:bg-accent/40 flex items-start gap-2"
+        style={{ paddingLeft: 12 + depth * 16 }}
+        data-testid={`contexts-tree-row-${node.id}`}
+      >
+        <FileText className="h-3.5 w-3.5 mt-0.5 text-muted-foreground flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2">
+            <span className="font-medium">{node.name}</span>
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{node.actionKind}</span>
+            {node.validationCount > 0 && (
+              <span className="text-[10px] text-muted-foreground">
+                {node.validationCount} validation{node.validationCount === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+          <div className="text-xs text-muted-foreground truncate">{node.objective}</div>
+        </div>
+      </li>
+      {node.children.map((c) => (
+        <ContextRow key={c.id} node={c} depth={depth + 1} />
+      ))}
+    </>
+  );
+}
