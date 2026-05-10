@@ -667,6 +667,11 @@ export class ProjectContext {
         type: 'application-state',
         state: { deployedResources: this.deployedResourceStore.list() },
       });
+      // Phase 3: deployed-resource-{present,healthy} validations may flip,
+      // so re-evaluate the new context model.
+      this.projectContextModelStore?.reevaluate().catch((err: unknown) => {
+        console.error(`[project-context:${this.projectId}] context model re-evaluate (deployed-resource) failed:`, err);
+      });
     });
 
     // Workflow manager — broadcast callback also captures build terminal output.
@@ -690,7 +695,15 @@ export class ProjectContext {
       projectId: this.projectId,
       onExecStart: () => this.config.onExecStart(),
       onExecEnd: () => this.config.onExecEnd(),
-      onRuleResultsChanged: () => this.contextLifecycleStore?.scheduleRecompute(),
+      onRuleResultsChanged: () => {
+        this.contextLifecycleStore?.scheduleRecompute();
+        // Phase 3: rule-outcome validations re-evaluate against the new
+        // pass/fail state. Fire-and-forget; the snapshot broadcast goes
+        // out via the store's subscriber.
+        this.projectContextModelStore?.reevaluate().catch((err: unknown) => {
+          console.error(`[project-context:${this.projectId}] context model re-evaluate (rule) failed:`, err);
+        });
+      },
     });
 
     await this.errorStore.initialize();
@@ -711,9 +724,23 @@ export class ProjectContext {
 
     // NEW project context model (Phase 0+): defineX-based declarations
     // in `.antimatter/{resources,contexts,build}.ts`. Watcher hookup
-    // (Phase 2) reloads on edits and broadcasts a fresh snapshot so
-    // open IDE tabs show changes live.
-    this.projectContextModelStore = new ProjectContextModelStore(this.projectPath);
+    // (Phase 2) reloads on edits and broadcasts a fresh snapshot.
+    // Phase 3 wires evaluator collaborators so validations carry
+    // pass/fail status derived from real runtime state (rule results,
+    // test passes, deployed-resource health).
+    this.projectContextModelStore = new ProjectContextModelStore(this.projectPath, {
+      getRuleStatus: (ruleId) => {
+        const r = this.workflowManager?.getRuleResult(ruleId);
+        return r?.status;
+      },
+      getTestPasses: () => this.testResultsStorage?.getLatestPasses() ?? [],
+      hasDeployedResource: (resourceId) => !!this.deployedResourceStore?.get(resourceId),
+      isDeployedResourceHealthy: (resourceId) => {
+        const r = this.deployedResourceStore?.get(resourceId);
+        if (!r) return false;
+        return r.status === 'healthy';
+      },
+    });
     await this.projectContextModelStore.reload();
     this.projectContextModelStore.subscribe((snap) => {
       this.broadcastToClients({
@@ -785,6 +812,10 @@ export class ProjectContext {
     // Wire test-results changes to lifecycle recompute.
     this.testResultsStorage.onChange = () => {
       this.contextLifecycleStore.scheduleRecompute();
+      // Phase 3: test-pass / test-set-pass validations re-evaluate.
+      this.projectContextModelStore?.reevaluate().catch((err: unknown) => {
+        console.error(`[project-context:${this.projectId}] context model re-evaluate (test) failed:`, err);
+      });
     };
 
     // Auto-register Preview resource if project has an index.html

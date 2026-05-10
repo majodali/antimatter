@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Folder, FileText, Wrench, Boxes, RefreshCw, Plus, ChevronDown } from 'lucide-react';
+import { Loader2, Folder, Wrench, Boxes, RefreshCw, Plus, ChevronDown, CheckCircle2, XCircle, CircleDashed, Circle, AlertTriangle, Hammer } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { useProjectStore } from '@/stores/projectStore';
@@ -30,10 +30,12 @@ import {
   applyContextTemplate,
   type ContextModelSnapshot,
   type TemplateMetadata,
+  type LifecycleStatus,
 } from '@/lib/contexts-automation';
 import { AddContextDialog } from './AddContextDialog';
 import { AddResourceDialog } from './AddResourceDialog';
 import { AddRuleDialog } from './AddRuleDialog';
+import { ContextDetailDialog } from './ContextDetailDialog';
 
 export function ContextsPanel() {
   const projectId = useProjectStore((s) => s.currentProjectId);
@@ -258,6 +260,7 @@ function ContextTreeView({
   const [addContextOpen, setAddContextOpen] = useState(false);
   const [addResourceOpen, setAddResourceOpen] = useState(false);
   const [addRuleOpen, setAddRuleOpen] = useState(false);
+  const [selectedContextId, setSelectedContextId] = useState<string | null>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -341,6 +344,13 @@ function ContextTreeView({
       <AddContextDialog open={addContextOpen} onOpenChange={setAddContextOpen} snapshot={snapshot} />
       <AddResourceDialog open={addResourceOpen} onOpenChange={setAddResourceOpen} />
       <AddRuleDialog open={addRuleOpen} onOpenChange={setAddRuleOpen} snapshot={snapshot} />
+      <ContextDetailDialog
+        open={selectedContextId !== null}
+        onOpenChange={(next) => { if (!next) setSelectedContextId(null); }}
+        contextId={selectedContextId}
+        snapshot={snapshot}
+        onContextSelect={setSelectedContextId}
+      />
 
       {snapshot.modelErrors.length > 0 && (
         <div className="px-3 py-2 border-b border-border bg-destructive/10 text-xs" data-testid="contexts-model-errors">
@@ -356,7 +366,7 @@ function ContextTreeView({
       <ScrollArea className="flex-1">
         <ul className="py-1" data-testid="contexts-tree-list">
           {tree.map((node) => (
-            <ContextRow key={node.id} node={node} depth={0} />
+            <ContextRow key={node.id} node={node} depth={0} onSelect={setSelectedContextId} />
           ))}
         </ul>
       </ScrollArea>
@@ -370,6 +380,7 @@ interface TreeNode {
   objective: string;
   actionKind: string;
   validationCount: number;
+  lifecycleStatus: LifecycleStatus;
   children: TreeNode[];
 }
 
@@ -381,7 +392,8 @@ function buildTree(snapshot: ContextModelSnapshot): TreeNode[] {
       name: c.name,
       objective: c.objectiveStatement,
       actionKind: c.actionKind,
-      validationCount: c.validationIds.length,
+      validationCount: c.validations.length,
+      lifecycleStatus: c.lifecycleStatus,
       children: [],
     });
   }
@@ -397,30 +409,53 @@ function buildTree(snapshot: ContextModelSnapshot): TreeNode[] {
   return roots;
 }
 
-function ContextRow({ node, depth }: { node: TreeNode; depth: number }) {
+function statusIcon(status: LifecycleStatus): { Icon: typeof CheckCircle2; tone: string; title: string } {
+  switch (status) {
+    case 'done':                  return { Icon: CheckCircle2,   tone: 'text-green-500',          title: 'Done' };
+    case 'in-progress':           return { Icon: Hammer,         tone: 'text-amber-500',          title: 'In progress' };
+    case 'ready':                 return { Icon: Circle,         tone: 'text-blue-500',           title: 'Ready' };
+    case 'pending':               return { Icon: CircleDashed,   tone: 'text-muted-foreground',   title: 'Pending' };
+    case 'regressed':             return { Icon: XCircle,        tone: 'text-destructive',        title: 'Regressed' };
+    case 'dependency-regressed':  return { Icon: AlertTriangle,  tone: 'text-destructive/80',     title: 'Dependency regressed' };
+  }
+}
+
+function ContextRow({
+  node, depth, onSelect,
+}: {
+  node: TreeNode;
+  depth: number;
+  onSelect: (id: string) => void;
+}) {
+  const { Icon, tone, title } = statusIcon(node.lifecycleStatus);
   return (
     <>
-      <li
-        className="px-3 py-1 text-sm hover:bg-accent/40 flex items-start gap-2"
-        style={{ paddingLeft: 12 + depth * 16 }}
-        data-testid={`contexts-tree-row-${node.id}`}
-      >
-        <FileText className="h-3.5 w-3.5 mt-0.5 text-muted-foreground flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2">
-            <span className="font-medium">{node.name}</span>
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{node.actionKind}</span>
-            {node.validationCount > 0 && (
-              <span className="text-[10px] text-muted-foreground">
-                {node.validationCount} validation{node.validationCount === 1 ? '' : 's'}
-              </span>
-            )}
+      <li>
+        <button
+          type="button"
+          className="w-full text-left px-3 py-1 text-sm hover:bg-accent/40 flex items-start gap-2"
+          style={{ paddingLeft: 12 + depth * 16 }}
+          onClick={() => onSelect(node.id)}
+          data-testid={`contexts-tree-row-${node.id}`}
+          data-status={node.lifecycleStatus}
+        >
+          <Icon className={`h-3.5 w-3.5 mt-0.5 flex-shrink-0 ${tone}`} aria-label={title} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2">
+              <span className="font-medium">{node.name}</span>
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{node.actionKind}</span>
+              {node.validationCount > 0 && (
+                <span className="text-[10px] text-muted-foreground">
+                  {node.validationCount} validation{node.validationCount === 1 ? '' : 's'}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground truncate">{node.objective}</div>
           </div>
-          <div className="text-xs text-muted-foreground truncate">{node.objective}</div>
-        </div>
+        </button>
       </li>
       {node.children.map((c) => (
-        <ContextRow key={c.id} node={c} depth={depth + 1} />
+        <ContextRow key={c.id} node={c} depth={depth + 1} onSelect={onSelect} />
       ))}
     </>
   );

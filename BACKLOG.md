@@ -151,6 +151,8 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 
 **Phase 2 — Decompose / manual authoring** *(test-passing for unit tests, test-implemented for FT-DECOMP-101..105)*: file-watcher reload + WebSocket broadcast (live updates as users edit `.antimatter/*.ts`), source emitters that round-trip through esbuild + the loader, automation commands `contexts.contexts.add` / `contexts.resources.add` / `contexts.rules.add`, three Add modals in the IDE (Add context / Add resource / Add rule).
 
+**Phase 3 — Focused build** *(test-implemented for FT-FOCUS-101..104)*: validation evaluator (rule-outcome / test-pass / test-set-pass / deployed-resource-{present,healthy} kinds wired against existing services), enriched snapshot with per-validation status + per-context lifecycle status, re-evaluation triggered by rule + test + deployed-resource changes, `contexts.action.invoke` automation command for invoke-rule actions, context detail dialog with validation status + Start button, clickable tree rows with status icons.
+
 | Test ID | Name | Status |
 |---------|------|--------|
 | FT-COLDSTART-001 | listTemplates returns metadata for each registered template | test-passing |
@@ -180,8 +182,12 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-DECOMP-103 | contexts.rules.add — append a rule with reads/writes | test-implemented |
 | FT-DECOMP-104 | contexts.contexts.add surfaces invalid-params for malformed id | test-implemented |
 | FT-DECOMP-105 | Direct edit to .antimatter/contexts.ts is picked up by the watcher | test-implemented |
+| FT-FOCUS-101 | Fresh json-validator template surfaces lifecycleStatus + validation status per context | test-implemented |
+| FT-FOCUS-102 | Registering a deployed-resource flips the matching validation to passing | test-implemented |
+| FT-FOCUS-103 | contexts.action.invoke emits the rule event for invoke-rule; rejects others as unsupported | test-implemented |
+| FT-FOCUS-104 | Empty leaf context (no validations + no children) reports lifecycleStatus=done | test-implemented |
 
-**Upcoming phases** *(test areas not yet defined)*: Phase 3 — Focused build with fingerprints (FT-FOCUS-***), Phase 4 — Status check (FT-STATUS-***), Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***).
+**Upcoming phases** *(test areas not yet defined)*: Phase 4 — Status check (FT-STATUS-***), Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***). Fingerprint-based freshness indicators are also deferred — Phase 3 uses event-driven re-evaluation, which is sufficient for the rule/test/deployed-resource validation kinds wired today.
 
 ---
 

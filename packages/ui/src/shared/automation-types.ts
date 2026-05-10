@@ -163,6 +163,7 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'contexts.contexts.add', execution: 'server', description: 'Append a new defineContext({...}) to .antimatter/contexts.ts' },
   { command: 'contexts.resources.add', execution: 'server', description: 'Append a new defineX({...}) resource to .antimatter/resources.ts (kind: file-set / config / secret / deployed-resource / environment / test / test-set)' },
   { command: 'contexts.rules.add', execution: 'server', description: 'Append a new defineRule({...}) to .antimatter/build.ts' },
+  { command: 'contexts.action.invoke', execution: 'server', description: 'Invoke a context\'s action (currently supports invoke-rule kind only)' },
 
   // Meta
   { command: 'commands.list', execution: 'server', description: 'List all available commands' },

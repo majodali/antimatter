@@ -9,6 +9,22 @@
 // Wire types — mirror the server snapshot
 // ---------------------------------------------------------------------------
 
+export type LifecycleStatus =
+  | 'pending'
+  | 'ready'
+  | 'in-progress'
+  | 'done'
+  | 'regressed'
+  | 'dependency-regressed';
+
+export interface SerializedValidation {
+  readonly id: string;
+  readonly kind: string;
+  readonly description: string;
+  readonly status: 'passing' | 'failing' | 'unknown';
+  readonly resources: readonly string[];
+}
+
 export interface SerializedContext {
   readonly id: string;
   readonly name: string;
@@ -18,9 +34,10 @@ export interface SerializedContext {
   readonly objectiveNotes?: string;
   readonly inputNames: readonly string[];
   readonly outputNames: readonly string[];
-  readonly validationIds: readonly string[];
+  readonly validations: readonly SerializedValidation[];
   readonly actionKind: string;
   readonly actionDescription: string;
+  readonly lifecycleStatus: LifecycleStatus;
 }
 
 export interface SerializedResource {
@@ -268,4 +285,20 @@ export async function addRule(
   rule: EmitRuleInput,
 ): Promise<AddDeclarationResult> {
   return execute<AddDeclarationResult>(projectId, 'contexts.rules.add', { rule });
+}
+
+export interface InvokeActionResult {
+  readonly queued: boolean;
+  readonly contextId: string;
+  readonly kind: string;
+  readonly ruleId?: string;
+  readonly eventType?: string;
+  readonly operationId: string;
+}
+
+export async function invokeContextAction(
+  projectId: string,
+  contextId: string,
+): Promise<InvokeActionResult> {
+  return execute<InvokeActionResult>(projectId, 'contexts.action.invoke', { contextId });
 }

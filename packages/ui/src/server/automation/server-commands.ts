@@ -1031,6 +1031,55 @@ export function createServerCommandExecutor(
     );
   });
 
+  handlers.set('contexts.action.invoke', async (params) => {
+    const contextId = requireParam<string>(params, 'contextId');
+    const store = projectContextModelStore?.();
+    if (!store) throw new AutomationCommandError('Project context model store not ready', 'execution-error');
+    const model = store.getModel();
+    if (!model) throw new AutomationCommandError('No project context model loaded', 'not-found');
+    const ctx = model.contexts.get(contextId);
+    if (!ctx) throw new AutomationCommandError(`Context '${contextId}' not found`, 'not-found');
+
+    const action = ctx.action;
+    const operationId = `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    if (action.kind === 'invoke-rule') {
+      const ruleId = String((action.config ?? {} as Record<string, unknown>).ruleId ?? '');
+      if (!ruleId) {
+        throw new AutomationCommandError(`Context '${contextId}' has invoke-rule action with no ruleId`, 'invalid-params');
+      }
+      const wm = workflowManager();
+      if (!wm) throw new AutomationCommandError('Workflow manager not initialized', 'unsupported');
+      // Locate the rule's trigger event. For Phase 3 we accept rules
+      // whose `on` is `{ kind: 'event', name: '...' }` and emit that
+      // event. fileChange-triggered rules are out of scope here — the
+      // user invokes those by editing files.
+      const rule = model.rules.get(ruleId);
+      if (!rule) {
+        throw new AutomationCommandError(`Action references rule '${ruleId}', which is not declared`, 'not-found');
+      }
+      const on = rule.on as { kind?: string; name?: string };
+      if (on?.kind !== 'event' || !on.name) {
+        throw new AutomationCommandError(
+          `Rule '${ruleId}' has trigger ${JSON.stringify(rule.on)}; only event-triggered rules can be invoked from a context action`,
+          'unsupported',
+        );
+      }
+      wm.emitEvent({ type: on.name, operationId, contextId }).catch((err) => {
+        console.error(`[contexts.action.invoke] emit failed for context ${contextId}:`, err);
+      });
+      return { queued: true, contextId, kind: action.kind, ruleId, eventType: on.name, operationId };
+    }
+
+    if (action.kind === 'agent' || action.kind === 'human' || action.kind === 'code' || action.kind === 'plan') {
+      throw new AutomationCommandError(
+        `Action kind '${action.kind}' for context '${contextId}' is not yet runnable from the IDE; edit files directly or invoke through chat (post-Phase-3).`,
+        'unsupported',
+      );
+    }
+    throw new AutomationCommandError(`Unknown action kind '${(action as { kind: string }).kind}'`, 'invalid-params');
+  });
+
   handlers.set('commands.list', async () => {
     return { commands: COMMAND_CATALOG };
   });

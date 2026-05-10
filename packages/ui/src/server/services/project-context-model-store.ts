@@ -17,12 +17,20 @@
  * `deriveProjectLifecycle` against this store.
  */
 
-import { loadProjectModel } from '@antimatter/contexts';
+import {
+  loadProjectModel,
+  deriveProjectLifecycle,
+  validationKey,
+  KIND,
+} from '@antimatter/contexts';
 import type {
   ProjectModel,
   LoadResult,
   LoadFileError,
   ProjectModelError,
+  LifecycleStatus,
+  ValidationDeclaration,
+  ContextDeclaration,
 } from '@antimatter/contexts';
 
 /** Serialisable snapshot for transport to the IDE. */
@@ -64,9 +72,29 @@ export interface SerializedContext {
   readonly objectiveNotes?: string;
   readonly inputNames: readonly string[];
   readonly outputNames: readonly string[];
-  readonly validationIds: readonly string[];
+  readonly validations: readonly SerializedValidation[];
   readonly actionKind: string;
   readonly actionDescription: string;
+  /**
+   * Derived lifecycle status (pending/ready/in-progress/done/regressed/
+   * dependency-regressed). Default is 'pending' for an empty model.
+   */
+  readonly lifecycleStatus: LifecycleStatus;
+}
+
+/** Per-validation status surfaced in the snapshot for UI display. */
+export interface SerializedValidation {
+  readonly id: string;
+  readonly kind: ValidationDeclaration['kind'];
+  readonly description: string;
+  /**
+   * 'passing' — evaluator returned true.
+   * 'failing' — evaluator returned false (and inputs exist).
+   * 'unknown' — kind not yet evaluable, or required state missing.
+   */
+  readonly status: 'passing' | 'failing' | 'unknown';
+  /** Resource names this validation reads (within the context's input/output namespace). */
+  readonly resources: readonly string[];
 }
 
 export interface SerializedResource {
@@ -98,6 +126,22 @@ const EMPTY_SNAPSHOT: ProjectContextModelSnapshot = {
   loadedAt: new Date(0).toISOString(),
 };
 
+/**
+ * External services the evaluator consults to determine validation
+ * pass/fail. All getters are optional — when absent, the relevant
+ * validation kinds report `'unknown'` (the IDE shows them grey).
+ */
+export interface ProjectContextModelStoreCollaborators {
+  /** Last-known result for a given workflow rule id ('success' | 'failed'). */
+  readonly getRuleStatus?: (ruleId: string) => 'success' | 'failed' | undefined;
+  /** Latest pass/fail per test id (most-recent-wins). */
+  readonly getTestPasses?: () => readonly { id: string; pass: boolean }[];
+  /** Returns true if a deployed-resource exists for the given id. */
+  readonly hasDeployedResource?: (resourceId: string) => boolean;
+  /** Returns true if a deployed-resource is currently healthy. */
+  readonly isDeployedResourceHealthy?: (resourceId: string) => boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -106,8 +150,30 @@ export class ProjectContextModelStore {
   private snapshot: ProjectContextModelSnapshot = EMPTY_SNAPSHOT;
   private model: ProjectModel | null = null;
   private subscribers = new Set<(snap: ProjectContextModelSnapshot) => void>();
+  private priorStatuses = new Map<string, LifecycleStatus>();
 
-  constructor(private readonly projectRoot: string) {}
+  constructor(
+    private readonly projectRoot: string,
+    private readonly collaborators: ProjectContextModelStoreCollaborators = {},
+  ) {}
+
+  /**
+   * Re-evaluate validations against the cached model without going to
+   * disk. Useful when only the collaborator state changed (a workflow
+   * rule finished, a test passed) and the model is still authoritative.
+   */
+  async reevaluate(): Promise<ProjectContextModelSnapshot> {
+    if (!this.model) return this.reload();
+    const next = this.assembleSnapshot({
+      loadedFiles: this.snapshot.loadedFiles,
+      loadErrors: [...this.snapshot.loadErrors],
+      model: this.model,
+    });
+    const changed = !snapshotsEquivalent(this.snapshot, next);
+    this.snapshot = next;
+    if (changed) this.notify(next);
+    return next;
+  }
 
   /**
    * Load (or re-load) the model from disk. Always safe; never throws.
@@ -134,11 +200,165 @@ export class ProjectContextModelStore {
     }
 
     this.model = result.model;
-    const next = buildSnapshot(result);
+    const next = this.assembleSnapshot(result);
     const changed = !snapshotsEquivalent(this.snapshot, next);
     this.snapshot = next;
     if (changed) this.notify(next);
     return next;
+  }
+
+  /**
+   * Build the snapshot from a loaded model + the current collaborator
+   * state. Runs validation evaluation and lifecycle derivation; updates
+   * `priorStatuses` so future runs detect transitions correctly.
+   */
+  private assembleSnapshot(result: { loadedFiles: readonly string[]; loadErrors: readonly LoadFileError[]; model: ProjectModel }): ProjectContextModelSnapshot {
+    const present = result.loadedFiles.length > 0;
+    const m = result.model;
+
+    // ---- Evaluate validations ----
+    const validationPasses = new Map<string, boolean>();
+    const validationStatuses = new Map<string, 'passing' | 'failing' | 'unknown'>();
+    for (const ctx of m.contexts.values()) {
+      for (const v of ctx.validations) {
+        const status = this.evaluateValidation(ctx, v.validation);
+        const key = validationKey(ctx.id, v.id);
+        validationStatuses.set(key, status);
+        // Pass map only includes definitive 'passing'; unknown counts as
+        // not-yet-passing for lifecycle purposes (deriveProjectLifecycle
+        // treats absent or false as not passing).
+        if (status === 'passing') validationPasses.set(key, true);
+      }
+    }
+
+    // ---- Derive lifecycle ----
+    const { statuses } = deriveProjectLifecycle({
+      model: m,
+      validationPasses,
+      priorStatuses: this.priorStatuses,
+    });
+    // Persist as the new prior for next derivation.
+    this.priorStatuses = new Map(statuses);
+
+    // ---- Build serialised snapshot ----
+    const contexts: SerializedContext[] = [];
+    for (const c of m.contexts.values()) {
+      const validations: SerializedValidation[] = c.validations.map((v) => ({
+        id: v.id,
+        kind: v.validation.kind,
+        description: v.validation.description,
+        status: validationStatuses.get(validationKey(c.id, v.id)) ?? 'unknown',
+        resources: v.resources,
+      }));
+      contexts.push({
+        id: c.id,
+        name: c.name,
+        description: c.description,
+        parentId: c.parentId,
+        objectiveStatement: c.objective.statement,
+        objectiveNotes: c.objective.notes,
+        inputNames: Object.keys(c.inputs),
+        outputNames: Object.keys(c.outputs),
+        validations,
+        actionKind: c.action.kind,
+        actionDescription: c.action.description,
+        lifecycleStatus: statuses.get(c.id) ?? 'pending',
+      });
+    }
+
+    const resources: SerializedResource[] = [];
+    for (const r of m.resources.values()) {
+      resources.push({
+        id: r.id,
+        kind: kindShortName(r.__kind),
+        discriminator: r.__kind,
+        name: r.name,
+        description: r.description,
+      });
+    }
+
+    const rules: SerializedRule[] = [];
+    for (const r of m.rules.values()) {
+      rules.push({
+        id: r.id,
+        name: r.name,
+        description: r.description,
+        readsCount: r.reads?.length ?? 0,
+        writesCount: r.writes?.length ?? 0,
+        manual: r.manual ?? false,
+      });
+    }
+
+    return {
+      present,
+      loadedFiles: result.loadedFiles,
+      loadErrors: result.loadErrors,
+      modelErrors: m.errors,
+      counts: { contexts: contexts.length, resources: resources.length, rules: rules.length },
+      contexts,
+      resources,
+      rules,
+      loadedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Evaluate one validation against current collaborator state. Returns
+   * 'unknown' when the relevant collaborator isn't wired or the
+   * required state isn't yet recorded — this keeps the IDE's "we
+   * don't know yet" different from a definitive failure.
+   */
+  private evaluateValidation(ctx: ContextDeclaration, v: ValidationDeclaration): 'passing' | 'failing' | 'unknown' {
+    const cfg = (v.config ?? {}) as Record<string, unknown>;
+    switch (v.kind) {
+      case 'rule-outcome': {
+        const ruleId = String(cfg.ruleId ?? '');
+        if (!ruleId || !this.collaborators.getRuleStatus) return 'unknown';
+        const status = this.collaborators.getRuleStatus(ruleId);
+        if (status === undefined) return 'unknown';
+        return status === 'success' ? 'passing' : 'failing';
+      }
+      case 'test-pass': {
+        const testId = String(cfg.testId ?? '');
+        if (!testId || !this.collaborators.getTestPasses) return 'unknown';
+        const entry = this.collaborators.getTestPasses().find(t => t.id === testId);
+        if (!entry) return 'unknown';
+        return entry.pass ? 'passing' : 'failing';
+      }
+      case 'test-set-pass': {
+        const testSetId = String(cfg.testSetId ?? '');
+        if (!testSetId || !this.collaborators.getTestPasses || !this.model) return 'unknown';
+        const set = this.model.resources.get(testSetId);
+        if (!set || set.__kind !== KIND.TestSet) return 'unknown';
+        const passes = new Map(this.collaborators.getTestPasses().map(t => [t.id, t.pass]));
+        let anyKnown = false;
+        for (const testId of set.members) {
+          if (!passes.has(testId)) continue;
+          anyKnown = true;
+          if (!passes.get(testId)) return 'failing';
+        }
+        // All known passes; if none of the members have run yet, status is unknown.
+        return anyKnown ? 'passing' : 'unknown';
+      }
+      case 'deployed-resource-present': {
+        const id = String(cfg.resourceId ?? '');
+        if (!id || !this.collaborators.hasDeployedResource) return 'unknown';
+        return this.collaborators.hasDeployedResource(id) ? 'passing' : 'failing';
+      }
+      case 'deployed-resource-healthy': {
+        const id = String(cfg.resourceId ?? '');
+        if (!id || !this.collaborators.isDeployedResourceHealthy) return 'unknown';
+        return this.collaborators.isDeployedResourceHealthy(id) ? 'passing' : 'failing';
+      }
+      case 'manual-confirm':
+      case 'code':
+        // Phase 3 doesn't run these. Phase 4+ adds a manual-confirm
+        // store and a code execution adapter.
+        return 'unknown';
+    }
+    // Unreachable, but TS can't always narrow exhaustive switches.
+    void ctx;
+    return 'unknown';
   }
 
   /** Return the current snapshot (cheap; no I/O). */
@@ -186,65 +406,8 @@ function snapshotsEquivalent(a: ProjectContextModelSnapshot, b: ProjectContextMo
 }
 
 // ---------------------------------------------------------------------------
-// Serialisation
+// Helpers
 // ---------------------------------------------------------------------------
-
-function buildSnapshot(result: LoadResult): ProjectContextModelSnapshot {
-  const present = result.loadedFiles.length > 0;
-  const m = result.model;
-
-  const contexts: SerializedContext[] = [];
-  for (const c of m.contexts.values()) {
-    contexts.push({
-      id: c.id,
-      name: c.name,
-      description: c.description,
-      parentId: c.parentId,
-      objectiveStatement: c.objective.statement,
-      objectiveNotes: c.objective.notes,
-      inputNames: Object.keys(c.inputs),
-      outputNames: Object.keys(c.outputs),
-      validationIds: c.validations.map(v => v.id),
-      actionKind: c.action.kind,
-      actionDescription: c.action.description,
-    });
-  }
-
-  const resources: SerializedResource[] = [];
-  for (const r of m.resources.values()) {
-    resources.push({
-      id: r.id,
-      kind: kindShortName(r.__kind),
-      discriminator: r.__kind,
-      name: r.name,
-      description: r.description,
-    });
-  }
-
-  const rules: SerializedRule[] = [];
-  for (const r of m.rules.values()) {
-    rules.push({
-      id: r.id,
-      name: r.name,
-      description: r.description,
-      readsCount: r.reads?.length ?? 0,
-      writesCount: r.writes?.length ?? 0,
-      manual: r.manual ?? false,
-    });
-  }
-
-  return {
-    present,
-    loadedFiles: result.loadedFiles,
-    loadErrors: result.loadErrors,
-    modelErrors: m.errors,
-    counts: { contexts: contexts.length, resources: resources.length, rules: rules.length },
-    contexts,
-    resources,
-    rules,
-    loadedAt: new Date().toISOString(),
-  };
-}
 
 function kindShortName(discriminator: string): string {
   // Discriminators look like 'antimatter:resource:file-set'. Strip the

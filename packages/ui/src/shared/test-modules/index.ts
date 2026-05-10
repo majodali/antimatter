@@ -16,6 +16,7 @@ import { m1Tests } from './m1-tests.js';
 import { m2Tests } from './m2-tests.js';
 import { coldstartTests } from './coldstart-tests.js';
 import { decompTests } from './decomp-tests.js';
+import { focusTests } from './focus-tests.js';
 
 /** All registered functional test modules. */
 export const allTestModules: readonly TestModule[] = [
@@ -28,6 +29,7 @@ export const allTestModules: readonly TestModule[] = [
   ...m2Tests,
   ...coldstartTests,
   ...decompTests,
+  ...focusTests,
 ];
 
 /** Test modules grouped by area. */
@@ -51,3 +53,4 @@ export { m1Tests } from './m1-tests.js';
 export { m2Tests } from './m2-tests.js';
 export { coldstartTests } from './coldstart-tests.js';
 export { decompTests } from './decomp-tests.js';
+export { focusTests } from './focus-tests.js';
