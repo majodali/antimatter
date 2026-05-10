@@ -23,7 +23,7 @@ describe('FT-FOUND-080 — loads json-validator fixture end-to-end', () => {
   it('reports no load errors and yields the expected graph', async () => {
     const result = await loadProjectModel({ projectRoot: JSON_VALIDATOR_FIXTURE });
     expect(result.loadErrors).toEqual([]);
-    expect(result.loadedFiles.sort()).toEqual(['build.ts', 'contexts.ts', 'resources.ts']);
+    expect([...result.loadedFiles].sort()).toEqual(['build.ts', 'contexts.ts', 'resources.ts']);
 
     const m = result.model;
     expect(m.errors).toEqual([]);
@@ -51,7 +51,7 @@ describe('FT-FOUND-080 — loads json-validator fixture end-to-end', () => {
     expect(m.contexts.has('implement-validator')).toBe(true);
     expect(m.contexts.has('implement-tests')).toBe(true);
     expect(m.contexts.has('publish')).toBe(true);
-    expect(m.children.get('json-validator')?.sort()).toEqual(['implement-tests', 'implement-validator', 'publish']);
+    expect([...(m.children.get('json-validator') ?? [])].sort()).toEqual(['implement-tests', 'implement-validator', 'publish']);
   });
 });
 

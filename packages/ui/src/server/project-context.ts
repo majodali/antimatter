@@ -710,10 +710,24 @@ export class ProjectContext {
     });
 
     // NEW project context model (Phase 0+): defineX-based declarations
-    // in `.antimatter/{resources,contexts,build}.ts`. Phase 1 = on-demand
-    // load only; the file watcher hookup + broadcast lands in Phase 2.
+    // in `.antimatter/{resources,contexts,build}.ts`. Watcher hookup
+    // (Phase 2) reloads on edits and broadcasts a fresh snapshot so
+    // open IDE tabs show changes live.
     this.projectContextModelStore = new ProjectContextModelStore(this.projectPath);
     await this.projectContextModelStore.reload();
+    this.projectContextModelStore.subscribe((snap) => {
+      this.broadcastToClients({
+        type: 'application-state',
+        state: { projectContextModel: snap },
+      });
+    });
+    {
+      const initialSnap = this.projectContextModelStore.getSnapshot();
+      if (initialSnap.present) {
+        const errCount = initialSnap.modelErrors.length + initialSnap.loadErrors.length;
+        console.log(`[project-context:${this.projectId}] Loaded project context model: ${initialSnap.counts.contexts} contexts, ${initialSnap.counts.resources} resources, ${initialSnap.counts.rules} rules, ${errCount} error(s)`);
+      }
+    }
     {
       const initialSnap = this.contextStore.getSnapshot();
       if (initialSnap.present) {
@@ -827,6 +841,11 @@ export class ProjectContext {
         if (events.some(e => ContextStore.isContextsFile(e.path))) {
           this.contextStore.reload().catch((err: unknown) => {
             console.error(`[project-context:${this.projectId}] contexts.dsl reload failed:`, err);
+          });
+        }
+        if (events.some(e => ProjectContextModelStore.isContextModelFile(e.path))) {
+          this.projectContextModelStore.reload().catch((err: unknown) => {
+            console.error(`[project-context:${this.projectId}] project context model reload failed:`, err);
           });
         }
         this.workflowManager.onFileChanges(events, source as any);
@@ -1254,6 +1273,7 @@ export class ProjectContext {
           ...this.workflowManager.getApplicationState(),
           contexts: this.contextStore?.getSnapshot(),
           contextLifecycle: this.contextLifecycleStore?.getSnapshot(),
+          projectContextModel: this.projectContextModelStore?.getSnapshot(),
         },
       });
     }
@@ -1419,6 +1439,7 @@ export class ProjectContext {
           ...this.workflowManager.getApplicationState(),
           contexts: this.contextStore?.getSnapshot(),
           contextLifecycle: this.contextLifecycleStore?.getSnapshot(),
+          projectContextModel: this.projectContextModelStore?.getSnapshot(),
         },
       }));
     }

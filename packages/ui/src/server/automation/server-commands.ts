@@ -942,6 +942,95 @@ export function createServerCommandExecutor(
     };
   });
 
+  // ---- Add context / resource / rule (Phase 2 manual authoring) ----
+
+  /**
+   * Read a target file (creating it empty if missing), append the
+   * emitted declaration, write it back, then reload the model so the
+   * snapshot reflects the new declaration.
+   */
+  async function appendToContextFile(
+    relPath: string,
+    decl: import('@antimatter/contexts').EmittedDeclaration,
+    fileLabel: string,
+  ): Promise<{ writtenPath: string; varName: string; snapshot: import('../services/project-context-model-store.js').ProjectContextModelSnapshot | null }> {
+    const { appendDeclaration } = await import('@antimatter/contexts');
+
+    let existing = '';
+    if (await workspace.exists(relPath)) {
+      existing = await workspace.readFile(relPath);
+    }
+    const next = appendDeclaration(existing, decl, { fileLabel });
+
+    // Make sure the parent directory exists.
+    try { await workspace.mkdir('.antimatter'); } catch { /* exists */ }
+    await workspace.writeFile(relPath, next);
+
+    const store = projectContextModelStore?.();
+    const snapshot = store ? await store.reload() : null;
+    return { writtenPath: relPath, varName: decl.varName, snapshot };
+  }
+
+  handlers.set('contexts.contexts.add', async (params) => {
+    const input = requireParam<import('@antimatter/contexts').EmitContextInput>(params, 'context');
+    const { emitContext } = await import('@antimatter/contexts');
+    let decl: import('@antimatter/contexts').EmittedDeclaration;
+    try {
+      decl = emitContext(input);
+    } catch (err: unknown) {
+      throw new AutomationCommandError(err instanceof Error ? err.message : String(err), 'invalid-params');
+    }
+    return appendToContextFile(
+      '.antimatter/contexts.ts',
+      decl,
+      'Project contexts. Each defineContext({...}) declares an outcome-shaped unit of work.',
+    );
+  });
+
+  handlers.set('contexts.resources.add', async (params) => {
+    const kind = requireParam<string>(params, 'kind');
+    const input = requireParam<Record<string, unknown>>(params, 'resource');
+    const ctx = await import('@antimatter/contexts');
+    let decl: import('@antimatter/contexts').EmittedDeclaration;
+    try {
+      switch (kind) {
+        case 'file-set':           decl = ctx.emitFileSet(input as ctx.EmitFileSetInput);               break;
+        case 'config':             decl = ctx.emitConfig(input as ctx.EmitConfigInput);                 break;
+        case 'secret':             decl = ctx.emitSecret(input as ctx.EmitSecretInput);                 break;
+        case 'deployed-resource':  decl = ctx.emitDeployedResource(input as ctx.EmitDeployedResourceInput); break;
+        case 'environment':        decl = ctx.emitEnvironment(input as ctx.EmitEnvironmentInput);       break;
+        case 'test':               decl = ctx.emitTest(input as ctx.EmitTestInput);                     break;
+        case 'test-set':           decl = ctx.emitTestSet(input as ctx.EmitTestSetInput);               break;
+        default:
+          throw new AutomationCommandError(`Unknown resource kind '${kind}'`, 'invalid-params');
+      }
+    } catch (err: unknown) {
+      if (err instanceof AutomationCommandError) throw err;
+      throw new AutomationCommandError(err instanceof Error ? err.message : String(err), 'invalid-params');
+    }
+    return appendToContextFile(
+      '.antimatter/resources.ts',
+      decl,
+      'Project resources. Each defineX({...}) declares a noun the project operates on.',
+    );
+  });
+
+  handlers.set('contexts.rules.add', async (params) => {
+    const input = requireParam<import('@antimatter/contexts').EmitRuleInput>(params, 'rule');
+    const { emitRule } = await import('@antimatter/contexts');
+    let decl: import('@antimatter/contexts').EmittedDeclaration;
+    try {
+      decl = emitRule(input);
+    } catch (err: unknown) {
+      throw new AutomationCommandError(err instanceof Error ? err.message : String(err), 'invalid-params');
+    }
+    return appendToContextFile(
+      '.antimatter/build.ts',
+      decl,
+      'Project workflow rules. Each defineRule({...}) declares an automation triggered by an event.',
+    );
+  });
+
   handlers.set('commands.list', async () => {
     return { commands: COMMAND_CATALOG };
   });

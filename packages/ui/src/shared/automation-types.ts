@@ -160,6 +160,9 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'contexts.model.reload', execution: 'server', description: 'Re-load the project context model from .antimatter/*.ts' },
   { command: 'contexts.templates.list', execution: 'server', description: 'List available cold-start templates' },
   { command: 'contexts.templates.apply', execution: 'server', description: 'Apply a template — write its files into the project. Refuses to overwrite.' },
+  { command: 'contexts.contexts.add', execution: 'server', description: 'Append a new defineContext({...}) to .antimatter/contexts.ts' },
+  { command: 'contexts.resources.add', execution: 'server', description: 'Append a new defineX({...}) resource to .antimatter/resources.ts (kind: file-set / config / secret / deployed-resource / environment / test / test-set)' },
+  { command: 'contexts.rules.add', execution: 'server', description: 'Append a new defineRule({...}) to .antimatter/build.ts' },
 
   // Meta
   { command: 'commands.list', execution: 'server', description: 'List all available commands' },

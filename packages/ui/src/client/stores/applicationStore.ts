@@ -23,6 +23,7 @@ import type {
   ContextLifecycleSnapshot,
   ContextNodeSnapshot,
 } from '../../shared/contexts-types';
+import type { ContextModelSnapshot } from '@/lib/contexts-automation';
 import { emitWorkflowEvent, runWorkflowRule } from '@/lib/api';
 export type { ProjectError };
 
@@ -69,6 +70,14 @@ interface ApplicationStore {
    */
   contextLifecycle: ContextLifecycleSnapshot | null;
 
+  /**
+   * NEW (Phase 0+) project context model — assembled from
+   * `.antimatter/{resources,contexts,build}.ts`. Lives alongside the
+   * legacy `contexts` field; consumers (ContextsPanel) read this one.
+   * Server pushes via `state.projectContextModel` on file change.
+   */
+  projectContextModel: ContextModelSnapshot | null;
+
   /** Optimistic rule execution state — maps ruleId to running status. */
   optimisticRunning: Set<string>;
 
@@ -100,13 +109,15 @@ interface ApplicationStore {
   // ---- Actions ----
 
   /** Handle an application-state WebSocket message.
-   *  The `contexts` and `contextLifecycle` fields are split out of
-   *  `state` and routed to their dedicated top-level store fields. */
+   *  The `contexts`, `contextLifecycle`, and `projectContextModel`
+   *  fields are split out of `state` and routed to their dedicated
+   *  top-level store fields. */
   handleStateMessage: (msg: {
     full?: boolean;
     state: Partial<ApplicationState> & {
       contexts?: ContextSnapshot;
       contextLifecycle?: ContextLifecycleSnapshot;
+      projectContextModel?: ContextModelSnapshot;
     };
   }) => void;
 
@@ -126,6 +137,7 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
   loaded: false,
   contexts: null,
   contextLifecycle: null,
+  projectContextModel: null,
   optimisticRunning: new Set(),
 
   // ---- Derived accessors ----
@@ -240,16 +252,17 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
   // ---- Actions ----
 
   handleStateMessage: (msg) => {
-    // Split `contexts` and `contextLifecycle` out — they live in their own
-    // store fields, not inside ApplicationState (which is owned by the
-    // workflow engine).
+    // Split context-tree fields out — they live in their own store fields,
+    // not inside ApplicationState (which is owned by the workflow engine).
     const incoming = (msg.state ?? {}) as Partial<ApplicationState> & {
       contexts?: ContextSnapshot;
       contextLifecycle?: ContextLifecycleSnapshot;
+      projectContextModel?: ContextModelSnapshot;
     };
     const {
       contexts: nextContexts,
       contextLifecycle: nextLifecycle,
+      projectContextModel: nextProjectContextModel,
       ...workflowState
     } = incoming;
 
@@ -260,6 +273,7 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
         loaded: true,
         contexts: nextContexts ?? null,
         contextLifecycle: nextLifecycle ?? null,
+        projectContextModel: nextProjectContextModel ?? null,
         optimisticRunning: new Set(), // Clear optimistic state on full snapshot
       });
     } else {
@@ -284,10 +298,11 @@ export const useApplicationStore = create<ApplicationStore>((set, get) => ({
       set({
         serverState: { ...current, ...workflowState } as ApplicationState,
         loaded: true,
-        // Only overwrite contexts/contextLifecycle if the patch carries them —
+        // Only overwrite the split-out fields if the patch carries them —
         // patches without those fields shouldn't clobber the cached snapshots.
         ...(nextContexts !== undefined ? { contexts: nextContexts } : {}),
         ...(nextLifecycle !== undefined ? { contextLifecycle: nextLifecycle } : {}),
+        ...(nextProjectContextModel !== undefined ? { projectContextModel: nextProjectContextModel } : {}),
         optimisticRunning: running,
       });
     }

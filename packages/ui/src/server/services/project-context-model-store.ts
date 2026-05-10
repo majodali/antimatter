@@ -105,10 +105,15 @@ const EMPTY_SNAPSHOT: ProjectContextModelSnapshot = {
 export class ProjectContextModelStore {
   private snapshot: ProjectContextModelSnapshot = EMPTY_SNAPSHOT;
   private model: ProjectModel | null = null;
+  private subscribers = new Set<(snap: ProjectContextModelSnapshot) => void>();
 
   constructor(private readonly projectRoot: string) {}
 
-  /** Load (or re-load) the model from disk. Always safe; never throws. */
+  /**
+   * Load (or re-load) the model from disk. Always safe; never throws.
+   * Notifies subscribers when the snapshot actually changes — the
+   * broadcast cost is paid only when state moves.
+   */
   async reload(): Promise<ProjectContextModelSnapshot> {
     let result: LoadResult;
     try {
@@ -116,18 +121,24 @@ export class ProjectContextModelStore {
     } catch (err: unknown) {
       // Defensive — `loadProjectModel` is non-throwing today, but be safe.
       const message = err instanceof Error ? err.message : String(err);
-      this.snapshot = {
+      const next: ProjectContextModelSnapshot = {
         ...EMPTY_SNAPSHOT,
         loadErrors: [{ file: '<loader>', stage: 'read', message }],
         loadedAt: new Date().toISOString(),
       };
+      const changed = !snapshotsEquivalent(this.snapshot, next);
+      this.snapshot = next;
       this.model = null;
-      return this.snapshot;
+      if (changed) this.notify(next);
+      return next;
     }
 
     this.model = result.model;
-    this.snapshot = buildSnapshot(result);
-    return this.snapshot;
+    const next = buildSnapshot(result);
+    const changed = !snapshotsEquivalent(this.snapshot, next);
+    this.snapshot = next;
+    if (changed) this.notify(next);
+    return next;
   }
 
   /** Return the current snapshot (cheap; no I/O). */
@@ -140,6 +151,18 @@ export class ProjectContextModelStore {
     return this.model;
   }
 
+  /** Subscribe to snapshot changes. Returns unsubscribe fn. */
+  subscribe(cb: (snap: ProjectContextModelSnapshot) => void): () => void {
+    this.subscribers.add(cb);
+    return () => { this.subscribers.delete(cb); };
+  }
+
+  private notify(snap: ProjectContextModelSnapshot): void {
+    for (const cb of this.subscribers) {
+      try { cb(snap); } catch { /* ignore subscriber errors */ }
+    }
+  }
+
   /** Returns true if a path matches one of the canonical .antimatter/*.ts files. */
   static isContextModelFile(path: string): boolean {
     const normalized = path.startsWith('/') ? path.slice(1) : path;
@@ -149,6 +172,17 @@ export class ProjectContextModelStore {
       normalized === '.antimatter/build.ts'
     );
   }
+}
+
+/**
+ * Returns true if two snapshots represent the same logical state.
+ * Compares everything except `loadedAt` (which moves on every reload).
+ * Cheap JSON-compare is fine — snapshots are small (one line per
+ * declaration, no large strings).
+ */
+function snapshotsEquivalent(a: ProjectContextModelSnapshot, b: ProjectContextModelSnapshot): boolean {
+  const norm = (s: ProjectContextModelSnapshot) => ({ ...s, loadedAt: '' });
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
 }
 
 // ---------------------------------------------------------------------------

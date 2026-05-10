@@ -147,7 +147,9 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-FOUND-084 | empty / missing project handled gracefully | test-passing |
 | FT-FOUND-085 | compile error in a single file is surfaced and isolated | test-passing |
 
-**Phase 1 — Cold start** *(test-implemented; passes after deploy)*: empty-state UI, template registry, automation commands (`contexts.model.get`, `contexts.templates.list`, `contexts.templates.apply`), basic context tree render, ProjectContextModelStore on the workspace server. Templates: `empty`, `json-validator`.
+**Phase 1 — Cold start** *(test-passing for unit tests, test-implemented for FT-COLDSTART-101..104)*: empty-state UI, template registry, automation commands (`contexts.model.get`, `contexts.templates.list`, `contexts.templates.apply`), basic context tree render, ProjectContextModelStore on the workspace server. Templates: `empty`, `json-validator`.
+
+**Phase 2 — Decompose / manual authoring** *(test-passing for unit tests, test-implemented for FT-DECOMP-101..105)*: file-watcher reload + WebSocket broadcast (live updates as users edit `.antimatter/*.ts`), source emitters that round-trip through esbuild + the loader, automation commands `contexts.contexts.add` / `contexts.resources.add` / `contexts.rules.add`, three Add modals in the IDE (Add context / Add resource / Add rule).
 
 | Test ID | Name | Status |
 |---------|------|--------|
@@ -161,8 +163,25 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-COLDSTART-102 | contexts.templates.list returns registered templates | test-implemented |
 | FT-COLDSTART-103 | Apply json-validator template — model populated with expected nodes | test-implemented |
 | FT-COLDSTART-104 | contexts.templates.apply refuses to overwrite, succeeds with overwrite flag | test-implemented |
+| FT-DECOMP-001 | emitFileSet round-trips through loader | test-passing |
+| FT-DECOMP-002 | emitTest / emitTestSet round-trip | test-passing |
+| FT-DECOMP-003 | emitDeployedResource / emitEnvironment round-trip | test-passing |
+| FT-DECOMP-004 | emitRule with reads/writes round-trips | test-passing |
+| FT-DECOMP-005 | emitContext basic shape round-trips | test-passing |
+| FT-DECOMP-006 | emitContext with parent + plan action round-trips | test-passing |
+| FT-DECOMP-007 | appendDeclaration merges existing imports | test-passing |
+| FT-DECOMP-008 | appendDeclaration adds an import to an empty file | test-passing |
+| FT-DECOMP-009 | emitter rejects malformed ids | test-passing |
+| FT-DECOMP-010 | strings JSON-escaped (no template-literal injection) | test-passing |
+| FT-DECOMP-011 | emitContext with rule-outcome validation references the rule | test-passing |
+| FT-DECOMP-012 | emitContext with output() and context-output input | test-passing |
+| FT-DECOMP-101 | contexts.contexts.add — append a child context | test-implemented |
+| FT-DECOMP-102 | contexts.resources.add — append a file-set resource | test-implemented |
+| FT-DECOMP-103 | contexts.rules.add — append a rule with reads/writes | test-implemented |
+| FT-DECOMP-104 | contexts.contexts.add surfaces invalid-params for malformed id | test-implemented |
+| FT-DECOMP-105 | Direct edit to .antimatter/contexts.ts is picked up by the watcher | test-implemented |
 
-**Upcoming phases** *(test areas not yet defined)*: Phase 2 — Decompose / manual authoring (FT-DECOMP-***), Phase 3 — Focused build with fingerprints (FT-FOCUS-***), Phase 4 — Status check (FT-STATUS-***), Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***).
+**Upcoming phases** *(test areas not yet defined)*: Phase 3 — Focused build with fingerprints (FT-FOCUS-***), Phase 4 — Status check (FT-STATUS-***), Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***).
 
 ---
 

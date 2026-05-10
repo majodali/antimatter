@@ -18,11 +18,12 @@
  * code path is exercised by functional tests and by the IDE UI.
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { Loader2, Folder, FileText, Wrench, Boxes, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Loader2, Folder, FileText, Wrench, Boxes, RefreshCw, Plus, ChevronDown } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { useProjectStore } from '@/stores/projectStore';
+import { useApplicationStore } from '@/stores/applicationStore';
 import {
   fetchContextModel,
   listContextTemplates,
@@ -30,12 +31,21 @@ import {
   type ContextModelSnapshot,
   type TemplateMetadata,
 } from '@/lib/contexts-automation';
+import { AddContextDialog } from './AddContextDialog';
+import { AddResourceDialog } from './AddResourceDialog';
+import { AddRuleDialog } from './AddRuleDialog';
 
 export function ContextsPanel() {
   const projectId = useProjectStore((s) => s.currentProjectId);
-  const [snapshot, setSnapshot] = useState<ContextModelSnapshot | null>(null);
+  // Snapshot lives in the application store: server pushes it on
+  // connect (full snapshot) and on every `.antimatter/*.ts` edit. Fall
+  // back to a one-shot REST fetch only if the store is empty.
+  const storedSnapshot = useApplicationStore((s) => s.projectContextModel);
+  const [restSnapshot, setRestSnapshot] = useState<ContextModelSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const snapshot = storedSnapshot ?? restSnapshot;
 
   const refresh = useCallback(async () => {
     if (!projectId) return;
@@ -43,7 +53,7 @@ export function ContextsPanel() {
     setError(null);
     try {
       const snap = await fetchContextModel(projectId);
-      setSnapshot(snap);
+      setRestSnapshot(snap);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -52,8 +62,9 @@ export function ContextsPanel() {
   }, [projectId]);
 
   useEffect(() => {
-    if (projectId) refresh();
-  }, [projectId, refresh]);
+    // Only fall back to REST if the WebSocket-pushed snapshot hasn't arrived.
+    if (projectId && !storedSnapshot) refresh();
+  }, [projectId, storedSnapshot, refresh]);
 
   if (!projectId) {
     return (
@@ -243,6 +254,22 @@ function ContextTreeView({
   loading: boolean;
 }) {
   const tree = buildTree(snapshot);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [addContextOpen, setAddContextOpen] = useState(false);
+  const [addResourceOpen, setAddResourceOpen] = useState(false);
+  const [addRuleOpen, setAddRuleOpen] = useState(false);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
+        setAddMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [addMenuOpen]);
 
   return (
     <div className="h-full flex flex-col" data-testid="contexts-tree-view">
@@ -260,6 +287,46 @@ function ContextTreeView({
           {snapshot.counts.rules} rules
         </span>
         <div className="flex-1" />
+        <div className="relative" ref={addMenuRef}>
+          <button
+            className="flex items-center gap-1 px-2 py-0.5 hover:bg-accent rounded text-foreground"
+            onClick={() => setAddMenuOpen((v) => !v)}
+            data-testid="contexts-add-button"
+            title="Add"
+          >
+            <Plus className="h-3 w-3" />
+            Add
+            <ChevronDown className="h-3 w-3" />
+          </button>
+          {addMenuOpen && (
+            <div
+              className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-md shadow-lg z-50 py-1"
+              data-testid="contexts-add-menu"
+            >
+              <button
+                className="block w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+                onClick={() => { setAddMenuOpen(false); setAddContextOpen(true); }}
+                data-testid="contexts-add-context"
+              >
+                Add context…
+              </button>
+              <button
+                className="block w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+                onClick={() => { setAddMenuOpen(false); setAddResourceOpen(true); }}
+                data-testid="contexts-add-resource"
+              >
+                Add resource…
+              </button>
+              <button
+                className="block w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+                onClick={() => { setAddMenuOpen(false); setAddRuleOpen(true); }}
+                data-testid="contexts-add-rule"
+              >
+                Add rule…
+              </button>
+            </div>
+          )}
+        </div>
         <button
           className="hover:text-foreground"
           onClick={onRefresh}
@@ -270,6 +337,10 @@ function ContextTreeView({
           <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
         </button>
       </div>
+
+      <AddContextDialog open={addContextOpen} onOpenChange={setAddContextOpen} snapshot={snapshot} />
+      <AddResourceDialog open={addResourceOpen} onOpenChange={setAddResourceOpen} />
+      <AddRuleDialog open={addRuleOpen} onOpenChange={setAddRuleOpen} snapshot={snapshot} />
 
       {snapshot.modelErrors.length > 0 && (
         <div className="px-3 py-2 border-b border-border bg-destructive/10 text-xs" data-testid="contexts-model-errors">

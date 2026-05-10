@@ -137,6 +137,36 @@ export type {
   TemplateDefinition,
 } from './templates.js';
 
+// Source emitters (Phase 2 — drives the IDE's "Add" forms)
+export {
+  emitFileSet,
+  emitConfig,
+  emitSecret,
+  emitDeployedResource,
+  emitEnvironment,
+  emitTest,
+  emitTestSet,
+  emitRule,
+  emitContext,
+  appendDeclaration,
+} from './emit.js';
+export type {
+  EmittedDeclaration,
+  EmitFileSetInput,
+  EmitConfigInput,
+  EmitSecretInput,
+  EmitDeployedResourceInput,
+  EmitEnvironmentInput,
+  EmitTestInput,
+  EmitTestSetInput,
+  EmitRuleInput,
+  EmitContextInput,
+  EmitResourceRefInput,
+  EmitValidationBindingInput,
+  EmitValidationInput,
+  EmitActionInput,
+} from './emit.js';
+
 // ============================================================================
 // LEGACY surface (pre-Phase-0; retired in Phase 1+)
 // ============================================================================

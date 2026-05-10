@@ -93,6 +93,112 @@ export interface ApplyTemplateResult {
 }
 
 // ---------------------------------------------------------------------------
+// Emit input types — mirror the @antimatter/contexts emit.ts shapes so the
+// IDE forms can be typed without reaching across package boundaries.
+// ---------------------------------------------------------------------------
+
+export type EmitResourceRefInput =
+  | { mode: 'resource'; id: string }
+  | { mode: 'context-output'; contextId: string; outputName: string }
+  | { mode: 'external'; uri: string };
+
+export type EmitValidationInput =
+  | { kind: 'rule-outcome'; ruleId: string; description?: string }
+  | { kind: 'test-pass'; testId: string; description?: string }
+  | { kind: 'test-set-pass'; testSetId: string; description?: string }
+  | { kind: 'deployed-resource-present'; resourceId: string; description?: string }
+  | { kind: 'deployed-resource-healthy'; resourceId: string; description?: string }
+  | { kind: 'manual-confirm'; description: string }
+  | { kind: 'code'; description: string; fn: string; module?: string };
+
+export type EmitActionInput =
+  | { kind: 'agent'; description: string; instructions?: string; agentId?: string }
+  | { kind: 'code'; description: string; fn: string; module?: string }
+  | { kind: 'invoke-rule'; ruleId: string; description?: string }
+  | { kind: 'human'; description: string; instructions?: string; role?: string }
+  | { kind: 'plan'; description: string };
+
+export interface EmitContextInput {
+  id: string;
+  name: string;
+  description?: string;
+  parentId?: string;
+  objective: string;
+  objectiveNotes?: string;
+  inputs?: Record<string, EmitResourceRefInput>;
+  outputs?: Record<string, { producesKind: string; description?: string }>;
+  validations?: Array<{
+    id: string;
+    validation: EmitValidationInput;
+    resources: string[];
+  }>;
+  action: EmitActionInput;
+  guidance?: string;
+}
+
+export interface EmitFileSetInput {
+  id: string;
+  name?: string;
+  description?: string;
+  include: string[];
+  exclude?: string[];
+}
+
+export interface EmitTestInput {
+  id: string;
+  name?: string;
+  description?: string;
+  testType?: 'unit' | 'functional' | 'smoke' | 'integration';
+}
+
+export interface EmitTestSetInput {
+  id: string;
+  name?: string;
+  description?: string;
+  members: string[];
+}
+
+export interface EmitDeployedResourceInput {
+  id: string;
+  name?: string;
+  description?: string;
+  resourceType: string;
+  target: string;
+}
+
+export interface EmitEnvironmentInput {
+  id: string;
+  name?: string;
+  description?: string;
+  provider: string;
+  config?: Record<string, string>;
+}
+
+export type EmitResourceInput =
+  | { kind: 'file-set';           resource: EmitFileSetInput }
+  | { kind: 'test';               resource: EmitTestInput }
+  | { kind: 'test-set';           resource: EmitTestSetInput }
+  | { kind: 'deployed-resource';  resource: EmitDeployedResourceInput }
+  | { kind: 'environment';        resource: EmitEnvironmentInput };
+
+export interface EmitRuleInput {
+  id: string;
+  name: string;
+  description?: string;
+  on: unknown;
+  run: unknown;
+  reads?: EmitResourceRefInput[];
+  writes?: EmitResourceRefInput[];
+  manual?: boolean;
+}
+
+export interface AddDeclarationResult {
+  readonly writtenPath: string;
+  readonly varName: string;
+  readonly snapshot: ContextModelSnapshot | null;
+}
+
+// ---------------------------------------------------------------------------
 // REST helper
 // ---------------------------------------------------------------------------
 
@@ -138,4 +244,28 @@ export async function applyContextTemplate(
     params: params ?? {},
     overwrite: options?.overwrite ?? false,
   });
+}
+
+export async function addContext(
+  projectId: string,
+  context: EmitContextInput,
+): Promise<AddDeclarationResult> {
+  return execute<AddDeclarationResult>(projectId, 'contexts.contexts.add', { context });
+}
+
+export async function addResource(
+  projectId: string,
+  input: EmitResourceInput,
+): Promise<AddDeclarationResult> {
+  return execute<AddDeclarationResult>(projectId, 'contexts.resources.add', {
+    kind: input.kind,
+    resource: input.resource,
+  });
+}
+
+export async function addRule(
+  projectId: string,
+  rule: EmitRuleInput,
+): Promise<AddDeclarationResult> {
+  return execute<AddDeclarationResult>(projectId, 'contexts.rules.add', { rule });
 }
