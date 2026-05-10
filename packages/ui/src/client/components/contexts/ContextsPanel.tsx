@@ -31,6 +31,7 @@ import {
   type ContextModelSnapshot,
   type TemplateMetadata,
   type LifecycleStatus,
+  type SerializedTransition,
 } from '@/lib/contexts-automation';
 import { AddContextDialog } from './AddContextDialog';
 import { AddResourceDialog } from './AddResourceDialog';
@@ -279,16 +280,18 @@ function ContextTreeView({
       <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border text-xs text-muted-foreground">
         <span data-testid="contexts-count-contexts">
           <Folder className="h-3 w-3 inline mr-1" />
-          {snapshot.counts.contexts} contexts
+          {snapshot.counts.contexts}
         </span>
         <span data-testid="contexts-count-resources">
           <Boxes className="h-3 w-3 inline mr-1" />
-          {snapshot.counts.resources} resources
+          {snapshot.counts.resources}
         </span>
         <span data-testid="contexts-count-rules">
           <Wrench className="h-3 w-3 inline mr-1" />
-          {snapshot.counts.rules} rules
+          {snapshot.counts.rules}
         </span>
+        <Separator />
+        <StatusChips snapshot={snapshot} />
         <div className="flex-1" />
         <div className="relative" ref={addMenuRef}>
           <button
@@ -352,16 +355,8 @@ function ContextTreeView({
         onContextSelect={setSelectedContextId}
       />
 
-      {snapshot.modelErrors.length > 0 && (
-        <div className="px-3 py-2 border-b border-border bg-destructive/10 text-xs" data-testid="contexts-model-errors">
-          <div className="font-semibold text-destructive mb-1">Model errors:</div>
-          <ul className="space-y-0.5">
-            {snapshot.modelErrors.map((e, i) => (
-              <li key={i} className="text-destructive/90">[{e.code}] {e.message}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <NeedsAttention snapshot={snapshot} onContextSelect={setSelectedContextId} />
+      <RecentActivity transitions={snapshot.recentTransitions} onContextSelect={setSelectedContextId} />
 
       <ScrollArea className="flex-1">
         <ul className="py-1" data-testid="contexts-tree-list">
@@ -418,6 +413,170 @@ function statusIcon(status: LifecycleStatus): { Icon: typeof CheckCircle2; tone:
     case 'regressed':             return { Icon: XCircle,        tone: 'text-destructive',        title: 'Regressed' };
     case 'dependency-regressed':  return { Icon: AlertTriangle,  tone: 'text-destructive/80',     title: 'Dependency regressed' };
   }
+}
+
+/** Inline vertical divider used in the panel header. */
+function Separator() {
+  return <span className="h-3 w-px bg-border" aria-hidden="true" />;
+}
+
+/** Order chips show in the header — most-positive first, problems last. */
+const STATUS_ORDER: readonly LifecycleStatus[] = [
+  'done', 'in-progress', 'ready', 'pending', 'regressed', 'dependency-regressed',
+];
+
+function StatusChips({ snapshot }: { snapshot: ContextModelSnapshot }) {
+  const items: { status: LifecycleStatus; n: number }[] = STATUS_ORDER
+    .map((s) => ({ status: s, n: snapshot.counts.byStatus[s] ?? 0 }))
+    .filter((it) => it.n > 0);
+  if (items.length === 0) return null;
+  return (
+    <span className="flex items-center gap-2" data-testid="contexts-status-chips">
+      {items.map(({ status, n }) => {
+        const { Icon, tone, title } = statusIcon(status);
+        return (
+          <span
+            key={status}
+            className={`inline-flex items-center gap-0.5 ${tone}`}
+            title={title}
+            data-testid={`contexts-status-chip-${status}`}
+          >
+            <Icon className="h-3 w-3" />
+            {n}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/**
+ * Banner that surfaces:
+ *   - Model errors (cycles, unresolved refs, …)
+ *   - Regressed / dependency-regressed contexts
+ *   - Contexts with at least one failing validation that aren't already
+ *     surfaced by status (`in-progress` with a failing val gets listed
+ *     because it explicitly needs attention).
+ *
+ * Hidden when there's nothing to show.
+ */
+function NeedsAttention({
+  snapshot, onContextSelect,
+}: {
+  snapshot: ContextModelSnapshot;
+  onContextSelect: (id: string) => void;
+}) {
+  const regressedCtxs = snapshot.contexts.filter(
+    (c) => c.lifecycleStatus === 'regressed' || c.lifecycleStatus === 'dependency-regressed',
+  );
+  const failingValCtxs = snapshot.contexts.filter(
+    (c) =>
+      c.lifecycleStatus !== 'regressed' &&
+      c.lifecycleStatus !== 'dependency-regressed' &&
+      c.validations.some((v) => v.status === 'failing'),
+  );
+  const errors = snapshot.modelErrors;
+  if (regressedCtxs.length === 0 && failingValCtxs.length === 0 && errors.length === 0) {
+    return null;
+  }
+  return (
+    <div
+      className="px-3 py-2 border-b border-border bg-amber-500/10 text-xs"
+      data-testid="contexts-needs-attention"
+    >
+      <div className="font-semibold text-amber-700 dark:text-amber-300 mb-1 flex items-center gap-1">
+        <AlertTriangle className="h-3 w-3" />
+        Needs attention
+      </div>
+      {errors.length > 0 && (
+        <ul className="space-y-0.5 mb-1">
+          {errors.map((e, i) => (
+            <li key={i} className="text-destructive/90" data-testid="contexts-attention-model-error">
+              [{e.code}] {e.message}
+            </li>
+          ))}
+        </ul>
+      )}
+      {regressedCtxs.length > 0 && (
+        <ul className="space-y-0.5 mb-1">
+          {regressedCtxs.map((c) => (
+            <li key={c.id}>
+              <button
+                className="hover:underline"
+                onClick={() => onContextSelect(c.id)}
+                data-testid={`contexts-attention-regressed-${c.id}`}
+              >
+                <span className="text-destructive">{c.lifecycleStatus}</span>
+                {' — '}
+                <span className="font-medium">{c.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {failingValCtxs.length > 0 && (
+        <ul className="space-y-0.5">
+          {failingValCtxs.map((c) => {
+            const failing = c.validations.filter((v) => v.status === 'failing');
+            return (
+              <li key={c.id}>
+                <button
+                  className="hover:underline"
+                  onClick={() => onContextSelect(c.id)}
+                  data-testid={`contexts-attention-failing-${c.id}`}
+                >
+                  <span className="text-amber-700 dark:text-amber-300">failing</span>
+                  {' — '}
+                  <span className="font-medium">{c.name}</span>
+                  <span className="text-muted-foreground"> ({failing.map((v) => v.id).join(', ')})</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Inline list of recent transitions (most-recent first). Hidden when
+ * empty. Capped to 10 visible rows; the snapshot retains up to 50.
+ */
+function RecentActivity({
+  transitions, onContextSelect,
+}: {
+  transitions: readonly SerializedTransition[];
+  onContextSelect: (id: string) => void;
+}) {
+  if (transitions.length === 0) return null;
+  const visible = transitions.slice(0, 10);
+  return (
+    <div
+      className="px-3 py-2 border-b border-border bg-muted/30"
+      data-testid="contexts-recent-activity"
+    >
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-1">
+        Recent activity
+      </div>
+      <ul className="space-y-0.5 text-xs">
+        {visible.map((t, i) => (
+          <li key={`${t.contextId}-${t.at}-${i}`}>
+            <button
+              className="text-left hover:underline"
+              onClick={() => onContextSelect(t.contextId)}
+              data-testid={`contexts-activity-${t.contextId}`}
+            >
+              <span className="font-medium">{t.contextName}</span>
+              <span className="text-muted-foreground">
+                {' — '}{t.from ?? '∅'} → {t.to}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function ContextRow({

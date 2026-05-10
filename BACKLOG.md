@@ -153,6 +153,8 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 
 **Phase 3 — Focused build** *(test-implemented for FT-FOCUS-101..104)*: validation evaluator (rule-outcome / test-pass / test-set-pass / deployed-resource-{present,healthy} kinds wired against existing services), enriched snapshot with per-validation status + per-context lifecycle status, re-evaluation triggered by rule + test + deployed-resource changes, `contexts.action.invoke` automation command for invoke-rule actions, context detail dialog with validation status + Start button, clickable tree rows with status icons.
 
+**Phase 4 — Status check / orient** *(test-implemented for FT-STATUS-101..103)*: snapshot now carries `counts.byStatus` (per-lifecycle bucket) and a recent-transitions ring buffer, `context:transitioned` events emitted to the unified activity log on every lifecycle change, color-coded status chips in the panel header, "Needs attention" banner surfacing regressions / failing validations / model errors, "Recent activity" inline list of transitions.
+
 | Test ID | Name | Status |
 |---------|------|--------|
 | FT-COLDSTART-001 | listTemplates returns metadata for each registered template | test-passing |
@@ -186,8 +188,11 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-FOCUS-102 | Registering a deployed-resource flips the matching validation to passing | test-implemented |
 | FT-FOCUS-103 | contexts.action.invoke emits the rule event for invoke-rule; rejects others as unsupported | test-implemented |
 | FT-FOCUS-104 | Empty leaf context (no validations + no children) reports lifecycleStatus=done | test-implemented |
+| FT-STATUS-101 | counts.byStatus sums to counts.contexts | test-implemented |
+| FT-STATUS-102 | Registering a deployed-resource captures a recent transition | test-implemented |
+| FT-STATUS-103 | context:transitioned events show up in activity.list | test-implemented |
 
-**Upcoming phases** *(test areas not yet defined)*: Phase 4 — Status check (FT-STATUS-***), Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***). Fingerprint-based freshness indicators are also deferred — Phase 3 uses event-driven re-evaluation, which is sufficient for the rule/test/deployed-resource validation kinds wired today.
+**Upcoming phases** *(test areas not yet defined)*: Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***). Fingerprint-based freshness indicators are also deferred — Phase 3 uses event-driven re-evaluation, which is sufficient for the rule/test/deployed-resource validation kinds wired today.
 
 ---
 

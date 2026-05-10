@@ -148,6 +148,9 @@ export const Kinds = {
   ServiceResponse: 'service:response',
   ServiceError: 'service:error',
 
+  // Project context model (Phase 0+ defineX-based model)
+  ContextTransitioned: 'context:transitioned',
+
   // Instance (emitted by Lambda)
   InstanceLaunch: 'instance:launch',
   InstanceResume: 'instance:resume',

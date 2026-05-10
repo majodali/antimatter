@@ -33,6 +33,22 @@ import type {
   ContextDeclaration,
 } from '@antimatter/contexts';
 
+/** Per-lifecycle-status counts (Phase 4 — drives the status header). */
+export type LifecycleCounts = Readonly<Record<LifecycleStatus, number>>;
+
+/**
+ * One captured transition. Phase 4 stores a recent ring buffer of
+ * these on the snapshot so the IDE can render an "activity" section
+ * without separately querying the activity log.
+ */
+export interface SerializedTransition {
+  readonly contextId: string;
+  readonly contextName: string;
+  readonly from: LifecycleStatus | null;
+  readonly to: LifecycleStatus;
+  readonly at: string;
+}
+
 /** Serialisable snapshot for transport to the IDE. */
 export interface ProjectContextModelSnapshot {
   /**
@@ -52,6 +68,8 @@ export interface ProjectContextModelSnapshot {
     readonly contexts: number;
     readonly resources: number;
     readonly rules: number;
+    /** Per-lifecycle-status totals (Phase 4). */
+    readonly byStatus: LifecycleCounts;
   };
   /** Flat list of contexts. */
   readonly contexts: readonly SerializedContext[];
@@ -59,6 +77,11 @@ export interface ProjectContextModelSnapshot {
   readonly resources: readonly SerializedResource[];
   /** Flat list of rules. */
   readonly rules: readonly SerializedRule[];
+  /**
+   * Recent lifecycle transitions, most-recent first. Capped at
+   * `MAX_RECENT_TRANSITIONS` to keep the broadcast small. Phase 4.
+   */
+  readonly recentTransitions: readonly SerializedTransition[];
   /** ISO timestamp of the last successful load. */
   readonly loadedAt: string;
 }
@@ -114,15 +137,28 @@ export interface SerializedRule {
   readonly manual: boolean;
 }
 
+/** How many recent transitions to retain in the snapshot ring buffer. */
+const MAX_RECENT_TRANSITIONS = 50;
+
+const EMPTY_BY_STATUS: LifecycleCounts = {
+  pending: 0,
+  ready: 0,
+  'in-progress': 0,
+  done: 0,
+  regressed: 0,
+  'dependency-regressed': 0,
+};
+
 const EMPTY_SNAPSHOT: ProjectContextModelSnapshot = {
   present: false,
   loadedFiles: [],
   loadErrors: [],
   modelErrors: [],
-  counts: { contexts: 0, resources: 0, rules: 0 },
+  counts: { contexts: 0, resources: 0, rules: 0, byStatus: EMPTY_BY_STATUS },
   contexts: [],
   resources: [],
   rules: [],
+  recentTransitions: [],
   loadedAt: new Date(0).toISOString(),
 };
 
@@ -130,6 +166,10 @@ const EMPTY_SNAPSHOT: ProjectContextModelSnapshot = {
  * External services the evaluator consults to determine validation
  * pass/fail. All getters are optional — when absent, the relevant
  * validation kinds report `'unknown'` (the IDE shows them grey).
+ *
+ * `onTransition` is fired once per lifecycle transition each time the
+ * snapshot is reassembled — Phase 4 wires this to the project's
+ * activity log so transitions show up in the unified activity stream.
  */
 export interface ProjectContextModelStoreCollaborators {
   /** Last-known result for a given workflow rule id ('success' | 'failed'). */
@@ -140,6 +180,8 @@ export interface ProjectContextModelStoreCollaborators {
   readonly hasDeployedResource?: (resourceId: string) => boolean;
   /** Returns true if a deployed-resource is currently healthy. */
   readonly isDeployedResourceHealthy?: (resourceId: string) => boolean;
+  /** Called once per transition with the new contextId, prior status (or null), and new status. */
+  readonly onTransition?: (event: SerializedTransition) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +193,8 @@ export class ProjectContextModelStore {
   private model: ProjectModel | null = null;
   private subscribers = new Set<(snap: ProjectContextModelSnapshot) => void>();
   private priorStatuses = new Map<string, LifecycleStatus>();
+  /** Most-recent-first ring buffer of captured transitions. */
+  private recentTransitions: SerializedTransition[] = [];
 
   constructor(
     private readonly projectRoot: string,
@@ -232,15 +276,39 @@ export class ProjectContextModelStore {
     }
 
     // ---- Derive lifecycle ----
-    const { statuses } = deriveProjectLifecycle({
+    const { statuses, transitions } = deriveProjectLifecycle({
       model: m,
       validationPasses,
       priorStatuses: this.priorStatuses,
     });
+
+    // ---- Capture transitions ----
+    if (transitions.length > 0) {
+      const at = new Date().toISOString();
+      const captured: SerializedTransition[] = transitions.map(t => ({
+        contextId: t.contextId,
+        contextName: m.contexts.get(t.contextId)?.name ?? t.contextId,
+        from: t.from ?? null,
+        to: t.to,
+        at,
+      }));
+      // Most-recent-first: prepend, cap at MAX_RECENT_TRANSITIONS.
+      this.recentTransitions = [...captured.slice().reverse(), ...this.recentTransitions]
+        .slice(0, MAX_RECENT_TRANSITIONS);
+      // Fire the per-transition hook (Phase 4: drives activityLog wiring in ProjectContext).
+      if (this.collaborators.onTransition) {
+        for (const t of captured) {
+          try { this.collaborators.onTransition(t); } catch { /* ignore subscriber errors */ }
+        }
+      }
+    }
     // Persist as the new prior for next derivation.
     this.priorStatuses = new Map(statuses);
 
     // ---- Build serialised snapshot ----
+    const byStatus: { -readonly [K in LifecycleStatus]: number } = {
+      pending: 0, ready: 0, 'in-progress': 0, done: 0, regressed: 0, 'dependency-regressed': 0,
+    };
     const contexts: SerializedContext[] = [];
     for (const c of m.contexts.values()) {
       const validations: SerializedValidation[] = c.validations.map((v) => ({
@@ -250,6 +318,8 @@ export class ProjectContextModelStore {
         status: validationStatuses.get(validationKey(c.id, v.id)) ?? 'unknown',
         resources: v.resources,
       }));
+      const status = statuses.get(c.id) ?? 'pending';
+      byStatus[status]++;
       contexts.push({
         id: c.id,
         name: c.name,
@@ -262,7 +332,7 @@ export class ProjectContextModelStore {
         validations,
         actionKind: c.action.kind,
         actionDescription: c.action.description,
-        lifecycleStatus: statuses.get(c.id) ?? 'pending',
+        lifecycleStatus: status,
       });
     }
 
@@ -294,10 +364,16 @@ export class ProjectContextModelStore {
       loadedFiles: result.loadedFiles,
       loadErrors: result.loadErrors,
       modelErrors: m.errors,
-      counts: { contexts: contexts.length, resources: resources.length, rules: rules.length },
+      counts: {
+        contexts: contexts.length,
+        resources: resources.length,
+        rules: rules.length,
+        byStatus,
+      },
       contexts,
       resources,
       rules,
+      recentTransitions: [...this.recentTransitions],
       loadedAt: new Date().toISOString(),
     };
   }

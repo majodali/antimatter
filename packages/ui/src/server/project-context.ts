@@ -740,6 +740,19 @@ export class ProjectContext {
         if (!r) return false;
         return r.status === 'healthy';
       },
+      onTransition: (event) => {
+        // Phase 4: surface lifecycle transitions in the unified activity log so
+        // the IDE's activity stream shows them alongside rule fires + worker events.
+        this.activityLog?.emit({
+          source: 'worker',
+          kind: Kinds.ContextTransitioned,
+          level: event.to === 'regressed' || event.to === 'dependency-regressed' ? 'warn' : 'info',
+          message: `Context "${event.contextName}" ${event.from ? `${event.from} → ${event.to}` : `→ ${event.to}`}`,
+          projectId: this.projectId,
+          correlationId: event.contextId,
+          data: { contextId: event.contextId, from: event.from, to: event.to },
+        });
+      },
     });
     await this.projectContextModelStore.reload();
     this.projectContextModelStore.subscribe((snap) => {

@@ -70,6 +70,16 @@ export interface ContextModelAssemblyError {
   readonly target?: string;
 }
 
+export type LifecycleCounts = Readonly<Record<LifecycleStatus, number>>;
+
+export interface SerializedTransition {
+  readonly contextId: string;
+  readonly contextName: string;
+  readonly from: LifecycleStatus | null;
+  readonly to: LifecycleStatus;
+  readonly at: string;
+}
+
 export interface ContextModelSnapshot {
   readonly present: boolean;
   readonly loadedFiles: readonly string[];
@@ -79,10 +89,13 @@ export interface ContextModelSnapshot {
     readonly contexts: number;
     readonly resources: number;
     readonly rules: number;
+    readonly byStatus: LifecycleCounts;
   };
   readonly contexts: readonly SerializedContext[];
   readonly resources: readonly SerializedResource[];
   readonly rules: readonly SerializedRule[];
+  /** Most-recent-first; capped server-side at ~50. */
+  readonly recentTransitions: readonly SerializedTransition[];
   readonly loadedAt: string;
 }
 
