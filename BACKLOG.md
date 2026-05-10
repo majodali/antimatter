@@ -93,6 +93,62 @@ A minimal todo app with:
 | 5 | FT-M2 functional test cases | Phase 4 |
 | 6 | Per-project CDK utility (`wf.utils.cdkDeploy`) | Independent |
 
+### Project Context Model
+
+New declaration model and lifecycle for the project context tree. Replaces the indent-based DSL with `defineX()` constructors in `.antimatter/{resources,contexts,build}.ts`. Three layers — Resources (noun) / Workflow rules (verb) / Project contexts (intent) — assembled into a graph the IDE can reason about. See `docs/contexts.md` for the conceptual model and the canonical journey (cold start → decompose → focused build → react → review).
+
+**Phase 0 — Foundation** *(complete)*: declaration types, `defineX()` constructors, project model assembler with validation, graph queries, lifecycle derivation against the new model, esbuild-based loader for `.antimatter/*.ts`, json-validator fixture as canonical worked example.
+
+| Test ID | Name | Status |
+|---------|------|--------|
+| FT-FOUND-001 | ref factories build well-formed ResourceRefs | test-passing |
+| FT-FOUND-002 | id format guard rejects malformed identifiers | test-passing |
+| FT-FOUND-003 | defineFileSet stamps __kind and validates include | test-passing |
+| FT-FOUND-004 | defineConfig / defineSecret declarations | test-passing |
+| FT-FOUND-005 | defineDeployedResource / defineEnvironment declarations | test-passing |
+| FT-FOUND-006 | defineTest / defineTestSet declarations | test-passing |
+| FT-FOUND-007 | defineSignal / defineAuthorization declarations | test-passing |
+| FT-FOUND-008 | defineRule with reads/writes resource refs | test-passing |
+| FT-FOUND-009 | validation factories (ruleOutcome / testSetPass / manualConfirm / etc.) | test-passing |
+| FT-FOUND-010 | action factories (agent / code / invokeRule / human / plan) | test-passing |
+| FT-FOUND-011 | defineContext rejects malformed actions | test-passing |
+| FT-FOUND-012 | defineContext rejects duplicate validation binding ids | test-passing |
+| FT-FOUND-013 | defineContext normalises a string objective | test-passing |
+| FT-FOUND-014 | output() helper stamps producesKind | test-passing |
+| FT-FOUND-020 | classifyDeclarations partitions exports by __kind | test-passing |
+| FT-FOUND-021 | assembler builds children/parentOf maps | test-passing |
+| FT-FOUND-022 | assembler reports duplicate ids (same family + cross-family) | test-passing |
+| FT-FOUND-023 | assembler reports unknown parent | test-passing |
+| FT-FOUND-024 | assembler reports multiple-roots / cycles | test-passing |
+| FT-FOUND-025 | unresolved resource ref reported | test-passing |
+| FT-FOUND-026 | unresolved context-output ref reported | test-passing |
+| FT-FOUND-027 | validation binding scope check | test-passing |
+| FT-FOUND-028 | kind-specific validation refs (rule / test / deployed-resource) | test-passing |
+| FT-FOUND-029 | test-set members must be declared tests | test-passing |
+| FT-FOUND-030 | empty input is valid | test-passing |
+| FT-FOUND-040 | rootContext query | test-passing |
+| FT-FOUND-041 | children / parent / ancestors / descendants | test-passing |
+| FT-FOUND-042 | resolveResourceRef handles all three modes | test-passing |
+| FT-FOUND-043 | resourcesOfKind filters by short name | test-passing |
+| FT-FOUND-044 | testSetsForTest reports many-to-many membership | test-passing |
+| FT-FOUND-045 | implicit dependencies derived from context-output inputs | test-passing |
+| FT-FOUND-046 | rulesReading / rulesWriting | test-passing |
+| FT-FOUND-060 | leaf with no validations is done | test-passing |
+| FT-FOUND-061 | single-validation leaf — passing → done, failing → ready | test-passing |
+| FT-FOUND-062 | partial passing → in-progress | test-passing |
+| FT-FOUND-063 | parent rolls up children | test-passing |
+| FT-FOUND-064 | regression: prior=done, validation now failing | test-passing |
+| FT-FOUND-065 | recovery: prior=regressed, validation passing again | test-passing |
+| FT-FOUND-066 | transitions report only changes | test-passing |
+| FT-FOUND-080 | loader builds expected graph for json-validator fixture | test-passing |
+| FT-FOUND-081 | rule-outcome validation references a declared rule | test-passing |
+| FT-FOUND-082 | context-output ref between contexts resolves | test-passing |
+| FT-FOUND-083 | declarations carry the correct __kind discriminator | test-passing |
+| FT-FOUND-084 | empty / missing project handled gracefully | test-passing |
+| FT-FOUND-085 | compile error in a single file is surfaced and isolated | test-passing |
+
+**Upcoming phases** *(test areas not yet defined)*: Phase 1 — Cold start (FT-COLDSTART-***), Phase 2 — Decompose / manual authoring (FT-DECOMP-***), Phase 3 — Focused build with fingerprints (FT-FOCUS-***), Phase 4 — Status check (FT-STATUS-***), Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***).
+
 ---
 
 ## Tier 2: By Service

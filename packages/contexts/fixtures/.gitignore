@@ -1,0 +1,2 @@
+# Loader writes compiled .mjs here when fixtures are exercised.
+.antimatter-cache/
