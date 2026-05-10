@@ -157,6 +157,8 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 
 **Phase 5 — Regression triage** *(test-passing for unit tests, test-implemented for FT-REGRESS-101..103)*: pure `traceRegression` function in `@antimatter/contexts` building a structured explanation (failing/unevaluable validations with kind-specific detail, child blockers, dependency culprits via implicit input refs), `contexts.regression.trace` automation command, "Why isn't this done?" section in the context detail dialog, per-context `lastTransitionAt` in the snapshot.
 
+**Phase 6 — Review** *(test-implemented for FT-REVIEW-101..103)*: per-project ring buffer of action invocations on the workspace server (max 50), each entry capturing operationId, action kind, ruleId, eventType, invokedAt, and a per-validation status snapshot at invoke time. `contexts.history.list` automation command returns filtered entries; "Recent invocations" section in the context detail dialog renders them with an inline expandable trace fetched via `activity.operation`. After-vs-before validation deltas surface inline.
+
 | Test ID | Name | Status |
 |---------|------|--------|
 | FT-COLDSTART-001 | listTemplates returns metadata for each registered template | test-passing |
@@ -206,8 +208,11 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-REGRESS-101 | Publish context with no deployed-resource yields a failure row | test-implemented |
 | FT-REGRESS-102 | Trace toggles correctly with register / deregister | test-implemented |
 | FT-REGRESS-103 | contexts.regression.trace returns not-found for unknown id | test-implemented |
+| FT-REVIEW-101 | contexts.action.invoke records an entry visible via contexts.history.list | test-implemented |
+| FT-REVIEW-102 | contexts.history.list filters by contextId | test-implemented |
+| FT-REVIEW-103 | history entries carry per-validation status at invoke time | test-implemented |
 
-**Upcoming phases** *(test areas not yet defined)*: Phase 6 — Review (FT-REVIEW-***). Fingerprint-based freshness indicators are also deferred — Phase 3 uses event-driven re-evaluation, which is sufficient for the rule/test/deployed-resource validation kinds wired today.
+**Deferred capabilities** *(post-Phase-6)*: fingerprint-based freshness (file-set hashing, stale-input detection); focus pill in header (Build/Ops scope drives chat + filtering); manual-confirm + code validation execution (Phase 3 leaves these `unknown`); agent-driven action kinds (`action.agent` / `action.code` / `action.human` reject from `contexts.action.invoke` for now); operate-perspective deep dive (Flow E from the design walkthrough).
 
 ---
 

@@ -361,3 +361,58 @@ export async function traceContextRegression(
 ): Promise<RegressionTrace> {
   return execute<RegressionTrace>(projectId, 'contexts.regression.trace', { contextId });
 }
+
+// ---------------------------------------------------------------------------
+// Action invocation history (Phase 6 — review)
+// ---------------------------------------------------------------------------
+
+export type ValidationStatus = 'passing' | 'failing' | 'unknown';
+
+export type ValidationStatusMap = Readonly<Record<string, ValidationStatus>>;
+
+export interface ActionInvocationEntry {
+  readonly entryId: string;
+  readonly contextId: string;
+  readonly contextName: string;
+  readonly actionKind: string;
+  readonly ruleId?: string;
+  readonly eventType?: string;
+  readonly operationId: string;
+  readonly invokedAt: string;
+  readonly validationStatusBefore: ValidationStatusMap;
+}
+
+export async function listContextHistory(
+  projectId: string,
+  options: { contextId?: string; limit?: number } = {},
+): Promise<readonly ActionInvocationEntry[]> {
+  const out = await execute<{ entries: ActionInvocationEntry[] }>(projectId, 'contexts.history.list', {
+    contextId: options.contextId,
+    limit: options.limit,
+  });
+  return out.entries;
+}
+
+// ---------------------------------------------------------------------------
+// Operation trace (uses existing activity.operation command)
+// ---------------------------------------------------------------------------
+
+export interface ActivityEvent {
+  readonly seq: number;
+  readonly loggedAt: string;
+  readonly source: string;
+  readonly kind: string;
+  readonly level: string;
+  readonly message: string;
+  readonly correlationId?: string;
+  readonly operationId?: string;
+  readonly data?: unknown;
+}
+
+export async function fetchOperationTrace(
+  projectId: string,
+  operationId: string,
+): Promise<readonly ActivityEvent[]> {
+  const out = await execute<{ events: ActivityEvent[] }>(projectId, 'activity.operation', { operationId });
+  return out.events;
+}

@@ -10,7 +10,7 @@
  * later phases — for now we surface what we have and leave room.
  */
 import { useEffect, useState } from 'react';
-import { Loader2, CheckCircle2, XCircle, CircleDashed, Play, ArrowRight, AlertTriangle } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, CircleDashed, Play, ArrowRight, AlertTriangle, History, ChevronRight, ChevronDown } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '../ui/dialog';
@@ -19,12 +19,16 @@ import { useProjectStore } from '@/stores/projectStore';
 import {
   invokeContextAction,
   traceContextRegression,
+  listContextHistory,
+  fetchOperationTrace,
   type ContextModelSnapshot,
   type SerializedContext,
   type SerializedValidation,
   type LifecycleStatus,
   type RegressionTrace,
   type ValidationExplanation,
+  type ActionInvocationEntry,
+  type ActivityEvent,
 } from '@/lib/contexts-automation';
 
 const STATUS_LABEL: Record<LifecycleStatus, string> = {
@@ -63,6 +67,8 @@ export function ContextDetailDialog({
   const [invokeMessage, setInvokeMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [trace, setTrace] = useState<RegressionTrace | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
+  const [history, setHistory] = useState<readonly ActionInvocationEntry[]>([]);
+  const [historyVersion, setHistoryVersion] = useState(0);
 
   const context = contextId ? snapshot?.contexts.find((c) => c.id === contextId) ?? null : null;
   const children = context && snapshot ? snapshot.contexts.filter((c) => c.parentId === context.id) : [];
@@ -89,6 +95,20 @@ export function ContextDetailDialog({
     return () => { cancelled = true; };
   }, [projectId, contextId, context?.lifecycleStatus, context]);
 
+  // Fetch invocation history when the dialog opens for a context.
+  // historyVersion bumps after a successful invoke so the freshly-
+  // recorded entry shows up without needing a manual reload.
+  useEffect(() => {
+    if (!projectId || !contextId) {
+      setHistory([]); return;
+    }
+    let cancelled = false;
+    listContextHistory(projectId, { contextId })
+      .then((entries) => { if (!cancelled) setHistory(entries); })
+      .catch(() => { if (!cancelled) setHistory([]); });
+    return () => { cancelled = true; };
+  }, [projectId, contextId, historyVersion]);
+
   const handleInvoke = async () => {
     if (!projectId || !context) return;
     setInvoking(true);
@@ -96,6 +116,7 @@ export function ContextDetailDialog({
     try {
       const res = await invokeContextAction(projectId, context.id);
       setInvokeMessage({ kind: 'ok', text: `Invoked: ${res.eventType ? `event "${res.eventType}"` : res.kind} (${res.operationId})` });
+      setHistoryVersion((v) => v + 1);
     } catch (err: unknown) {
       setInvokeMessage({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -211,6 +232,14 @@ export function ContextDetailDialog({
                 </div>
               )}
             </Section>
+
+            {history.length > 0 && (
+              <HistorySection
+                projectId={projectId}
+                history={history}
+                currentValidations={context.validations}
+              />
+            )}
 
             {children.length > 0 && (
               <Section label={`Sub-contexts (${children.length})`}>
@@ -374,6 +403,158 @@ function TraceSection({
       )}
     </Section>
   );
+}
+
+// ---------------------------------------------------------------------------
+// History section (Phase 6)
+// ---------------------------------------------------------------------------
+
+function HistorySection({
+  projectId,
+  history,
+  currentValidations,
+}: {
+  projectId: string | null;
+  history: readonly ActionInvocationEntry[];
+  currentValidations: readonly SerializedValidation[];
+}) {
+  return (
+    <Section label={`Recent invocations (${history.length})`}>
+      <ul className="space-y-1.5" data-testid="context-detail-history">
+        {history.map((entry) => (
+          <InvocationRow
+            key={entry.entryId}
+            projectId={projectId}
+            entry={entry}
+            currentValidations={currentValidations}
+          />
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+function InvocationRow({
+  projectId,
+  entry,
+  currentValidations,
+}: {
+  projectId: string | null;
+  entry: ActionInvocationEntry;
+  currentValidations: readonly SerializedValidation[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [trace, setTrace] = useState<readonly ActivityEvent[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Validations whose status changed since invoke time.
+  const delta = currentValidations
+    .map((v) => {
+      const before = entry.validationStatusBefore[v.id];
+      if (!before) return null;
+      if (before === v.status) return null;
+      return { id: v.id, before, now: v.status };
+    })
+    .filter((d): d is { id: string; before: string; now: string } => d !== null);
+
+  const toggle = async () => {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    if (trace !== null || !projectId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const events = await fetchOperationTrace(projectId, entry.operationId);
+      setTrace(events);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <li
+      className="border border-border rounded p-2"
+      data-testid={`context-detail-history-entry-${entry.entryId}`}
+    >
+      <button
+        type="button"
+        className="w-full text-left flex items-start gap-2"
+        onClick={toggle}
+        data-testid={`context-detail-history-toggle-${entry.entryId}`}
+      >
+        <History className="h-3.5 w-3.5 mt-0.5 text-muted-foreground flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2 text-xs">
+            <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+              {entry.actionKind}
+            </span>
+            {entry.eventType && (
+              <span className="font-mono">{entry.eventType}</span>
+            )}
+            <span className="text-muted-foreground">{formatTimestamp(entry.invokedAt)}</span>
+          </div>
+          {entry.ruleId && (
+            <div className="text-xs text-muted-foreground">
+              rule: <span className="font-mono">{entry.ruleId}</span>
+              {' · op: '}
+              <span className="font-mono">{entry.operationId}</span>
+            </div>
+          )}
+          {delta.length > 0 && (
+            <div className="text-xs mt-1 flex flex-wrap gap-2" data-testid={`context-detail-history-delta-${entry.entryId}`}>
+              {delta.map((d) => (
+                <span key={d.id} className="font-mono">
+                  {d.id}: <span className="text-muted-foreground">{d.before}</span> → <span className={d.now === 'passing' ? 'text-green-500' : d.now === 'failing' ? 'text-destructive' : 'text-muted-foreground'}>{d.now}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        {expanded ? <ChevronDown className="h-3.5 w-3.5 mt-0.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 mt-0.5 text-muted-foreground" />}
+      </button>
+      {expanded && (
+        <div className="mt-2 pl-5 text-xs" data-testid={`context-detail-history-trace-${entry.entryId}`}>
+          {loading && (
+            <div className="text-muted-foreground flex items-center">
+              <Loader2 className="h-3 w-3 animate-spin mr-1" /> Loading operation trace…
+            </div>
+          )}
+          {error && <div className="text-destructive">{error}</div>}
+          {trace && trace.length === 0 && (
+            <div className="text-muted-foreground">No activity recorded under this operation yet.</div>
+          )}
+          {trace && trace.length > 0 && (
+            <ul className="space-y-0.5 font-mono">
+              {trace.map((e) => (
+                <li key={e.seq}>
+                  <span className="text-muted-foreground">{formatTimestamp(e.loggedAt)}</span>
+                  {' '}
+                  <span className="text-muted-foreground">[{e.kind}]</span>
+                  {' '}
+                  <span>{e.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function formatTimestamp(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch {
+    return iso;
+  }
 }
 
 function explainText(f: ValidationExplanation): string {

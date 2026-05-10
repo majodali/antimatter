@@ -1031,6 +1031,14 @@ export function createServerCommandExecutor(
     );
   });
 
+  handlers.set('contexts.history.list', async (params) => {
+    const store = projectContextModelStore?.();
+    if (!store) throw new AutomationCommandError('Project context model store not ready', 'execution-error');
+    const contextId = params.contextId as string | undefined;
+    const limit = params.limit as number | undefined;
+    return { entries: store.listInvocations({ contextId, limit }) };
+  });
+
   handlers.set('contexts.regression.trace', async (params) => {
     const contextId = requireParam<string>(params, 'contextId');
     const store = projectContextModelStore?.();
@@ -1076,6 +1084,17 @@ export function createServerCommandExecutor(
       }
       wm.emitEvent({ type: on.name, operationId, contextId }).catch((err) => {
         console.error(`[contexts.action.invoke] emit failed for context ${contextId}:`, err);
+      });
+      // Record this invocation so the IDE's "Recent invocations" section
+      // can render it (Phase 6).
+      store.recordInvocation({
+        contextId,
+        contextName: ctx.name,
+        actionKind: action.kind,
+        ruleId,
+        eventType: on.name,
+        operationId,
+        invokedAt: new Date().toISOString(),
       });
       return { queued: true, contextId, kind: action.kind, ruleId, eventType: on.name, operationId };
     }

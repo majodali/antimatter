@@ -128,6 +128,31 @@ export interface SerializedValidation {
   readonly resources: readonly string[];
 }
 
+/** A validation status snapshot at a moment in time, keyed by binding id. */
+export type ValidationStatusMap = Readonly<Record<string, 'passing' | 'failing' | 'unknown'>>;
+
+/**
+ * One recorded invocation of `contexts.action.invoke`. Ring-buffered
+ * server-side; surfaced via the `contexts.history.list` automation
+ * command and rendered as the "Recent invocations" section of the
+ * context detail dialog (Phase 6).
+ */
+export interface ActionInvocationEntry {
+  /** Unique within the history buffer. */
+  readonly entryId: string;
+  readonly contextId: string;
+  readonly contextName: string;
+  readonly actionKind: string;
+  /** Set when actionKind is 'invoke-rule'. */
+  readonly ruleId?: string;
+  /** The workflow event the rule was invoked via (Phase 3 invoke-rule path). */
+  readonly eventType?: string;
+  readonly operationId: string;
+  readonly invokedAt: string;
+  /** Per-validation status of the context at invoke time. */
+  readonly validationStatusBefore: ValidationStatusMap;
+}
+
 export interface SerializedResource {
   readonly id: string;
   readonly kind: string;       // short name e.g. 'file-set'
@@ -147,6 +172,9 @@ export interface SerializedRule {
 
 /** How many recent transitions to retain in the snapshot ring buffer. */
 const MAX_RECENT_TRANSITIONS = 50;
+
+/** How many action invocations to retain in the history ring buffer. */
+const MAX_HISTORY_ENTRIES = 50;
 
 const EMPTY_BY_STATUS: LifecycleCounts = {
   pending: 0,
@@ -205,6 +233,8 @@ export class ProjectContextModelStore {
   private recentTransitions: SerializedTransition[] = [];
   /** Per-context most-recent transition timestamp (ISO). */
   private lastTransitionAt = new Map<string, string>();
+  /** Most-recent-first ring buffer of action invocations (Phase 6). */
+  private invocationHistory: ActionInvocationEntry[] = [];
 
   constructor(
     private readonly projectRoot: string,
@@ -460,6 +490,52 @@ export class ProjectContextModelStore {
   /** The full ProjectModel for callers that need richer access. */
   getModel(): ProjectModel | null {
     return this.model;
+  }
+
+  /**
+   * Capture the validation status of a context at this instant. Used
+   * by `recordInvocation` so the IDE can compute a "what changed
+   * since invoke" delta against the live snapshot.
+   */
+  private captureValidationStatus(contextId: string): ValidationStatusMap {
+    const ctx = this.snapshot.contexts.find(c => c.id === contextId);
+    if (!ctx) return {};
+    const map: Record<string, 'passing' | 'failing' | 'unknown'> = {};
+    for (const v of ctx.validations) map[v.id] = v.status;
+    return map;
+  }
+
+  /**
+   * Append an action-invocation entry to the history ring buffer.
+   * Idempotent against duplicate operationIds — the second push for
+   * the same operationId replaces the first (which shouldn't normally
+   * happen, but keeps the buffer self-correcting).
+   */
+  recordInvocation(entry: Omit<ActionInvocationEntry, 'entryId' | 'validationStatusBefore'>): ActionInvocationEntry {
+    const validationStatusBefore = this.captureValidationStatus(entry.contextId);
+    const full: ActionInvocationEntry = {
+      ...entry,
+      entryId: `inv-${entry.operationId}`,
+      validationStatusBefore,
+    };
+    // Drop any prior entry with the same operationId (shouldn't happen often).
+    this.invocationHistory = this.invocationHistory.filter(e => e.operationId !== entry.operationId);
+    this.invocationHistory.unshift(full);
+    if (this.invocationHistory.length > MAX_HISTORY_ENTRIES) {
+      this.invocationHistory = this.invocationHistory.slice(0, MAX_HISTORY_ENTRIES);
+    }
+    return full;
+  }
+
+  /**
+   * Read the invocation history. Optional `contextId` filter; capped
+   * client-side for transport friendliness.
+   */
+  listInvocations(filter: { contextId?: string; limit?: number } = {}): ActionInvocationEntry[] {
+    const limit = filter.limit ?? MAX_HISTORY_ENTRIES;
+    let results = this.invocationHistory;
+    if (filter.contextId) results = results.filter(e => e.contextId === filter.contextId);
+    return results.slice(0, limit);
   }
 
   /**

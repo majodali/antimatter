@@ -19,6 +19,7 @@ import { decompTests } from './decomp-tests.js';
 import { focusTests } from './focus-tests.js';
 import { statusTests } from './status-tests.js';
 import { regressTests } from './regress-tests.js';
+import { reviewTests } from './review-tests.js';
 
 /** All registered functional test modules. */
 export const allTestModules: readonly TestModule[] = [
@@ -34,6 +35,7 @@ export const allTestModules: readonly TestModule[] = [
   ...focusTests,
   ...statusTests,
   ...regressTests,
+  ...reviewTests,
 ];
 
 /** Test modules grouped by area. */
@@ -60,3 +62,4 @@ export { decompTests } from './decomp-tests.js';
 export { focusTests } from './focus-tests.js';
 export { statusTests } from './status-tests.js';
 export { regressTests } from './regress-tests.js';
+export { reviewTests } from './review-tests.js';
