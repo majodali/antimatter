@@ -9,8 +9,8 @@
  * Cross-cutting affordances (focus, attribution, freshness) land in
  * later phases — for now we surface what we have and leave room.
  */
-import { useState } from 'react';
-import { Loader2, CheckCircle2, XCircle, CircleDashed, Play, ArrowRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Loader2, CheckCircle2, XCircle, CircleDashed, Play, ArrowRight, AlertTriangle } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '../ui/dialog';
@@ -18,10 +18,13 @@ import { Button } from '../ui/button';
 import { useProjectStore } from '@/stores/projectStore';
 import {
   invokeContextAction,
+  traceContextRegression,
   type ContextModelSnapshot,
   type SerializedContext,
   type SerializedValidation,
   type LifecycleStatus,
+  type RegressionTrace,
+  type ValidationExplanation,
 } from '@/lib/contexts-automation';
 
 const STATUS_LABEL: Record<LifecycleStatus, string> = {
@@ -58,12 +61,33 @@ export function ContextDetailDialog({
   const projectId = useProjectStore((s) => s.currentProjectId);
   const [invoking, setInvoking] = useState(false);
   const [invokeMessage, setInvokeMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [trace, setTrace] = useState<RegressionTrace | null>(null);
+  const [traceLoading, setTraceLoading] = useState(false);
 
   const context = contextId ? snapshot?.contexts.find((c) => c.id === contextId) ?? null : null;
   const children = context && snapshot ? snapshot.contexts.filter((c) => c.parentId === context.id) : [];
   const parent = context?.parentId && snapshot
     ? snapshot.contexts.find((c) => c.id === context.parentId) ?? null
     : null;
+
+  // Fetch the trace whenever a non-done context is opened (or its
+  // status changes while the dialog is open). 'done' contexts have
+  // nothing to explain and we skip the round-trip.
+  useEffect(() => {
+    if (!projectId || !context || !contextId) {
+      setTrace(null); return;
+    }
+    if (context.lifecycleStatus === 'done') {
+      setTrace(null); return;
+    }
+    let cancelled = false;
+    setTraceLoading(true);
+    traceContextRegression(projectId, contextId)
+      .then((t) => { if (!cancelled) setTrace(t); })
+      .catch(() => { if (!cancelled) setTrace(null); })
+      .finally(() => { if (!cancelled) setTraceLoading(false); });
+    return () => { cancelled = true; };
+  }, [projectId, contextId, context?.lifecycleStatus, context]);
 
   const handleInvoke = async () => {
     if (!projectId || !context) return;
@@ -152,6 +176,13 @@ export function ContextDetailDialog({
                 </ul>
               )}
             </Section>
+
+            <TraceSection
+              status={context.lifecycleStatus}
+              trace={trace}
+              loading={traceLoading}
+              onContextSelect={onContextSelect}
+            />
 
             <Section label="Action">
               <div className="flex items-start gap-3">
@@ -246,6 +277,130 @@ function ValidationRow({ validation }: { validation: SerializedValidation }) {
       </div>
     </li>
   );
+}
+
+function TraceSection({
+  status, trace, loading, onContextSelect,
+}: {
+  status: LifecycleStatus;
+  trace: RegressionTrace | null;
+  loading: boolean;
+  onContextSelect: (id: string) => void;
+}) {
+  if (status === 'done') return null;
+  if (loading && !trace) {
+    return (
+      <Section label="Why isn't this done?">
+        <div className="text-xs text-muted-foreground flex items-center" data-testid="context-detail-trace-loading">
+          <Loader2 className="h-3 w-3 animate-spin mr-1" /> Loading trace…
+        </div>
+      </Section>
+    );
+  }
+  if (!trace) return null;
+
+  const empty =
+    trace.validationFailures.length === 0 &&
+    trace.childBlockers.length === 0 &&
+    trace.dependencyCulprits.length === 0;
+
+  return (
+    <Section label="Why isn't this done?">
+      {empty ? (
+        <p className="text-xs text-muted-foreground" data-testid="context-detail-trace-empty">
+          Nothing surfaced — current status: <span className="font-medium">{STATUS_LABEL[trace.status]}</span>.
+        </p>
+      ) : (
+        <div className="space-y-2 text-xs" data-testid="context-detail-trace">
+          {trace.dependencyCulprits.length > 0 && (
+            <div>
+              <div className="font-medium text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> Upstream dependencies
+              </div>
+              <ul className="ml-4 mt-1 space-y-0.5">
+                {trace.dependencyCulprits.map((d) => (
+                  <li key={d.contextId}>
+                    <button
+                      className="hover:underline"
+                      onClick={() => onContextSelect(d.contextId)}
+                      data-testid={`context-detail-trace-dep-${d.contextId}`}
+                    >
+                      <span className="font-medium">{d.contextName}</span>
+                      <span className="text-muted-foreground"> — {d.status}</span>
+                      {d.path.length > 1 && (
+                        <span className="text-muted-foreground"> ({d.path.join(' → ')})</span>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {trace.validationFailures.length > 0 && (
+            <div>
+              <div className="font-medium">Failing or unevaluable validations</div>
+              <ul className="ml-4 mt-1 space-y-0.5">
+                {trace.validationFailures.map((f) => (
+                  <li key={f.validationId} data-testid={`context-detail-trace-validation-${f.validationId}`}>
+                    <span className="font-mono">{f.validationId}</span>
+                    <span className="text-muted-foreground"> — {explainText(f)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {trace.childBlockers.length > 0 && (
+            <div>
+              <div className="font-medium">Sub-contexts not yet done</div>
+              <ul className="ml-4 mt-1 space-y-0.5">
+                {trace.childBlockers.map((b) => (
+                  <li key={b.contextId}>
+                    <button
+                      className="hover:underline"
+                      onClick={() => onContextSelect(b.contextId)}
+                      data-testid={`context-detail-trace-child-${b.contextId}`}
+                    >
+                      <span className="font-medium">{b.contextName}</span>
+                      <span className="text-muted-foreground"> — {b.status}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function explainText(f: ValidationExplanation): string {
+  switch (f.kind) {
+    case 'rule-outcome':
+      if (!f.ruleDeclared) return `references undeclared rule "${f.ruleId}"`;
+      if (f.ruleStatus === 'failed') return `rule "${f.ruleId}" last run failed`;
+      return `rule "${f.ruleId}" hasn't run yet`;
+    case 'test-pass':
+      if (f.passing === null) return `test "${f.testId}" hasn't run yet`;
+      return `test "${f.testId}" failed`;
+    case 'test-set-pass': {
+      const parts: string[] = [];
+      if (f.failingMembers.length > 0) parts.push(`${f.failingMembers.length} failing (${f.failingMembers.slice(0, 3).join(', ')}${f.failingMembers.length > 3 ? '…' : ''})`);
+      if (f.unobservedMembers.length > 0) parts.push(`${f.unobservedMembers.length} not yet run`);
+      if (parts.length === 0) return `test set "${f.testSetId}" — no member tests recorded`;
+      return `test set "${f.testSetId}": ${parts.join(', ')}`;
+    }
+    case 'deployed-resource-present':
+      return `deployed resource "${f.resourceId}" is not present`;
+    case 'deployed-resource-healthy':
+      return `deployed resource "${f.resourceId}" is not healthy`;
+    case 'manual-confirm':
+      return `awaiting confirmation: ${f.description}`;
+    case 'code':
+      return `code validation${f.fn ? ` (${f.fn})` : ''}: ${f.description}`;
+  }
 }
 
 // Helper component re-export

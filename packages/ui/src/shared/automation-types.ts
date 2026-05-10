@@ -164,6 +164,7 @@ export const COMMAND_CATALOG: readonly CommandDefinition[] = [
   { command: 'contexts.resources.add', execution: 'server', description: 'Append a new defineX({...}) resource to .antimatter/resources.ts (kind: file-set / config / secret / deployed-resource / environment / test / test-set)' },
   { command: 'contexts.rules.add', execution: 'server', description: 'Append a new defineRule({...}) to .antimatter/build.ts' },
   { command: 'contexts.action.invoke', execution: 'server', description: 'Invoke a context\'s action (currently supports invoke-rule kind only)' },
+  { command: 'contexts.regression.trace', execution: 'server', description: 'Explain why a context is regressed/dep-regressed/in-progress (failing validations, unobserved tests, dep culprits, child blockers)' },
 
   // Meta
   { command: 'commands.list', execution: 'server', description: 'List all available commands' },

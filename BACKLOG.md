@@ -155,6 +155,8 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 
 **Phase 4 — Status check / orient** *(test-implemented for FT-STATUS-101..103)*: snapshot now carries `counts.byStatus` (per-lifecycle bucket) and a recent-transitions ring buffer, `context:transitioned` events emitted to the unified activity log on every lifecycle change, color-coded status chips in the panel header, "Needs attention" banner surfacing regressions / failing validations / model errors, "Recent activity" inline list of transitions.
 
+**Phase 5 — Regression triage** *(test-passing for unit tests, test-implemented for FT-REGRESS-101..103)*: pure `traceRegression` function in `@antimatter/contexts` building a structured explanation (failing/unevaluable validations with kind-specific detail, child blockers, dependency culprits via implicit input refs), `contexts.regression.trace` automation command, "Why isn't this done?" section in the context detail dialog, per-context `lastTransitionAt` in the snapshot.
+
 | Test ID | Name | Status |
 |---------|------|--------|
 | FT-COLDSTART-001 | listTemplates returns metadata for each registered template | test-passing |
@@ -191,8 +193,21 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-STATUS-101 | counts.byStatus sums to counts.contexts | test-implemented |
 | FT-STATUS-102 | Registering a deployed-resource captures a recent transition | test-implemented |
 | FT-STATUS-103 | context:transitioned events show up in activity.list | test-implemented |
+| FT-REGRESS-001 | trace returns null for unknown context | test-passing |
+| FT-REGRESS-002 | passing context yields empty failure lists | test-passing |
+| FT-REGRESS-003 | failed rule-outcome surfaces ruleId + status | test-passing |
+| FT-REGRESS-004 | unknown rule status surfaces too | test-passing |
+| FT-REGRESS-005 | test-set-pass partitions failing vs unobserved members | test-passing |
+| FT-REGRESS-006 | deployed-resource-present surfaces resourceId on failure | test-passing |
+| FT-REGRESS-007 | child blockers reported on parent's trace | test-passing |
+| FT-REGRESS-008 | dependency culprit walks input refs | test-passing |
+| FT-REGRESS-009 | manual-confirm + code validations surface as informational | test-passing |
+| FT-REGRESS-010 | passing rule does not surface | test-passing |
+| FT-REGRESS-101 | Publish context with no deployed-resource yields a failure row | test-implemented |
+| FT-REGRESS-102 | Trace toggles correctly with register / deregister | test-implemented |
+| FT-REGRESS-103 | contexts.regression.trace returns not-found for unknown id | test-implemented |
 
-**Upcoming phases** *(test areas not yet defined)*: Phase 5 — Regression triage (FT-REGRESS-***), Phase 6 — Review (FT-REVIEW-***). Fingerprint-based freshness indicators are also deferred — Phase 3 uses event-driven re-evaluation, which is sufficient for the rule/test/deployed-resource validation kinds wired today.
+**Upcoming phases** *(test areas not yet defined)*: Phase 6 — Review (FT-REVIEW-***). Fingerprint-based freshness indicators are also deferred — Phase 3 uses event-driven re-evaluation, which is sufficient for the rule/test/deployed-resource validation kinds wired today.
 
 ---
 

@@ -38,6 +38,8 @@ export interface SerializedContext {
   readonly actionKind: string;
   readonly actionDescription: string;
   readonly lifecycleStatus: LifecycleStatus;
+  /** ISO timestamp of the most recent lifecycle transition for this context. */
+  readonly lastTransitionAt?: string;
 }
 
 export interface SerializedResource {
@@ -314,4 +316,48 @@ export async function invokeContextAction(
   contextId: string,
 ): Promise<InvokeActionResult> {
   return execute<InvokeActionResult>(projectId, 'contexts.action.invoke', { contextId });
+}
+
+// ---------------------------------------------------------------------------
+// Regression trace (Phase 5)
+// ---------------------------------------------------------------------------
+
+export type ValidationExplanation =
+  | { validationId: string; kind: 'rule-outcome'; ruleId: string; ruleStatus: 'success' | 'failed' | 'unknown'; ruleDeclared: boolean }
+  | { validationId: string; kind: 'test-pass'; testId: string; passing: boolean | null }
+  | { validationId: string; kind: 'test-set-pass'; testSetId: string; memberCount: number; failingMembers: readonly string[]; unobservedMembers: readonly string[] }
+  | { validationId: string; kind: 'deployed-resource-present'; resourceId: string; present: boolean }
+  | { validationId: string; kind: 'deployed-resource-healthy'; resourceId: string; healthy: boolean }
+  | { validationId: string; kind: 'manual-confirm'; description: string }
+  | { validationId: string; kind: 'code'; description: string; fn?: string };
+
+export interface ChildBlocker {
+  readonly contextId: string;
+  readonly contextName: string;
+  readonly status: LifecycleStatus;
+}
+
+export interface DependencyCulprit {
+  readonly contextId: string;
+  readonly contextName: string;
+  readonly status: LifecycleStatus;
+  readonly path: readonly string[];
+}
+
+export interface RegressionTrace {
+  readonly contextId: string;
+  readonly contextName: string;
+  readonly status: LifecycleStatus;
+  readonly hasOwnFailures: boolean;
+  readonly hasDependencyFailures: boolean;
+  readonly validationFailures: readonly ValidationExplanation[];
+  readonly childBlockers: readonly ChildBlocker[];
+  readonly dependencyCulprits: readonly DependencyCulprit[];
+}
+
+export async function traceContextRegression(
+  projectId: string,
+  contextId: string,
+): Promise<RegressionTrace> {
+  return execute<RegressionTrace>(projectId, 'contexts.regression.trace', { contextId });
 }

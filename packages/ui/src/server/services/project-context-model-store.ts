@@ -20,6 +20,7 @@
 import {
   loadProjectModel,
   deriveProjectLifecycle,
+  traceRegression,
   validationKey,
   KIND,
 } from '@antimatter/contexts';
@@ -31,6 +32,7 @@ import type {
   LifecycleStatus,
   ValidationDeclaration,
   ContextDeclaration,
+  RegressionTrace,
 } from '@antimatter/contexts';
 
 /** Per-lifecycle-status counts (Phase 4 — drives the status header). */
@@ -103,6 +105,12 @@ export interface SerializedContext {
    * dependency-regressed). Default is 'pending' for an empty model.
    */
   readonly lifecycleStatus: LifecycleStatus;
+  /**
+   * ISO timestamp of the most recent lifecycle transition for this
+   * context, or undefined if none have been observed since the worker
+   * started. Drives "regressed N minutes ago" annotations.
+   */
+  readonly lastTransitionAt?: string;
 }
 
 /** Per-validation status surfaced in the snapshot for UI display. */
@@ -195,6 +203,8 @@ export class ProjectContextModelStore {
   private priorStatuses = new Map<string, LifecycleStatus>();
   /** Most-recent-first ring buffer of captured transitions. */
   private recentTransitions: SerializedTransition[] = [];
+  /** Per-context most-recent transition timestamp (ISO). */
+  private lastTransitionAt = new Map<string, string>();
 
   constructor(
     private readonly projectRoot: string,
@@ -295,6 +305,10 @@ export class ProjectContextModelStore {
       // Most-recent-first: prepend, cap at MAX_RECENT_TRANSITIONS.
       this.recentTransitions = [...captured.slice().reverse(), ...this.recentTransitions]
         .slice(0, MAX_RECENT_TRANSITIONS);
+      // Track per-context "when did this last transition" for the snapshot.
+      for (const t of captured) {
+        this.lastTransitionAt.set(t.contextId, at);
+      }
       // Fire the per-transition hook (Phase 4: drives activityLog wiring in ProjectContext).
       if (this.collaborators.onTransition) {
         for (const t of captured) {
@@ -333,6 +347,7 @@ export class ProjectContextModelStore {
         actionKind: c.action.kind,
         actionDescription: c.action.description,
         lifecycleStatus: status,
+        lastTransitionAt: this.lastTransitionAt.get(c.id),
       });
     }
 
@@ -445,6 +460,22 @@ export class ProjectContextModelStore {
   /** The full ProjectModel for callers that need richer access. */
   getModel(): ProjectModel | null {
     return this.model;
+  }
+
+  /**
+   * Build a regression trace for the given context against the
+   * store's current model + collaborator state. Returns null when
+   * the context is unknown or no model is loaded.
+   */
+  traceRegression(contextId: string): RegressionTrace | null {
+    if (!this.model) return null;
+    return traceRegression(this.model, contextId, {
+      getRuleStatus: this.collaborators.getRuleStatus,
+      getTestPasses: this.collaborators.getTestPasses,
+      hasDeployedResource: this.collaborators.hasDeployedResource,
+      isDeployedResourceHealthy: this.collaborators.isDeployedResourceHealthy,
+      getLifecycleStatus: (id) => this.priorStatuses.get(id),
+    });
   }
 
   /** Subscribe to snapshot changes. Returns unsubscribe fn. */

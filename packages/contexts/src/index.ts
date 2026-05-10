@@ -123,6 +123,16 @@ export {
 export { deriveProjectLifecycle, validationKey } from './derive.js';
 export type { DeriveLifecycleInput, DeriveLifecycleOutput } from './derive.js';
 
+// Regression triage
+export { traceRegression } from './trace.js';
+export type {
+  RegressionTrace,
+  ValidationExplanation,
+  ChildBlocker,
+  DependencyCulprit,
+  TraceCollaborators,
+} from './trace.js';
+
 // Templates
 export {
   listTemplates,

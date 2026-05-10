@@ -1031,6 +1031,15 @@ export function createServerCommandExecutor(
     );
   });
 
+  handlers.set('contexts.regression.trace', async (params) => {
+    const contextId = requireParam<string>(params, 'contextId');
+    const store = projectContextModelStore?.();
+    if (!store) throw new AutomationCommandError('Project context model store not ready', 'execution-error');
+    const trace = store.traceRegression(contextId);
+    if (!trace) throw new AutomationCommandError(`Context '${contextId}' not found`, 'not-found');
+    return trace;
+  });
+
   handlers.set('contexts.action.invoke', async (params) => {
     const contextId = requireParam<string>(params, 'contextId');
     const store = projectContextModelStore?.();
