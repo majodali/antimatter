@@ -907,7 +907,7 @@ export function createServerCommandExecutor(
     // Refuse to overwrite existing files unless explicitly requested.
     const conflicts: string[] = [];
     for (const path of Object.keys(rendered.files)) {
-      if (await workspace.exists(path)) conflicts.push(path);
+      if (await workspace.fileExists(path)) conflicts.push(path);
     }
     if (conflicts.length > 0 && !overwrite) {
       throw new AutomationCommandError(
@@ -957,7 +957,7 @@ export function createServerCommandExecutor(
     const { appendDeclaration } = await import('@antimatter/contexts');
 
     let existing = '';
-    if (await workspace.exists(relPath)) {
+    if (await workspace.fileExists(relPath)) {
       existing = await workspace.readFile(relPath);
     }
     const next = appendDeclaration(existing, decl, { fileLabel });
