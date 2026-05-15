@@ -31,6 +31,13 @@ export interface HeadlessTestRunnerConfig {
   baseUrl: string;
   /** API base URL for creating/deleting test projects. */
   apiBaseUrl: string;
+  /**
+   * Cognito access token used to (a) authenticate the disposable-project
+   * create/delete calls and (b) authenticate the browser page via
+   * `window.__HEADLESS_TOKEN__` injection. When omitted, both calls go
+   * unauthenticated — only viable against a fully open API.
+   */
+  authToken?: string;
   /** Path to Chromium executable (auto-detected if omitted). */
   chromiumPath?: string;
   /** Test run timeout in ms (default: 300_000 = 5 min). */
@@ -74,9 +81,11 @@ export async function runHeadlessTests(
 
   try {
     // 1. Create disposable test project
+    const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (config.authToken) authHeaders['Authorization'] = `Bearer ${config.authToken}`;
     const createResp = await fetch(`${config.apiBaseUrl}/projects`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ name: `__headless_test_${Date.now()}` }),
     });
     if (!createResp.ok) {
@@ -109,7 +118,18 @@ export async function runHeadlessTests(
       consoleLogs.push(`[page-error] ${err.message}`);
     });
 
-    // 3. Navigate to test project
+    // 3a. Inject the Cognito token before any page script runs. `auth.ts`
+    // and `AuthGate.tsx` both read `window.__HEADLESS_TOKEN__` and treat
+    // its presence as a signed-in session — no Amplify redirect, no
+    // localStorage seeding required.
+    if (config.authToken) {
+      const token = config.authToken;
+      await page.evaluateOnNewDocument((t: string) => {
+        (window as unknown as { __HEADLESS_TOKEN__?: string }).__HEADLESS_TOKEN__ = t;
+      }, token);
+    }
+
+    // 3b. Navigate to test project
     const url = `${config.baseUrl}/?project=${encodeURIComponent(testProjectId)}`;
     await page.goto(url, { waitUntil: 'networkidle0', timeout: 60_000 });
 
@@ -119,7 +139,16 @@ export async function runHeadlessTests(
       { timeout: 30_000 },
     );
 
-    // 5. Run tests via the exposed __runTests global
+    // 5. Wait for __runTests to appear — the client's automation handler
+    // installs it lazily. If it doesn't show up within 15 s, fail clearly.
+    await page.waitForFunction(
+      () => typeof (window as any).__runTests === 'function',
+      { timeout: 15_000 },
+    ).catch(() => {
+      // Fall through; page.evaluate below will produce a descriptive error.
+    });
+
+    // 6. Run tests via the exposed __runTests global
     const summary = await page.evaluate(
       async (testIds?: string[], testOptions?: { area?: string; failedOnly?: boolean }) => {
         const runner = (window as any).__runTests;
@@ -155,8 +184,11 @@ export async function runHeadlessTests(
       await browser.close().catch(() => {});
     }
     if (testProjectId) {
+      const cleanupHeaders: Record<string, string> = {};
+      if (config.authToken) cleanupHeaders['Authorization'] = `Bearer ${config.authToken}`;
       await fetch(`${config.apiBaseUrl}/projects/${testProjectId}`, {
         method: 'DELETE',
+        headers: cleanupHeaders,
       }).catch(() => {});
     }
   }

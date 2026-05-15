@@ -147,17 +147,17 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-FOUND-084 | empty / missing project handled gracefully | test-passing |
 | FT-FOUND-085 | compile error in a single file is surfaced and isolated | test-passing |
 
-**Phase 1 — Cold start** *(test-passing for unit tests, test-implemented for FT-COLDSTART-101..104)*: empty-state UI, template registry, automation commands (`contexts.model.get`, `contexts.templates.list`, `contexts.templates.apply`), basic context tree render, ProjectContextModelStore on the workspace server. Templates: `empty`, `json-validator`.
+**Phase 1 — Cold start** *(test-passing)*: empty-state UI, template registry, automation commands (`contexts.model.get`, `contexts.templates.list`, `contexts.templates.apply`), basic context tree render, ProjectContextModelStore on the workspace server. Templates: `empty`, `json-validator`.
 
-**Phase 2 — Decompose / manual authoring** *(test-passing for unit tests, test-implemented for FT-DECOMP-101..105)*: file-watcher reload + WebSocket broadcast (live updates as users edit `.antimatter/*.ts`), source emitters that round-trip through esbuild + the loader, automation commands `contexts.contexts.add` / `contexts.resources.add` / `contexts.rules.add`, three Add modals in the IDE (Add context / Add resource / Add rule).
+**Phase 2 — Decompose / manual authoring** *(test-passing)*: file-watcher reload + WebSocket broadcast (live updates as users edit `.antimatter/*.ts`), source emitters that round-trip through esbuild + the loader, automation commands `contexts.contexts.add` / `contexts.resources.add` / `contexts.rules.add`, three Add modals in the IDE (Add context / Add resource / Add rule).
 
-**Phase 3 — Focused build** *(test-implemented for FT-FOCUS-101..104)*: validation evaluator (rule-outcome / test-pass / test-set-pass / deployed-resource-{present,healthy} kinds wired against existing services), enriched snapshot with per-validation status + per-context lifecycle status, re-evaluation triggered by rule + test + deployed-resource changes, `contexts.action.invoke` automation command for invoke-rule actions, context detail dialog with validation status + Start button, clickable tree rows with status icons.
+**Phase 3 — Focused build** *(test-passing)*: validation evaluator (rule-outcome / test-pass / test-set-pass / deployed-resource-{present,healthy} kinds wired against existing services), enriched snapshot with per-validation status + per-context lifecycle status, re-evaluation triggered by rule + test + deployed-resource changes, `contexts.action.invoke` automation command for invoke-rule actions, context detail dialog with validation status + Start button, clickable tree rows with status icons.
 
-**Phase 4 — Status check / orient** *(test-implemented for FT-STATUS-101..103)*: snapshot now carries `counts.byStatus` (per-lifecycle bucket) and a recent-transitions ring buffer, `context:transitioned` events emitted to the unified activity log on every lifecycle change, color-coded status chips in the panel header, "Needs attention" banner surfacing regressions / failing validations / model errors, "Recent activity" inline list of transitions.
+**Phase 4 — Status check / orient** *(test-passing)*: snapshot now carries `counts.byStatus` (per-lifecycle bucket) and a recent-transitions ring buffer, `context:transitioned` events emitted to the unified activity log on every lifecycle change, color-coded status chips in the panel header, "Needs attention" banner surfacing regressions / failing validations / model errors, "Recent activity" inline list of transitions.
 
-**Phase 5 — Regression triage** *(test-passing for unit tests, test-implemented for FT-REGRESS-101..103)*: pure `traceRegression` function in `@antimatter/contexts` building a structured explanation (failing/unevaluable validations with kind-specific detail, child blockers, dependency culprits via implicit input refs), `contexts.regression.trace` automation command, "Why isn't this done?" section in the context detail dialog, per-context `lastTransitionAt` in the snapshot.
+**Phase 5 — Regression triage** *(test-passing)*: pure `traceRegression` function in `@antimatter/contexts` building a structured explanation (failing/unevaluable validations with kind-specific detail, child blockers, dependency culprits via implicit input refs), `contexts.regression.trace` automation command, "Why isn't this done?" section in the context detail dialog, per-context `lastTransitionAt` in the snapshot.
 
-**Phase 6 — Review** *(test-implemented for FT-REVIEW-101..103)*: per-project ring buffer of action invocations on the workspace server (max 50), each entry capturing operationId, action kind, ruleId, eventType, invokedAt, and a per-validation status snapshot at invoke time. `contexts.history.list` automation command returns filtered entries; "Recent invocations" section in the context detail dialog renders them with an inline expandable trace fetched via `activity.operation`. After-vs-before validation deltas surface inline.
+**Phase 6 — Review** *(test-passing)*: per-project ring buffer of action invocations on the workspace server (max 50), each entry capturing operationId, action kind, ruleId, eventType, invokedAt, and a per-validation status snapshot at invoke time. `contexts.history.list` automation command returns filtered entries; "Recent invocations" section in the context detail dialog renders them with an inline expandable trace fetched via `activity.operation`. After-vs-before validation deltas surface inline.
 
 | Test ID | Name | Status |
 |---------|------|--------|
@@ -167,10 +167,10 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-COLDSTART-004 | json-validator template renders three .antimatter/*.ts files | test-passing |
 | FT-COLDSTART-005 | rendered json-validator template assembles into a valid model | test-passing |
 | FT-COLDSTART-006 | empty template produces an empty model with no errors | test-passing |
-| FT-COLDSTART-101 | Empty project — contexts.model.get reports present: false | test-implemented |
-| FT-COLDSTART-102 | contexts.templates.list returns registered templates | test-implemented |
-| FT-COLDSTART-103 | Apply json-validator template — model populated with expected nodes | test-implemented |
-| FT-COLDSTART-104 | contexts.templates.apply refuses to overwrite, succeeds with overwrite flag | test-implemented |
+| FT-COLDSTART-101 | Empty project — contexts.model.get reports present: false | test-passing |
+| FT-COLDSTART-102 | contexts.templates.list returns registered templates | test-passing |
+| FT-COLDSTART-103 | Apply json-validator template — model populated with expected nodes | test-passing |
+| FT-COLDSTART-104 | contexts.templates.apply refuses to overwrite, succeeds with overwrite flag | test-passing |
 | FT-DECOMP-001 | emitFileSet round-trips through loader | test-passing |
 | FT-DECOMP-002 | emitTest / emitTestSet round-trip | test-passing |
 | FT-DECOMP-003 | emitDeployedResource / emitEnvironment round-trip | test-passing |
@@ -183,18 +183,18 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-DECOMP-010 | strings JSON-escaped (no template-literal injection) | test-passing |
 | FT-DECOMP-011 | emitContext with rule-outcome validation references the rule | test-passing |
 | FT-DECOMP-012 | emitContext with output() and context-output input | test-passing |
-| FT-DECOMP-101 | contexts.contexts.add — append a child context | test-implemented |
-| FT-DECOMP-102 | contexts.resources.add — append a file-set resource | test-implemented |
-| FT-DECOMP-103 | contexts.rules.add — append a rule with reads/writes | test-implemented |
-| FT-DECOMP-104 | contexts.contexts.add surfaces invalid-params for malformed id | test-implemented |
-| FT-DECOMP-105 | Direct edit to .antimatter/contexts.ts is picked up by the watcher | test-implemented |
-| FT-FOCUS-101 | Fresh json-validator template surfaces lifecycleStatus + validation status per context | test-implemented |
-| FT-FOCUS-102 | Registering a deployed-resource flips the matching validation to passing | test-implemented |
-| FT-FOCUS-103 | contexts.action.invoke emits the rule event for invoke-rule; rejects others as unsupported | test-implemented |
-| FT-FOCUS-104 | Empty leaf context (no validations + no children) reports lifecycleStatus=done | test-implemented |
-| FT-STATUS-101 | counts.byStatus sums to counts.contexts | test-implemented |
-| FT-STATUS-102 | Registering a deployed-resource captures a recent transition | test-implemented |
-| FT-STATUS-103 | context:transitioned events show up in activity.list | test-implemented |
+| FT-DECOMP-101 | contexts.contexts.add — append a child context | test-passing |
+| FT-DECOMP-102 | contexts.resources.add — append a file-set resource | test-passing |
+| FT-DECOMP-103 | contexts.rules.add — append a rule with reads/writes | test-passing |
+| FT-DECOMP-104 | contexts.contexts.add surfaces invalid-params for malformed id | test-passing |
+| FT-DECOMP-105 | Direct edit to .antimatter/contexts.ts is picked up by the watcher | test-passing |
+| FT-FOCUS-101 | Fresh json-validator template surfaces lifecycleStatus + validation status per context | test-passing |
+| FT-FOCUS-102 | Registering a deployed-resource flips the matching validation to passing | test-passing |
+| FT-FOCUS-103 | contexts.action.invoke emits the rule event for invoke-rule; rejects others as unsupported | test-passing |
+| FT-FOCUS-104 | Empty leaf context (no validations + no children) reports lifecycleStatus=done | test-passing |
+| FT-STATUS-101 | counts.byStatus sums to counts.contexts | test-passing |
+| FT-STATUS-102 | Registering a deployed-resource captures a recent transition | test-passing |
+| FT-STATUS-103 | context:transitioned events show up in activity.list | test-passing |
 | FT-REGRESS-001 | trace returns null for unknown context | test-passing |
 | FT-REGRESS-002 | passing context yields empty failure lists | test-passing |
 | FT-REGRESS-003 | failed rule-outcome surfaces ruleId + status | test-passing |
@@ -205,12 +205,12 @@ New declaration model and lifecycle for the project context tree. Replaces the i
 | FT-REGRESS-008 | dependency culprit walks input refs | test-passing |
 | FT-REGRESS-009 | manual-confirm + code validations surface as informational | test-passing |
 | FT-REGRESS-010 | passing rule does not surface | test-passing |
-| FT-REGRESS-101 | Publish context with no deployed-resource yields a failure row | test-implemented |
-| FT-REGRESS-102 | Trace toggles correctly with register / deregister | test-implemented |
-| FT-REGRESS-103 | contexts.regression.trace returns not-found for unknown id | test-implemented |
-| FT-REVIEW-101 | contexts.action.invoke records an entry visible via contexts.history.list | test-implemented |
-| FT-REVIEW-102 | contexts.history.list filters by contextId | test-implemented |
-| FT-REVIEW-103 | history entries carry per-validation status at invoke time | test-implemented |
+| FT-REGRESS-101 | Publish context with no deployed-resource yields a failure row | test-passing |
+| FT-REGRESS-102 | Trace toggles correctly with register / deregister | test-passing |
+| FT-REGRESS-103 | contexts.regression.trace returns not-found for unknown id | test-passing |
+| FT-REVIEW-101 | contexts.action.invoke records an entry visible via contexts.history.list | test-passing |
+| FT-REVIEW-102 | contexts.history.list filters by contextId | test-passing |
+| FT-REVIEW-103 | history entries carry per-validation status at invoke time | test-passing |
 
 **Deferred capabilities** *(post-Phase-6)*: fingerprint-based freshness (file-set hashing, stale-input detection); focus pill in header (Build/Ops scope drives chat + filtering); manual-confirm + code validation execution (Phase 3 leaves these `unknown`); agent-driven action kinds (`action.agent` / `action.code` / `action.human` reject from `contexts.action.invoke` for now); operate-perspective deep dive (Flow E from the design walkthrough).
 

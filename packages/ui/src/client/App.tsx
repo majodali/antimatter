@@ -121,6 +121,15 @@ function ProjectGate() {
     };
   }, [currentProjectId]);
 
+  // Headless test runner: eagerly install `window.__runTests` so the
+  // server-side Puppeteer driver can invoke it without waiting for the
+  // lazy automation-handler path. Side-effect import is enough — the
+  // module assigns `window.__runTests` at top level.
+  useEffect(() => {
+    if (!(window as unknown as { __HEADLESS_TOKEN__?: string }).__HEADLESS_TOKEN__) return;
+    void import('./lib/browser-test-runner.js');
+  }, []);
+
   if (!currentProjectId) {
     return <ProjectPicker />;
   }

@@ -36,8 +36,13 @@ export interface AutomationRouterDependencies {
     command: string,
     params: Record<string, unknown>,
   ) => Promise<unknown>;
-  /** Execute headless browser tests on the server (optional — not all contexts support it). */
-  executeHeadlessTests?: (params: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Execute headless browser tests on the server (optional — not all contexts support it).
+   * `authToken` is the inbound caller's Bearer token, forwarded so the
+   * headless runner can authenticate its disposable-project API calls
+   * and the browser page it drives.
+   */
+  executeHeadlessTests?: (params: Record<string, unknown>, authToken: string | undefined) => Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +123,11 @@ export function createAutomationRouter(deps: AutomationRouterDependencies): Rout
           };
           return res.status(501).json(resp);
         }
-        data = await deps.executeHeadlessTests(params);
+        const authHeader = req.headers.authorization;
+        const inboundToken = authHeader?.startsWith('Bearer ')
+          ? authHeader.slice('Bearer '.length)
+          : undefined;
+        data = await deps.executeHeadlessTests(params, inboundToken);
       } else if (isServerCommand(command)) {
         // Execute directly on the server
         data = await deps.executeServerCommand(command, params);

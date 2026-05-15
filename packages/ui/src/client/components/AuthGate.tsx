@@ -12,6 +12,13 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>('loading');
 
   useEffect(() => {
+    // Headless test runner injects a Cognito token before navigate; treat
+    // the page as already authenticated and skip the Amplify redirect dance.
+    const injected = (window as unknown as { __HEADLESS_TOKEN__?: string }).__HEADLESS_TOKEN__;
+    if (injected) {
+      setState('authenticated');
+      return;
+    }
     checkAuth();
 
     // Listen for auth events (e.g., redirect back from Hosted UI)

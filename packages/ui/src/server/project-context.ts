@@ -1232,13 +1232,14 @@ export class ProjectContext {
       executeServerCommand,
       relayBrowserCommand: (requestId, command, params) =>
         this.relayBrowserCommand(requestId, command, params),
-      executeHeadlessTests: async (params) => {
+      executeHeadlessTests: async (params, authToken) => {
         const { runHeadlessTests } = await import('./automation/headless-test-runner.js');
-        // Derive base URL from the workspace server's own address
-        const baseUrl = `https://d33wyunpiwy2df.cloudfront.net`;
-        const apiBaseUrl = `${baseUrl}/workspace/${this.projectId}/api`;
+        // Canonical IDE URL — the SPA is served here and `/api/projects` is
+        // the Lambda endpoint the runner uses for its disposable project.
+        const baseUrl = 'https://ide.antimatter.solutions';
+        const apiBaseUrl = `${baseUrl}/api`;
         return runHeadlessTests(
-          { baseUrl, apiBaseUrl },
+          { baseUrl, apiBaseUrl, authToken },
           {
             testIds: params.testIds as string[] | undefined,
             area: params.area as string | undefined,

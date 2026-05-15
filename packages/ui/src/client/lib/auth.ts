@@ -63,8 +63,16 @@ export async function initAuth(): Promise<void> {
 /**
  * Get the current access token, or null if not authenticated.
  * Amplify automatically refreshes expired access tokens using the refresh token.
+ *
+ * Headless test runner shortcut: when `window.__HEADLESS_TOKEN__` is set
+ * (by the server-side Puppeteer runner before navigation), return it
+ * directly without consulting Amplify. The token is the inbound caller's
+ * own Cognito token forwarded from `tests.run`, so this grants no
+ * additional privilege.
  */
 export async function getAccessToken(): Promise<string | null> {
+  const injected = (typeof window !== 'undefined' ? (window as unknown as { __HEADLESS_TOKEN__?: string }).__HEADLESS_TOKEN__ : undefined);
+  if (injected) return injected;
   try {
     const session = await fetchAuthSession();
     return session.tokens?.accessToken?.toString() ?? null;
